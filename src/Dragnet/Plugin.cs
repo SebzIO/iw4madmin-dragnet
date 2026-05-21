@@ -1,3 +1,4 @@
+using Dragnet.Commands;
 using Dragnet.Configuration;
 using Dragnet.Identity;
 using Dragnet.Services;
@@ -15,6 +16,7 @@ public sealed class Plugin : IPluginV2
     private readonly ILogger<Plugin> _logger;
     private readonly DragnetLocalEventService _localEventService;
     private readonly DragnetEventStore _eventStore;
+    private readonly DragnetIdentityDocument _identity;
     private readonly IManager _manager;
 
     public string Name => "Dragnet";
@@ -25,23 +27,16 @@ public sealed class Plugin : IPluginV2
 
     public Plugin(
         ILogger<Plugin> logger,
-        ILogger<DragnetLocalEventService> localEventLogger,
-        DragnetConfiguration configuration,
+        DragnetLocalEventService localEventService,
+        DragnetEventStore eventStore,
+        DragnetIdentityDocument identity,
         IManager manager)
     {
         _logger = logger;
         _manager = manager;
-
-        var dataDirectory = Path.GetFullPath(configuration.DataDirectory);
-        var identityService = new DragnetIdentityService(dataDirectory);
-        var identity = identityService.LoadOrCreate(configuration.OriginName);
-        _eventStore = new DragnetEventStore(dataDirectory);
-        _localEventService = new DragnetLocalEventService(
-            configuration,
-            _eventStore,
-            identity,
-            identityService,
-            localEventLogger);
+        _localEventService = localEventService;
+        _eventStore = eventStore;
+        _identity = identity;
 
         IManagementEventSubscriptions.Load += OnLoad;
         IManagementEventSubscriptions.ClientPenaltyAdministered += _localEventService.CapturePenaltyAsync;
@@ -50,8 +45,8 @@ public sealed class Plugin : IPluginV2
         _logger.LogInformation(
             "Dragnet {Version} initialized as {OriginName} ({OriginId})",
             Version,
-            identity.OriginName,
-            identity.OriginId);
+            _identity.OriginName,
+            _identity.OriginId);
     }
 
     public static void RegisterDependencies(IServiceCollection serviceCollection)
@@ -59,6 +54,24 @@ public sealed class Plugin : IPluginV2
         serviceCollection.AddConfiguration<DragnetConfiguration>(
             "DragnetSettings",
             new DragnetConfiguration());
+        serviceCollection.AddSingleton(serviceProvider =>
+        {
+            var configuration = serviceProvider.GetRequiredService<DragnetConfiguration>();
+            return new DragnetIdentityService(Path.GetFullPath(configuration.DataDirectory));
+        });
+        serviceCollection.AddSingleton(serviceProvider =>
+        {
+            var configuration = serviceProvider.GetRequiredService<DragnetConfiguration>();
+            var identityService = serviceProvider.GetRequiredService<DragnetIdentityService>();
+            return identityService.LoadOrCreate(configuration.OriginName);
+        });
+        serviceCollection.AddSingleton(serviceProvider =>
+        {
+            var configuration = serviceProvider.GetRequiredService<DragnetConfiguration>();
+            return new DragnetEventStore(Path.GetFullPath(configuration.DataDirectory));
+        });
+        serviceCollection.AddSingleton<DragnetLocalEventService>();
+        serviceCollection.AddSingleton<IManagerCommand, DragnetCommand>();
     }
 
     private async Task OnLoad(IManager manager, CancellationToken token)

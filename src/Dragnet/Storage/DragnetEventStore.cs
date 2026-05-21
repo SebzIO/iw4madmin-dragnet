@@ -57,6 +57,33 @@ public sealed class DragnetEventStore
         }
     }
 
+    public async Task ExpireElapsedTempBansAsync(DateTimeOffset now, CancellationToken token)
+    {
+        await _lock.WaitAsync(token);
+        try
+        {
+            var changed = false;
+            foreach (var storedEvent in _events.Values)
+            {
+                if (storedEvent.ReviewState is DragnetReviewState.PendingBan &&
+                    storedEvent.Event.IsExpired(now))
+                {
+                    storedEvent.ReviewState = DragnetReviewState.ExpiredBan;
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                await SaveUnlockedAsync(token);
+            }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
     public async Task<DragnetStoredEvent?> GetAsync(string eventId, CancellationToken token)
     {
         await _lock.WaitAsync(token);
