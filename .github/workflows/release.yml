@@ -6,6 +6,9 @@ on:
       - main
     tags:
       - "v*"
+  release:
+    types:
+      - published
   pull_request:
   workflow_dispatch:
 
@@ -34,7 +37,9 @@ jobs:
         run: dotnet run --no-restore --project tests/Dragnet.Tests/Dragnet.Tests.csproj
 
       - name: Package plugin
-        run: SKIP_RESTORE=1 ./scripts/package-release.sh
+        run: SKIP_RESTORE=1 PACKAGE_VERSION="${PACKAGE_VERSION}" ./scripts/package-release.sh
+        env:
+          PACKAGE_VERSION: ${{ github.event.release.tag_name || github.ref_name }}
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
@@ -44,7 +49,8 @@ jobs:
           if-no-files-found: error
 
       - name: Publish GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*.zip
+          tag_name: ${{ github.event.release.tag_name || github.ref_name }}

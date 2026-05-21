@@ -3,17 +3,17 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIGURATION="${CONFIGURATION:-Release}"
-VERSION="${VERSION:-}"
+PACKAGE_VERSION="${PACKAGE_VERSION:-}"
 
-if [[ -z "${VERSION}" ]]; then
+if [[ -z "${PACKAGE_VERSION}" ]]; then
   if git -C "${ROOT_DIR}" describe --tags --exact-match >/dev/null 2>&1; then
-    VERSION="$(git -C "${ROOT_DIR}" describe --tags --exact-match)"
+    PACKAGE_VERSION="$(git -C "${ROOT_DIR}" describe --tags --exact-match)"
   else
-    VERSION="$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || date -u +%Y%m%d%H%M%S)"
+    PACKAGE_VERSION="$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || date -u +%Y%m%d%H%M%S)"
   fi
 fi
 
-PACKAGE_NAME="Dragnet.IW4MAdmin.Plugin-${VERSION}"
+PACKAGE_NAME="Dragnet.IW4MAdmin.Plugin-${PACKAGE_VERSION}"
 ARTIFACT_DIR="${ROOT_DIR}/artifacts"
 PACKAGE_DIR="${ARTIFACT_DIR}/${PACKAGE_NAME}"
 ZIP_PATH="${ARTIFACT_DIR}/${PACKAGE_NAME}.zip"
