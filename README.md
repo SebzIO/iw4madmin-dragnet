@@ -19,6 +19,7 @@ This repository is in the MVP scaffold stage. The current implementation:
 - supports webfront-first approve, deny, and ignore decisions for pending bans and lifts
 - supports webfront event filters and event detail inspection
 - imports approved remote bans and lifts into IW4MAdmin
+- queues unknown-player import failures for later retry from the webfront
 - registers the `!dragnet` / `!dn` admin command for local review state management
 - omits IP addresses from the event model
 - discards expired temp-ban events before storing
@@ -44,4 +45,4 @@ Trust commands persist changes to `DragnetSettings`.
 
 Next planned pieces:
 
-- import retry workflow and unknown-player handling
+- automated tests for trust, review, import, and transport behavior

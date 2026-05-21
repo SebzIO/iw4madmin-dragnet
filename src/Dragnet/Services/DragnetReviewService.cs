@@ -76,6 +76,33 @@ public sealed class DragnetReviewService
         return DragnetReviewResult.Succeeded(message);
     }
 
+    public async Task<DragnetReviewResult> RetryImportAsync(
+        string eventId,
+        CancellationToken token)
+    {
+        var item = await FindByPrefixAsync(eventId, token);
+        if (item.Match is null)
+        {
+            return item.Result;
+        }
+
+        if (item.Match.ReviewState is not (DragnetReviewState.ApprovedBan or DragnetReviewState.ApprovedLift))
+        {
+            return DragnetReviewResult.Failed("Only approved Dragnet events can be retried for import.");
+        }
+
+        if (!_trustService.Evaluate(item.Match.Event).IsTrusted)
+        {
+            return DragnetReviewResult.Failed(
+                "Dragnet origin is not trusted. Trust the origin before retrying import.");
+        }
+
+        var importResult = await _importService.ImportApprovedAsync(item.Match, token);
+        return importResult.Success
+            ? DragnetReviewResult.Succeeded(importResult.Message)
+            : DragnetReviewResult.Failed($"Dragnet import failed: {importResult.Message}");
+    }
+
     public async Task<(DragnetStoredEvent? Match, DragnetReviewResult Result)> FindByPrefixAsync(
         string eventIdPrefix,
         CancellationToken token)

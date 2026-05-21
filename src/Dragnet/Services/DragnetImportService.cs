@@ -47,9 +47,9 @@ public sealed class DragnetImportService
         var client = await ResolveClientAsync(storedEvent.Event);
         if (client is null)
         {
-            var message = "No local IW4MAdmin client matched the Dragnet event network id and game.";
+            var message = "Queued: no local IW4MAdmin client matched the Dragnet event network id and game. Retry after the player is known locally.";
             await _store.SetImportResultAsync(storedEvent.Event.EventId, false, null, message, token);
-            return DragnetImportResult.Failed(message);
+            return DragnetImportResult.Queued(message);
         }
 
         var console = CreateConsoleClient();
@@ -208,4 +208,6 @@ public sealed record DragnetImportResult(bool Success, bool Imported, string Mes
     public static DragnetImportResult Skipped(string message) => new(true, false, message);
 
     public static DragnetImportResult Failed(string message) => new(false, false, message);
+
+    public static DragnetImportResult Queued(string message) => new(false, false, message);
 }

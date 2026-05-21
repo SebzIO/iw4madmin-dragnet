@@ -257,8 +257,18 @@ public sealed class DragnetWebfrontService
 
         if (meta is null ||
             !meta.TryGetValue("EventId", out var eventId) ||
-            !meta.TryGetValue("ReviewAction", out var actionValue) ||
-            !Enum.TryParse<DragnetReviewAction>(actionValue, true, out var action))
+            !meta.TryGetValue("ReviewAction", out var actionValue))
+        {
+            return "Invalid Dragnet review action.";
+        }
+
+        if (string.Equals(actionValue, "RetryImport", StringComparison.OrdinalIgnoreCase))
+        {
+            var retryResult = await _reviewService.RetryImportAsync(eventId, token);
+            return retryResult.Message;
+        }
+
+        if (!Enum.TryParse<DragnetReviewAction>(actionValue, true, out var action))
         {
             return "Invalid Dragnet review action.";
         }
@@ -450,6 +460,13 @@ public sealed class DragnetWebfrontService
     private void AppendReviewButtons(StringBuilder html, DragnetStoredEvent item)
     {
         var isTrusted = _trustService.Evaluate(item.Event).IsTrusted;
+        if (item.ImportedAtUtc is null &&
+            !string.IsNullOrWhiteSpace(item.ImportError) &&
+            item.ReviewState is DragnetReviewState.ApprovedBan or DragnetReviewState.ApprovedLift)
+        {
+            AppendRetryImportButton(html, item.Event.EventId);
+        }
+
         switch (item.ReviewState)
         {
             case DragnetReviewState.PendingBan:
@@ -476,6 +493,23 @@ public sealed class DragnetWebfrontService
                 html.Append("<span class=\"text-muted\">Reviewed</span>");
                 break;
         }
+    }
+
+    private static void AppendRetryImportButton(StringBuilder html, string eventId)
+    {
+        var meta = new Dictionary<string, string>
+        {
+            ["InteractionId"] = ReviewInteractionId,
+            ["ActionButtonLabel"] = "Retry import",
+            ["Name"] = "Retry import",
+            ["ShouldRefresh"] = "true",
+            ["Inputs"] = BuildReviewInputs(eventId, "RetryImport", includeReason: false)
+        };
+
+        var encodedMeta = Uri.EscapeDataString(JsonSerializer.Serialize(meta));
+        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer ml-2\" data-action=\"DynamicAction\" data-action-meta=\"");
+        html.Append(Encode(encodedMeta));
+        html.Append("\"><span class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ph-arrow-clockwise mr-1\"></i>Retry import</span></button>");
     }
 
     private void AppendTrustButtons(StringBuilder html, DragnetEventEnvelope envelope)
@@ -606,6 +640,12 @@ public sealed class DragnetWebfrontService
 
         if (!string.IsNullOrWhiteSpace(item.ImportError))
         {
+            if (item.ImportError.StartsWith("Queued:", StringComparison.OrdinalIgnoreCase))
+            {
+                html.Append("<span class=\"text-warning\">Queued</span>");
+                return;
+            }
+
             html.Append("<span class=\"text-danger\">");
             html.Append(Encode(item.ImportError));
             html.Append("</span>");
@@ -647,6 +687,14 @@ public sealed class DragnetWebfrontService
         DragnetReviewAction action,
         bool includeReason)
     {
+        return BuildReviewInputs(eventId, action.ToString(), includeReason);
+    }
+
+    private static string BuildReviewInputs(
+        string eventId,
+        string action,
+        bool includeReason)
+    {
         var inputs = new List<Dictionary<string, object?>>
         {
             new()
@@ -659,7 +707,7 @@ public sealed class DragnetWebfrontService
             {
                 ["Name"] = "ReviewAction",
                 ["Type"] = "hidden",
-                ["Value"] = action.ToString()
+                ["Value"] = action
             }
         };
 
@@ -842,6 +890,11 @@ public sealed class DragnetWebfrontService
 
         if (!string.IsNullOrWhiteSpace(item.ImportError))
         {
+            if (item.ImportError.StartsWith("Queued:", StringComparison.OrdinalIgnoreCase))
+            {
+                return item.ImportError;
+            }
+
             return $"Failed: {item.ImportError}";
         }
 
