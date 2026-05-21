@@ -28,7 +28,7 @@ This repository is in the MVP testing stage. The current implementation:
 - omits IP addresses from the event model
 - discards expired temp-ban events before storing
 - ignores penalties already imported with a `[Dragnet]` reason prefix to avoid propagation loops
-- includes a lightweight console test harness for trust, review, webfront render, event store, peer store, and transport behavior
+- includes a lightweight console test harness for trust, review, import queueing, webfront render, event store, peer store, and transport behavior
 
 ## Build
 

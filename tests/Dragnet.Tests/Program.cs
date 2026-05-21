@@ -15,6 +15,8 @@ var tests = new (string Name, Func<Task> Test)[]
     ("review service denies pending ban and blocks untrusted approval", TestReviewTransitionsAsync),
     ("peer store tracks bootstrap, errors, removal, and send cursor", TestPeerStoreAsync),
     ("event store expires elapsed temp bans", TestEventStoreExpiresElapsedTempBansAsync),
+    ("import service skips disabled and already imported events", TestImportServiceSkipsAsync),
+    ("import service queues unknown players", TestImportServiceQueuesUnknownPlayersAsync),
     ("heartbeat response sends approved events once", TestHeartbeatResponseBatchAsync),
     ("webfront dashboard interaction renders as navigation content", TestWebfrontDashboardRendersAsync),
     ("heartbeat validation rejects oversized and invalid requests", TestHeartbeatValidationAsync)
@@ -183,6 +185,84 @@ static async Task TestEventStoreExpiresElapsedTempBansAsync()
     Assert.Equal(DragnetReviewState.PendingBan,
         (await store.GetAsync(active.EventId, CancellationToken.None))!.ReviewState,
         "active temp-ban should remain pending");
+}
+
+static async Task TestImportServiceSkipsAsync()
+{
+    await using var testDir = new TestDirectory();
+    var store = new DragnetEventStore(testDir.Path);
+    await store.LoadAsync(CancellationToken.None);
+    var disabledConfiguration = new DragnetConfiguration
+    {
+        ImportApprovedEvents = false
+    };
+    var disabledImportService = new DragnetImportService(
+        disabledConfiguration,
+        store,
+        managerFactory: () => throw new InvalidOperationException("manager should not be resolved for disabled imports"),
+        logger: new TestLogger<DragnetImportService>());
+    var disabledEvent = new DragnetStoredEvent
+    {
+        Event = CreateEnvelope(originId: "remote-disabled", eventType: DragnetEventType.BanCreated),
+        ReviewState = DragnetReviewState.ApprovedBan
+    };
+
+    var disabledResult = await disabledImportService.ImportApprovedAsync(disabledEvent, CancellationToken.None);
+    Assert.True(disabledResult.Success, "disabled import should be a successful skip");
+    Assert.False(disabledResult.Imported, "disabled import should not mark imported");
+    Assert.Contains("disabled", disabledResult.Message, "disabled import should explain skip");
+
+    var alreadyImportedService = new DragnetImportService(
+        new DragnetConfiguration(),
+        store,
+        managerFactory: () => throw new InvalidOperationException("manager should not be resolved for already imported events"),
+        logger: new TestLogger<DragnetImportService>());
+    var alreadyImported = new DragnetStoredEvent
+    {
+        Event = CreateEnvelope(originId: "remote-imported", eventType: DragnetEventType.BanCreated),
+        ReviewState = DragnetReviewState.ApprovedBan,
+        ImportedAtUtc = DateTimeOffset.UtcNow
+    };
+
+    var alreadyImportedResult = await alreadyImportedService.ImportApprovedAsync(alreadyImported, CancellationToken.None);
+    Assert.True(alreadyImportedResult.Success, "already imported event should be a successful skip");
+    Assert.False(alreadyImportedResult.Imported, "already imported event should not import again");
+    Assert.Contains("already imported", alreadyImportedResult.Message, "already imported skip should explain reason");
+}
+
+static async Task TestImportServiceQueuesUnknownPlayersAsync()
+{
+    await using var testDir = new TestDirectory();
+    var store = new DragnetEventStore(testDir.Path);
+    await store.LoadAsync(CancellationToken.None);
+    var importService = new DragnetImportService(
+        new DragnetConfiguration(),
+        store,
+        managerFactory: () => throw new InvalidOperationException("manager should not be resolved for invalid network ids"),
+        logger: new TestLogger<DragnetImportService>());
+    var unknownPlayer = CreateEnvelope(originId: "remote-unknown", eventType: DragnetEventType.BanCreated) with
+    {
+        PlayerNetworkId = "not-a-network-id"
+    };
+    var storedEvent = new DragnetStoredEvent
+    {
+        Event = unknownPlayer,
+        ReviewState = DragnetReviewState.ApprovedBan
+    };
+
+    await store.UpsertAsync(storedEvent, CancellationToken.None);
+
+    var result = await importService.ImportApprovedAsync(storedEvent, CancellationToken.None);
+
+    Assert.False(result.Success, "unknown player import should queue instead of succeeding");
+    Assert.False(result.Imported, "unknown player import should not mark imported");
+    Assert.Contains("Queued", result.Message, "unknown player import should explain queue state");
+
+    var stored = await store.GetAsync(unknownPlayer.EventId, CancellationToken.None);
+    Assert.NotNull(stored, "queued event should remain stored");
+    Assert.NotNull(stored!.ImportError, "queued event should persist import error");
+    Assert.Contains("Queued", stored.ImportError!, "queued event should persist retry reason");
+    Assert.Null(stored.ImportedAtUtc, "queued event should not have imported timestamp");
 }
 
 static async Task TestHeartbeatResponseBatchAsync()
