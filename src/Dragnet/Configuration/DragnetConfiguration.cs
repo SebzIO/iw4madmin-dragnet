@@ -1,3 +1,5 @@
+using Data.Models.Client;
+
 namespace Dragnet.Configuration;
 
 public sealed class DragnetConfiguration
@@ -23,6 +25,16 @@ public sealed class DragnetConfiguration
     public TimeSpan PeerHeartbeatInterval { get; set; } = TimeSpan.FromMinutes(1);
 
     public TimeSpan PeerStaleAfter { get; set; } = TimeSpan.FromMinutes(10);
+
+    public EFClient.Permission WebfrontPermission { get; set; } = EFClient.Permission.Administrator;
+
+    public EFClient.Permission ReviewPermission { get; set; } = EFClient.Permission.Administrator;
+
+    public EFClient.Permission TrustPermission { get; set; } = EFClient.Permission.Administrator;
+
+    public EFClient.Permission PeerManagementPermission { get; set; } = EFClient.Permission.Administrator;
+
+    public EFClient.Permission CommandPermission { get; set; } = EFClient.Permission.Administrator;
 
     public List<DragnetPeerConfiguration> BootstrapPeers { get; set; } = [];
 

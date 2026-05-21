@@ -1,4 +1,5 @@
 using Data.Models.Client;
+using Dragnet.Configuration;
 using Dragnet.Identity;
 using Dragnet.Models;
 using Dragnet.Services;
@@ -23,7 +24,8 @@ public sealed class DragnetCommand : Command
         DragnetEventStore store,
         DragnetReviewService reviewService,
         DragnetTrustService trustService,
-        DragnetIdentityDocument identity)
+        DragnetIdentityDocument identity,
+        DragnetConfiguration configuration)
         : base(config, translationLookup)
     {
         _store = store;
@@ -33,7 +35,7 @@ public sealed class DragnetCommand : Command
         Name = "dragnet";
         Alias = "dn";
         Description = "Review and manage Dragnet ban exchange events";
-        Permission = EFClient.Permission.Moderator;
+        Permission = configuration.CommandPermission;
         RequiresTarget = false;
         Arguments =
         [

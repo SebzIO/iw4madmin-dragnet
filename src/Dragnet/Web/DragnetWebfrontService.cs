@@ -51,7 +51,7 @@ public sealed class DragnetWebfrontService
             Description = "Dragnet",
             DisplayMeta = "ph-network",
             InteractionId = NavigationInteractionId,
-            MinimumPermission = EFClient.Permission.Administrator,
+            MinimumPermission = _configuration.WebfrontPermission,
             InteractionType = InteractionType.TemplateContent,
             Source = "Dragnet",
             Action = async (_, _, _, meta, actionToken) => await RenderDashboardAsync(meta, actionToken)
@@ -68,7 +68,7 @@ public sealed class DragnetWebfrontService
             Description = "Review Dragnet event",
             DisplayMeta = "ph-check-circle",
             InteractionId = ReviewInteractionId,
-            MinimumPermission = EFClient.Permission.Administrator,
+            MinimumPermission = _configuration.ReviewPermission,
             InteractionType = InteractionType.RawContent,
             Source = "Dragnet",
             Action = async (originId, _, _, meta, actionToken) =>
@@ -86,7 +86,7 @@ public sealed class DragnetWebfrontService
             Description = "Manage Dragnet origin trust",
             DisplayMeta = "ph-shield-check",
             InteractionId = TrustInteractionId,
-            MinimumPermission = EFClient.Permission.Administrator,
+            MinimumPermission = _configuration.TrustPermission,
             InteractionType = InteractionType.RawContent,
             Source = "Dragnet",
             Action = async (originId, _, _, meta, actionToken) =>
@@ -104,7 +104,7 @@ public sealed class DragnetWebfrontService
             Description = "Manage Dragnet peer",
             DisplayMeta = "ph-plugs",
             InteractionId = PeerInteractionId,
-            MinimumPermission = EFClient.Permission.Administrator,
+            MinimumPermission = _configuration.PeerManagementPermission,
             InteractionType = InteractionType.RawContent,
             Source = "Dragnet",
             Action = async (originId, _, _, meta, actionToken) =>
@@ -251,7 +251,7 @@ public sealed class DragnetWebfrontService
     {
         var manager = _managerFactory();
         var origin = originId > 0 ? await manager.GetClientService().Get(originId) : null;
-        if (origin?.Level < EFClient.Permission.Administrator)
+        if (!HasPermission(origin, _configuration.ReviewPermission))
         {
             return "You are not authorized to review Dragnet events.";
         }
@@ -286,7 +286,7 @@ public sealed class DragnetWebfrontService
     {
         var manager = _managerFactory();
         var origin = originId > 0 ? await manager.GetClientService().Get(originId) : null;
-        if (origin?.Level < EFClient.Permission.Administrator)
+        if (!HasPermission(origin, _configuration.TrustPermission))
         {
             return "You are not authorized to manage Dragnet trust.";
         }
@@ -326,7 +326,7 @@ public sealed class DragnetWebfrontService
     {
         var manager = _managerFactory();
         var origin = originId > 0 ? await manager.GetClientService().Get(originId) : null;
-        if (origin?.Level < EFClient.Permission.Administrator)
+        if (!HasPermission(origin, _configuration.PeerManagementPermission))
         {
             return "You are not authorized to manage Dragnet peers.";
         }
@@ -939,6 +939,9 @@ public sealed class DragnetWebfrontService
     }
 
     private static string Encode(string value) => WebUtility.HtmlEncode(value);
+
+    private static bool HasPermission(EFClient? client, EFClient.Permission permission) =>
+        client?.Level >= permission;
 }
 
 public enum DragnetEventFilter

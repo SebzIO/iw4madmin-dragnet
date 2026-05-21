@@ -1,3 +1,4 @@
+using Data.Models.Client;
 using Dragnet.Configuration;
 using Dragnet.Identity;
 using Dragnet.Models;
@@ -271,7 +272,11 @@ static async Task TestWebfrontDashboardRendersAsync()
     await using var testDir = new TestDirectory();
     var configuration = new DragnetConfiguration
     {
-        PublicEndpoint = "https://local.example/dragnet"
+        PublicEndpoint = "https://local.example/dragnet",
+        WebfrontPermission = EFClient.Permission.SeniorAdmin,
+        ReviewPermission = EFClient.Permission.Owner,
+        TrustPermission = EFClient.Permission.Owner,
+        PeerManagementPermission = EFClient.Permission.SeniorAdmin
     };
     var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
     await eventStore.LoadAsync(CancellationToken.None);
@@ -295,6 +300,14 @@ static async Task TestWebfrontDashboardRendersAsync()
 
     Assert.Equal(InteractionType.TemplateContent, interaction.InteractionType, "dashboard should render as an IW4MAdmin navigation page");
     Assert.Equal(2, (int)interaction.InteractionType, "dashboard interaction type should match IW4MAdmin script nav pages");
+    Assert.Equal(EFClient.Permission.SeniorAdmin, interaction.MinimumPermission, "dashboard should use configured webfront permission");
+
+    var reviewInteraction = await webfront.CreateReviewInteractionAsync(CancellationToken.None);
+    var trustInteraction = await webfront.CreateTrustInteractionAsync(CancellationToken.None);
+    var peerInteraction = await webfront.CreatePeerInteractionAsync(CancellationToken.None);
+    Assert.Equal(EFClient.Permission.Owner, reviewInteraction.MinimumPermission, "review action should use configured review permission");
+    Assert.Equal(EFClient.Permission.Owner, trustInteraction.MinimumPermission, "trust action should use configured trust permission");
+    Assert.Equal(EFClient.Permission.SeniorAdmin, peerInteraction.MinimumPermission, "peer action should use configured peer permission");
 
     var html = await interaction.Action(0, null, null, null, CancellationToken.None);
     Assert.Contains("Peer transport", html, "dashboard should include peer section");

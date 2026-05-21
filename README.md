@@ -63,6 +63,11 @@ Example configuration:
   "ImportApprovedEvents": true,
   "PeerHeartbeatInterval": "00:01:00",
   "PeerStaleAfter": "00:10:00",
+  "WebfrontPermission": "Administrator",
+  "ReviewPermission": "Administrator",
+  "TrustPermission": "Administrator",
+  "PeerManagementPermission": "Administrator",
+  "CommandPermission": "Administrator",
   "BootstrapPeers": [
     {
       "Endpoint": "https://peer.example.com/dragnet",
@@ -105,11 +110,10 @@ If Cloudflare or another proxy sits in front of the origin, WebSockets must be e
 
 Current behavior:
 
-- webfront Dragnet navigation and webfront actions require IW4MAdmin `Administrator`
+- webfront Dragnet navigation and actions default to IW4MAdmin `Administrator`
+- the in-game `!dragnet` command defaults to IW4MAdmin `Administrator`
+- server owners can configure `WebfrontPermission`, `ReviewPermission`, `TrustPermission`, `PeerManagementPermission`, and `CommandPermission`
 - `POST /dragnet/heartbeat` is anonymous by design because peer servers must be able to reach it
-- the in-game `!dragnet` command is currently registered at IW4MAdmin `Moderator`
-
-Configurable per-action rank requirements are not implemented yet. Before broader testing, the command permission should be tightened and permission levels should become server-owner configurable.
 
 ## Commands
 
@@ -148,7 +152,6 @@ dotnet run --no-restore --project tests/Dragnet.Tests/Dragnet.Tests.csproj
 
 ## Known Gaps
 
-- configurable Dragnet-specific permission levels
 - broader tests for IW4MAdmin import/local event integration
 - a repeatable package/deploy script
 - more complete operator documentation for multi-peer production deployments
