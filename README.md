@@ -24,6 +24,7 @@ This repository is in the MVP scaffold stage. The current implementation:
 - omits IP addresses from the event model
 - discards expired temp-ban events before storing
 - ignores penalties already imported with a `[Dragnet]` reason prefix to avoid propagation loops
+- includes a lightweight console test harness for trust, review, event store, peer store, and transport behavior
 
 Initial commands:
 
@@ -43,6 +44,8 @@ Initial commands:
 
 Trust commands persist changes to `DragnetSettings`.
 
-Next planned pieces:
+Run tests:
 
-- automated tests for trust, review, import, and transport behavior
+```bash
+dotnet run --no-restore --project tests/Dragnet.Tests/Dragnet.Tests.csproj
+```
