@@ -25,7 +25,7 @@ public sealed class DragnetWebfrontService
     private readonly DragnetPeerStore _peerStore;
     private readonly DragnetReviewService _reviewService;
     private readonly DragnetTrustService _trustService;
-    private readonly IManager _manager;
+    private readonly Func<IManager> _managerFactory;
 
     public DragnetWebfrontService(
         DragnetConfiguration configuration,
@@ -33,14 +33,14 @@ public sealed class DragnetWebfrontService
         DragnetPeerStore peerStore,
         DragnetReviewService reviewService,
         DragnetTrustService trustService,
-        IManager manager)
+        Func<IManager> managerFactory)
     {
         _configuration = configuration;
         _eventStore = eventStore;
         _peerStore = peerStore;
         _reviewService = reviewService;
         _trustService = trustService;
-        _manager = manager;
+        _managerFactory = managerFactory;
     }
 
     public Task<IInteractionData> CreateNavigationInteractionAsync(CancellationToken token)
@@ -249,7 +249,8 @@ public sealed class DragnetWebfrontService
         IDictionary<string, string>? meta,
         CancellationToken token)
     {
-        var origin = originId > 0 ? await _manager.GetClientService().Get(originId) : null;
+        var manager = _managerFactory();
+        var origin = originId > 0 ? await manager.GetClientService().Get(originId) : null;
         if (origin?.Level < EFClient.Permission.Administrator)
         {
             return "You are not authorized to review Dragnet events.";
@@ -283,7 +284,8 @@ public sealed class DragnetWebfrontService
         IDictionary<string, string>? meta,
         CancellationToken token)
     {
-        var origin = originId > 0 ? await _manager.GetClientService().Get(originId) : null;
+        var manager = _managerFactory();
+        var origin = originId > 0 ? await manager.GetClientService().Get(originId) : null;
         if (origin?.Level < EFClient.Permission.Administrator)
         {
             return "You are not authorized to manage Dragnet trust.";
@@ -322,7 +324,8 @@ public sealed class DragnetWebfrontService
         IDictionary<string, string>? meta,
         CancellationToken token)
     {
-        var origin = originId > 0 ? await _manager.GetClientService().Get(originId) : null;
+        var manager = _managerFactory();
+        var origin = originId > 0 ? await manager.GetClientService().Get(originId) : null;
         if (origin?.Level < EFClient.Permission.Administrator)
         {
             return "You are not authorized to manage Dragnet peers.";

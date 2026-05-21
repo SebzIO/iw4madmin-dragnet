@@ -15,18 +15,18 @@ public sealed class DragnetImportService
 
     private readonly DragnetConfiguration _configuration;
     private readonly DragnetEventStore _store;
-    private readonly IManager _manager;
+    private readonly Func<IManager> _managerFactory;
     private readonly ILogger<DragnetImportService> _logger;
 
     public DragnetImportService(
         DragnetConfiguration configuration,
         DragnetEventStore store,
-        IManager manager,
+        Func<IManager> managerFactory,
         ILogger<DragnetImportService> logger)
     {
         _configuration = configuration;
         _store = store;
-        _manager = manager;
+        _managerFactory = managerFactory;
         _logger = logger;
     }
 
@@ -98,7 +98,8 @@ public sealed class DragnetImportService
         }
 
         var reason = FormatImportedReason(envelope);
-        var activeClient = _manager.FindActiveClient(client);
+        var manager = _managerFactory();
+        var activeClient = manager.FindActiveClient(client);
         if (activeClient is { IsIngame: true, CurrentServer: not null })
         {
             if (envelope.PenaltyKind is DragnetPenaltyKind.TempBan)
@@ -127,7 +128,7 @@ public sealed class DragnetImportService
             Offense = reason
         };
 
-        await _manager.GetPenaltyService().Create(penalty);
+        await manager.GetPenaltyService().Create(penalty);
     }
 
     private async Task ImportLiftAsync(
@@ -136,14 +137,15 @@ public sealed class DragnetImportService
         EFClient console)
     {
         var reason = FormatImportedReason(envelope);
-        var activeClient = _manager.FindActiveClient(client);
+        var manager = _managerFactory();
+        var activeClient = manager.FindActiveClient(client);
         if (activeClient is { IsIngame: true, CurrentServer: not null })
         {
             await activeClient.CurrentServer.Unban(reason, activeClient, console);
             return;
         }
 
-        await _manager.GetPenaltyService().RemoveActivePenalties(
+        await manager.GetPenaltyService().RemoveActivePenalties(
             client.AliasLinkId,
             client.NetworkId,
             client.GameName,
@@ -162,7 +164,7 @@ public sealed class DragnetImportService
             Active = true
         };
 
-        await _manager.GetPenaltyService().Create(penalty);
+        await manager.GetPenaltyService().Create(penalty);
     }
 
     private async Task<EFClient?> ResolveClientAsync(DragnetEventEnvelope envelope)
@@ -174,18 +176,20 @@ public sealed class DragnetImportService
 
         if (Enum.TryParse<Reference.Game>(envelope.PlayerGame, true, out var game))
         {
-            var client = await _manager.GetClientService().GetUnique(networkId, game);
+            var manager = _managerFactory();
+            var client = await manager.GetClientService().GetUnique(networkId, game);
             if (client is not null)
             {
-                return await _manager.GetClientService().Get(client.ClientId);
+                return await manager.GetClientService().Get(client.ClientId);
             }
         }
 
-        var activeClient = _manager.GetActiveClients()
+        var fallbackManager = _managerFactory();
+        var activeClient = fallbackManager.GetActiveClients()
             .FirstOrDefault(client => client.NetworkId == networkId);
         if (activeClient is not null)
         {
-            return await _manager.GetClientService().Get(activeClient.ClientId);
+            return await fallbackManager.GetClientService().Get(activeClient.ClientId);
         }
 
         return null;
@@ -193,7 +197,7 @@ public sealed class DragnetImportService
 
     private EFClient? CreateConsoleClient()
     {
-        var server = _manager.GetServers().FirstOrDefault();
+        var server = _managerFactory().GetServers().FirstOrDefault();
         return server?.AsConsoleClient();
     }
 

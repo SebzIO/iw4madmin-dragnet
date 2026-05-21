@@ -24,7 +24,6 @@ public sealed class Plugin : IPluginV2
     private readonly IInteractionRegistration _interactionRegistration;
     private readonly DragnetConfiguration _configuration;
     private readonly DragnetIdentityDocument _identity;
-    private readonly IManager _manager;
 
     public string Name => "Dragnet";
 
@@ -41,11 +40,9 @@ public sealed class Plugin : IPluginV2
         DragnetTransportService transportService,
         DragnetWebfrontService webfrontService,
         IInteractionRegistration interactionRegistration,
-        DragnetIdentityDocument identity,
-        IManager manager)
+        DragnetIdentityDocument identity)
     {
         _logger = logger;
-        _manager = manager;
         _configuration = configuration;
         _localEventService = localEventService;
         _eventStore = eventStore;
@@ -94,6 +91,8 @@ public sealed class Plugin : IPluginV2
         });
         serviceCollection.AddSingleton<DragnetLocalEventService>();
         serviceCollection.AddSingleton<DragnetTrustService>();
+        serviceCollection.AddSingleton<Func<IManager>>(serviceProvider =>
+            () => serviceProvider.GetRequiredService<IManager>());
         serviceCollection.AddSingleton<DragnetImportService>();
         serviceCollection.AddSingleton<DragnetReviewService>();
         serviceCollection.AddSingleton<DragnetTransportService>();
@@ -121,8 +120,8 @@ public sealed class Plugin : IPluginV2
 
         _logger.LogInformation(
             "Dragnet loaded for IW4MAdmin {Version} with {ServerCount} server(s)",
-            _manager.Version,
-            _manager.GetServers().Count);
+            manager.Version,
+            manager.GetServers().Count);
     }
 
     public void Dispose()

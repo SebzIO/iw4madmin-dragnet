@@ -4,6 +4,7 @@ using Dragnet.Models;
 using Dragnet.Services;
 using Dragnet.Storage;
 using Dragnet.Transport;
+using Dragnet.Web;
 using Microsoft.Extensions.Logging;
 using SharedLibraryCore.Interfaces;
 
@@ -14,6 +15,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("peer store tracks bootstrap, errors, removal, and send cursor", TestPeerStoreAsync),
     ("event store expires elapsed temp bans", TestEventStoreExpiresElapsedTempBansAsync),
     ("heartbeat response sends approved events once", TestHeartbeatResponseBatchAsync),
+    ("webfront dashboard interaction renders as navigation content", TestWebfrontDashboardRendersAsync),
     ("heartbeat validation rejects oversized and invalid requests", TestHeartbeatValidationAsync)
 };
 
@@ -73,7 +75,7 @@ static async Task TestReviewTransitionsAsync()
     var importService = new DragnetImportService(
         configuration,
         store,
-        manager: null!,
+        managerFactory: () => null!,
         logger: new TestLogger<DragnetImportService>());
     var reviewService = new DragnetReviewService(store, importService, trustService);
     var pendingBan = CreateEnvelope(originId: "origin-2", eventType: DragnetEventType.BanCreated);
@@ -202,7 +204,7 @@ static async Task TestHeartbeatResponseBatchAsync()
     var importService = new DragnetImportService(
         configuration,
         eventStore,
-        manager: null!,
+        managerFactory: () => null!,
         logger: new TestLogger<DragnetImportService>());
     var reviewService = new DragnetReviewService(eventStore, importService, trustService);
     var transport = new DragnetTransportService(
@@ -264,6 +266,41 @@ static async Task TestHeartbeatResponseBatchAsync()
     Assert.Equal(0, secondResponse.Events.Count, "heartbeat should not resend events already sent to peer");
 }
 
+static async Task TestWebfrontDashboardRendersAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        PublicEndpoint = "https://local.example/dragnet"
+    };
+    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
+    await eventStore.LoadAsync(CancellationToken.None);
+    var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
+    await peerStore.LoadAsync(configuration, CancellationToken.None);
+    var trustService = new DragnetTrustService(configuration, new RecordingConfigurationHandler<DragnetConfiguration>());
+    var importService = new DragnetImportService(
+        configuration,
+        eventStore,
+        managerFactory: () => null!,
+        logger: new TestLogger<DragnetImportService>());
+    var reviewService = new DragnetReviewService(eventStore, importService, trustService);
+    var webfront = new DragnetWebfrontService(
+        configuration,
+        eventStore,
+        peerStore,
+        reviewService,
+        trustService,
+        managerFactory: () => null!);
+    var interaction = await webfront.CreateNavigationInteractionAsync(CancellationToken.None);
+
+    Assert.Equal(InteractionType.TemplateContent, interaction.InteractionType, "dashboard should render as an IW4MAdmin navigation page");
+    Assert.Equal(2, (int)interaction.InteractionType, "dashboard interaction type should match IW4MAdmin script nav pages");
+
+    var html = await interaction.Action(0, null, null, null, CancellationToken.None);
+    Assert.Contains("Peer transport", html, "dashboard should include peer section");
+    Assert.Contains("Dragnet events", html, "dashboard should include event section");
+}
+
 static async Task TestHeartbeatValidationAsync()
 {
     await using var testDir = new TestDirectory();
@@ -283,7 +320,7 @@ static async Task TestHeartbeatValidationAsync()
     var importService = new DragnetImportService(
         configuration,
         eventStore,
-        manager: null!,
+        managerFactory: () => null!,
         logger: new TestLogger<DragnetImportService>());
     var reviewService = new DragnetReviewService(eventStore, importService, trustService);
     var transport = new DragnetTransportService(
