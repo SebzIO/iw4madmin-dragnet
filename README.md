@@ -11,6 +11,8 @@ This repository is in the MVP scaffold stage. The current implementation:
 - stores captured events in `Configuration/Dragnet/events.json`
 - stores known peers in `Configuration/Dragnet/peers.json`
 - sends outbound HTTPS heartbeat/gossip batches to configured peers
+- tracks per-peer gossip cursors to avoid resending already delivered approved events
+- validates inbound heartbeat sender, peer, and event batch limits
 - exposes `POST /dragnet/heartbeat` for peer heartbeat/gossip
 - adds an administrator-only Dragnet webfront interaction page
 - supports webfront peer health, stale-peer visibility, error clearing, and discovered-peer removal
@@ -42,4 +44,4 @@ Trust commands persist changes to `DragnetSettings`.
 
 Next planned pieces:
 
-- transport gossip windowing and stronger inbound validation
+- import retry workflow and unknown-player handling

@@ -33,6 +33,7 @@ public sealed class DragnetController : ControllerBase
     [IgnoreAntiforgeryToken]
     [HttpPost("/dragnet/heartbeat")]
     [ProducesResponseType<DragnetHeartbeatResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
     public async Task<ActionResult<DragnetHeartbeatResponse>> Heartbeat(
@@ -49,7 +50,14 @@ public sealed class DragnetController : ControllerBase
             return Forbid();
         }
 
-        return Ok(await _transportService.HandleHeartbeatAsync(request, token));
+        try
+        {
+            return Ok(await _transportService.HandleHeartbeatAsync(request, token));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     [Authorize(Policy = "Permissions.Interaction.Read")]

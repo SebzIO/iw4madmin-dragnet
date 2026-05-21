@@ -16,6 +16,8 @@ public sealed class DragnetConfiguration
 
     public int MaxEventsPerHeartbeat { get; set; } = 100;
 
+    public int MaxKnownPeersPerHeartbeat { get; set; } = 50;
+
     public bool ImportApprovedEvents { get; set; } = true;
 
     public TimeSpan PeerHeartbeatInterval { get; set; } = TimeSpan.FromMinutes(1);

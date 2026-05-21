@@ -135,6 +135,35 @@ public sealed class DragnetPeerStore
         }
     }
 
+    public async Task MarkEventBatchSentAsync(
+        string originId,
+        IReadOnlyList<DragnetEventEnvelope> sentEvents,
+        CancellationToken token)
+    {
+        if (sentEvents.Count == 0)
+        {
+            return;
+        }
+
+        await _lock.WaitAsync(token);
+        try
+        {
+            if (_peers.TryGetValue(originId, out var existing))
+            {
+                var latestSentAt = sentEvents.Max(envelope => envelope.CreatedAtUtc);
+                existing.LastEventSentAtUtc = existing.LastEventSentAtUtc is null ||
+                                              latestSentAt > existing.LastEventSentAtUtc
+                    ? latestSentAt
+                    : existing.LastEventSentAtUtc;
+                await SaveUnlockedAsync(token);
+            }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
     public async Task ClearErrorAsync(string originId, CancellationToken token)
     {
         await _lock.WaitAsync(token);

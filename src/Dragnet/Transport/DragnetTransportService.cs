@@ -81,6 +81,8 @@ public sealed class DragnetTransportService : IDisposable
         DragnetHeartbeatRequest request,
         CancellationToken token)
     {
+        ValidateHeartbeatRequest(request);
+
         await _peerStore.UpsertAsync(request.Sender, token);
         await ImportEventsAsync(request.Events, token);
 
@@ -92,11 +94,14 @@ public sealed class DragnetTransportService : IDisposable
             }
         }
 
+        var eventBatch = await CreateEventBatchAsync(request.Sender.OriginId, token);
+        await _peerStore.MarkEventBatchSentAsync(request.Sender.OriginId, eventBatch, token);
+
         return new DragnetHeartbeatResponse
         {
             Receiver = CreateLocalPeerInfo(),
             KnownPeers = await CreateKnownPeerInfoAsync(token),
-            Events = await CreateEventBatchAsync(token)
+            Events = eventBatch
         };
     }
 
@@ -130,11 +135,12 @@ public sealed class DragnetTransportService : IDisposable
                     continue;
                 }
 
+                var eventBatch = await CreateEventBatchAsync(peer.OriginId, token);
                 var request = new DragnetHeartbeatRequest
                 {
                     Sender = CreateLocalPeerInfo(),
                     KnownPeers = await CreateKnownPeerInfoAsync(token),
-                    Events = await CreateEventBatchAsync(token)
+                    Events = eventBatch
                 };
 
                 var response = await _httpClient.PostAsJsonAsync(
@@ -174,6 +180,7 @@ public sealed class DragnetTransportService : IDisposable
                 }
 
                 await ImportEventsAsync(heartbeat.Events, token);
+                await _peerStore.MarkEventBatchSentAsync(peer.OriginId, eventBatch, token);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -244,6 +251,51 @@ public sealed class DragnetTransportService : IDisposable
         }
     }
 
+    private void ValidateHeartbeatRequest(DragnetHeartbeatRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Sender.OriginId) ||
+            string.IsNullOrWhiteSpace(request.Sender.OriginName))
+        {
+            throw new InvalidOperationException("Heartbeat sender identity is required.");
+        }
+
+        if (string.Equals(request.Sender.OriginId, _identity.OriginId, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Heartbeat sender cannot be the local origin.");
+        }
+
+        if (request.KnownPeers.Count > _configuration.MaxKnownPeersPerHeartbeat)
+        {
+            throw new InvalidOperationException("Heartbeat contains too many known peers.");
+        }
+
+        if (request.Events.Count > _configuration.MaxEventsPerHeartbeat)
+        {
+            throw new InvalidOperationException("Heartbeat contains too many events.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Sender.PublicEndpoint) &&
+            !IsAllowedEndpoint(request.Sender.PublicEndpoint))
+        {
+            throw new InvalidOperationException("Heartbeat sender endpoint must be absolute HTTPS.");
+        }
+
+        foreach (var peer in request.KnownPeers)
+        {
+            if (string.IsNullOrWhiteSpace(peer.OriginId) ||
+                string.IsNullOrWhiteSpace(peer.OriginName))
+            {
+                throw new InvalidOperationException("Known peer identity is required.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(peer.PublicEndpoint) &&
+                !IsAllowedEndpoint(peer.PublicEndpoint))
+            {
+                throw new InvalidOperationException("Known peer endpoint must be absolute HTTPS.");
+            }
+        }
+    }
+
     private DragnetPeerInfo CreateLocalPeerInfo() => new()
     {
         OriginId = _identity.OriginId,
@@ -257,7 +309,7 @@ public sealed class DragnetTransportService : IDisposable
         var peers = await _peerStore.ListAsync(token);
         return peers
             .Where(peer => string.IsNullOrWhiteSpace(peer.LastError))
-            .Take(50)
+            .Take(Math.Max(0, _configuration.MaxKnownPeersPerHeartbeat))
             .Select(peer => new DragnetPeerInfo
             {
                 OriginId = peer.OriginId,
@@ -268,14 +320,21 @@ public sealed class DragnetTransportService : IDisposable
             .ToList();
     }
 
-    private async Task<IReadOnlyList<DragnetEventEnvelope>> CreateEventBatchAsync(CancellationToken token)
+    private async Task<IReadOnlyList<DragnetEventEnvelope>> CreateEventBatchAsync(
+        string peerOriginId,
+        CancellationToken token)
     {
         var events = await _eventStore.ListAsync(token);
+        var peer = (await _peerStore.ListAsync(token))
+            .FirstOrDefault(peer => string.Equals(peer.OriginId, peerOriginId, StringComparison.OrdinalIgnoreCase));
+        var lastSentAt = peer?.LastEventSentAtUtc;
+
         return events
             .Where(item => item.ReviewState is DragnetReviewState.ApprovedBan or DragnetReviewState.ApprovedLift)
             .Where(item => item.Event.EventType is DragnetEventType.BanLifted ||
                            !item.Event.IsExpired(DateTimeOffset.UtcNow))
-            .OrderByDescending(item => item.Event.CreatedAtUtc)
+            .Where(item => lastSentAt is null || item.Event.CreatedAtUtc > lastSentAt)
+            .OrderBy(item => item.Event.CreatedAtUtc)
             .Take(Math.Max(1, _configuration.MaxEventsPerHeartbeat))
             .Select(item => item.Event)
             .ToList();

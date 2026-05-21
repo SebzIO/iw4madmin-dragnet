@@ -151,11 +151,11 @@ public sealed class DragnetWebfrontService
         html.Append(Encode(_configuration.PublicEndpoint ?? "not configured"));
         html.AppendLine("</span>");
         html.AppendLine("</div>");
-        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Endpoint</th><th class=\"px-4 py-3\">Source</th><th class=\"px-4 py-3\">Last seen</th><th class=\"px-4 py-3\">Status</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
+        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Endpoint</th><th class=\"px-4 py-3\">Source</th><th class=\"px-4 py-3\">Last seen</th><th class=\"px-4 py-3\">Last sent</th><th class=\"px-4 py-3\">Status</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
 
         if (peers.Count == 0)
         {
-            html.AppendLine("<tr><td colspan=\"6\" class=\"px-4 py-6 text-center text-muted\">No peers discovered.</td></tr>");
+            html.AppendLine("<tr><td colspan=\"7\" class=\"px-4 py-6 text-center text-muted\">No peers discovered.</td></tr>");
         }
         else
         {
@@ -173,6 +173,11 @@ public sealed class DragnetWebfrontService
                 html.AppendLine("</td>");
                 html.Append("<td class=\"px-4 py-3 text-muted\">");
                 html.Append(Encode(DescribeAge(now - peer.LastSeenUtc)));
+                html.AppendLine("</td>");
+                html.Append("<td class=\"px-4 py-3 text-muted\">");
+                html.Append(peer.LastEventSentAtUtc is null
+                    ? "Never"
+                    : Encode(DescribeAge(now - peer.LastEventSentAtUtc.Value)));
                 html.AppendLine("</td>");
                 html.Append("<td class=\"px-4 py-3\">");
                 AppendPeerStatus(html, peer, now);
