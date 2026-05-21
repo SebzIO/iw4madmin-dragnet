@@ -3,6 +3,9 @@
   "originName": "Sebz.XYZ",
   "publicEndpoint": "https://example.com/dragnet",
   "dataDirectory": "Configuration/Dragnet",
+  "requireHttps": true,
+  "trustForwardedHttpsHeader": true,
+  "maxEventsPerHeartbeat": 100,
   "peerHeartbeatInterval": "00:01:00",
   "peerStaleAfter": "00:10:00",
   "bootstrapPeers": [

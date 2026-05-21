@@ -3,6 +3,8 @@ using Dragnet.Configuration;
 using Dragnet.Identity;
 using Dragnet.Services;
 using Dragnet.Storage;
+using Dragnet.Transport;
+using Dragnet.Web;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SharedLibraryCore;
@@ -16,6 +18,11 @@ public sealed class Plugin : IPluginV2
     private readonly ILogger<Plugin> _logger;
     private readonly DragnetLocalEventService _localEventService;
     private readonly DragnetEventStore _eventStore;
+    private readonly DragnetPeerStore _peerStore;
+    private readonly DragnetTransportService _transportService;
+    private readonly DragnetWebfrontService _webfrontService;
+    private readonly IInteractionRegistration _interactionRegistration;
+    private readonly DragnetConfiguration _configuration;
     private readonly DragnetIdentityDocument _identity;
     private readonly IManager _manager;
 
@@ -27,15 +34,25 @@ public sealed class Plugin : IPluginV2
 
     public Plugin(
         ILogger<Plugin> logger,
+        DragnetConfiguration configuration,
         DragnetLocalEventService localEventService,
         DragnetEventStore eventStore,
+        DragnetPeerStore peerStore,
+        DragnetTransportService transportService,
+        DragnetWebfrontService webfrontService,
+        IInteractionRegistration interactionRegistration,
         DragnetIdentityDocument identity,
         IManager manager)
     {
         _logger = logger;
         _manager = manager;
+        _configuration = configuration;
         _localEventService = localEventService;
         _eventStore = eventStore;
+        _peerStore = peerStore;
+        _transportService = transportService;
+        _webfrontService = webfrontService;
+        _interactionRegistration = interactionRegistration;
         _identity = identity;
 
         IManagementEventSubscriptions.Load += OnLoad;
@@ -70,13 +87,29 @@ public sealed class Plugin : IPluginV2
             var configuration = serviceProvider.GetRequiredService<DragnetConfiguration>();
             return new DragnetEventStore(Path.GetFullPath(configuration.DataDirectory));
         });
+        serviceCollection.AddSingleton(serviceProvider =>
+        {
+            var configuration = serviceProvider.GetRequiredService<DragnetConfiguration>();
+            return new DragnetPeerStore(Path.GetFullPath(configuration.DataDirectory));
+        });
         serviceCollection.AddSingleton<DragnetLocalEventService>();
+        serviceCollection.AddSingleton<DragnetReviewService>();
+        serviceCollection.AddSingleton<DragnetTransportService>();
+        serviceCollection.AddSingleton<DragnetWebfrontService>();
         serviceCollection.AddSingleton<IManagerCommand, DragnetCommand>();
     }
 
     private async Task OnLoad(IManager manager, CancellationToken token)
     {
         await _eventStore.LoadAsync(token);
+        await _peerStore.LoadAsync(_configuration, token);
+        _interactionRegistration.RegisterInteraction(
+            DragnetWebfrontService.NavigationInteractionId,
+            (_, _, interactionToken) => _webfrontService.CreateNavigationInteractionAsync(interactionToken));
+        _interactionRegistration.RegisterInteraction(
+            DragnetWebfrontService.ReviewInteractionId,
+            (_, _, interactionToken) => _webfrontService.CreateReviewInteractionAsync(interactionToken));
+        _transportService.Start();
 
         _logger.LogInformation(
             "Dragnet loaded for IW4MAdmin {Version} with {ServerCount} server(s)",
@@ -89,6 +122,9 @@ public sealed class Plugin : IPluginV2
         IManagementEventSubscriptions.Load -= OnLoad;
         IManagementEventSubscriptions.ClientPenaltyAdministered -= _localEventService.CapturePenaltyAsync;
         IManagementEventSubscriptions.ClientPenaltyRevoked -= _localEventService.CapturePenaltyRevokeAsync;
+        _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.NavigationInteractionId);
+        _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.ReviewInteractionId);
+        _transportService.StopAsync().GetAwaiter().GetResult();
         _logger.LogInformation("Dragnet unloaded");
     }
 }

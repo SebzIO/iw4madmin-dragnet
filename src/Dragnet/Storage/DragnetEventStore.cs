@@ -97,7 +97,7 @@ public sealed class DragnetEventStore
         }
     }
 
-    public async Task UpsertAsync(DragnetStoredEvent storedEvent, CancellationToken token)
+    public async Task<bool> UpsertAsync(DragnetStoredEvent storedEvent, CancellationToken token)
     {
         await _lock.WaitAsync(token);
         try
@@ -105,11 +105,13 @@ public sealed class DragnetEventStore
             if (_events.TryGetValue(storedEvent.Event.EventId, out var existing))
             {
                 existing.LastSeenUtc = DateTimeOffset.UtcNow;
-                return;
+                await SaveUnlockedAsync(token);
+                return false;
             }
 
             _events[storedEvent.Event.EventId] = storedEvent;
             await SaveUnlockedAsync(token);
+            return true;
         }
         finally
         {

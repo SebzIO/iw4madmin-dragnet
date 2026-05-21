@@ -10,6 +10,12 @@ public sealed class DragnetConfiguration
 
     public string DataDirectory { get; set; } = "Configuration/Dragnet";
 
+    public bool RequireHttps { get; set; } = true;
+
+    public bool TrustForwardedHttpsHeader { get; set; } = true;
+
+    public int MaxEventsPerHeartbeat { get; set; } = 100;
+
     public TimeSpan PeerHeartbeatInterval { get; set; } = TimeSpan.FromMinutes(1);
 
     public TimeSpan PeerStaleAfter { get; set; } = TimeSpan.FromMinutes(10);

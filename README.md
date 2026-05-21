@@ -9,6 +9,11 @@ This repository is in the MVP scaffold stage. The current implementation:
 - captures local ban, temp-ban, and ban-lift events from IW4MAdmin
 - signs captured events with the local origin identity
 - stores captured events in `Configuration/Dragnet/events.json`
+- stores known peers in `Configuration/Dragnet/peers.json`
+- sends outbound HTTPS heartbeat/gossip batches to configured peers
+- exposes `POST /dragnet/heartbeat` for peer heartbeat/gossip
+- adds an administrator-only Dragnet webfront interaction page
+- supports webfront-first approve, deny, and ignore decisions for pending bans and lifts
 - registers the `!dragnet` / `!dn` admin command for local review state management
 - omits IP addresses from the event model
 - discards expired temp-ban events before storing
@@ -29,7 +34,6 @@ Initial commands:
 
 Next planned pieces:
 
-- peer heartbeat and gossip transport over HTTPS
 - manual trust commands
 - ban/lift import into IW4MAdmin
-- optional webfront integration if IW4MAdmin exposes a clean route/component hook
+- ban/lift import into IW4MAdmin after approval

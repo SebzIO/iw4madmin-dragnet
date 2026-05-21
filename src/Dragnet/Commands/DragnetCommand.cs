@@ -1,6 +1,7 @@
 using Data.Models.Client;
 using Dragnet.Identity;
 using Dragnet.Models;
+using Dragnet.Services;
 using Dragnet.Storage;
 using SharedLibraryCore;
 using SharedLibraryCore.Commands;
@@ -12,16 +13,19 @@ namespace Dragnet.Commands;
 public sealed class DragnetCommand : Command
 {
     private readonly DragnetEventStore _store;
+    private readonly DragnetReviewService _reviewService;
     private readonly DragnetIdentityDocument _identity;
 
     public DragnetCommand(
         CommandConfiguration config,
         ITranslationLookup translationLookup,
         DragnetEventStore store,
+        DragnetReviewService reviewService,
         DragnetIdentityDocument identity)
         : base(config, translationLookup)
     {
         _store = store;
+        _reviewService = reviewService;
         _identity = identity;
         Name = "dragnet";
         Alias = "dn";
@@ -104,10 +108,7 @@ public sealed class DragnetCommand : Command
     private async Task ListPendingAsync(GameEvent gameEvent, DragnetReviewState state)
     {
         await _store.ExpireElapsedTempBansAsync(DateTimeOffset.UtcNow, CancellationToken.None);
-        var events = (await _store.ListAsync(CancellationToken.None))
-            .Where(item => item.ReviewState == state)
-            .Take(5)
-            .ToList();
+        var events = await _reviewService.ListPendingAsync(state, 5, CancellationToken.None);
 
         if (events.Count == 0)
         {
@@ -121,20 +122,21 @@ public sealed class DragnetCommand : Command
         {
             var expires = item.Event.ExpiresAtUtc is null ? "permanent" : $"expires {item.Event.ExpiresAtUtc:yyyy-MM-dd HH:mm} UTC";
             gameEvent.Origin.Tell(
-                $"{ShortId(item.Event.EventId)} | {item.Event.PlayerName} | {item.Event.OriginName} | {expires} | {item.Event.Reason}");
+                $"{DragnetReviewService.ShortId(item.Event.EventId)} | {item.Event.PlayerName} | {item.Event.OriginName} | {expires} | {item.Event.Reason}");
         }
     }
 
     private async Task ShowInfoAsync(GameEvent gameEvent, string[] args)
     {
-        var item = await FindEventAsync(gameEvent, args);
-        if (item is null)
+        var lookup = await FindEventAsync(gameEvent, args);
+        if (lookup is null)
         {
             return;
         }
 
+        var item = lookup;
         var dragnetEvent = item.Event;
-        gameEvent.Origin.Tell($"Dragnet {ShortId(dragnetEvent.EventId)}: {dragnetEvent.EventType} / {item.ReviewState}");
+        gameEvent.Origin.Tell($"Dragnet {DragnetReviewService.ShortId(dragnetEvent.EventId)}: {dragnetEvent.EventType} / {item.ReviewState}");
         gameEvent.Origin.Tell($"Player: {dragnetEvent.PlayerName} ({dragnetEvent.PlayerNetworkId})");
         gameEvent.Origin.Tell($"Origin: {dragnetEvent.OriginName} / {dragnetEvent.OriginServerName}");
         gameEvent.Origin.Tell($"Penalty: {dragnetEvent.PenaltyKind}, IW4MAdmin #{dragnetEvent.Iw4mAdminPenaltyId}");
@@ -151,21 +153,40 @@ public sealed class DragnetCommand : Command
         DragnetReviewState expectedState,
         DragnetReviewState targetState)
     {
-        var item = await FindEventAsync(gameEvent, args);
-        if (item is null)
+        if (args.Length < 2)
         {
+            gameEvent.Origin.Tell("Provide a Dragnet event id.");
             return;
         }
 
-        if (item.ReviewState != expectedState)
-        {
-            gameEvent.Origin.Tell($"Dragnet event is {item.ReviewState}, not {expectedState}.");
-            return;
-        }
-
+        var action = ToAction(expectedState, targetState);
         var reason = args.Length > 2 ? string.Join(' ', args.Skip(2)) : null;
-        await _store.SetReviewStateAsync(item.Event.EventId, targetState, reason, CancellationToken.None);
-        gameEvent.Origin.Tell($"Dragnet event {ShortId(item.Event.EventId)} marked {targetState}.");
+        var result = await _reviewService.ApplyActionAsync(args[1], action, reason, CancellationToken.None);
+        gameEvent.Origin.Tell(result.Message);
+    }
+
+    private static DragnetReviewAction ToAction(
+        DragnetReviewState expectedState,
+        DragnetReviewState targetState)
+    {
+        if (expectedState is DragnetReviewState.PendingBan)
+        {
+            return targetState switch
+            {
+                DragnetReviewState.ApprovedBan => DragnetReviewAction.ApproveBan,
+                DragnetReviewState.DeniedBan => DragnetReviewAction.DenyBan,
+                DragnetReviewState.IgnoredBan => DragnetReviewAction.IgnoreBan,
+                _ => throw new ArgumentOutOfRangeException(nameof(targetState), targetState, null)
+            };
+        }
+
+        return targetState switch
+        {
+            DragnetReviewState.ApprovedLift => DragnetReviewAction.ApproveLift,
+            DragnetReviewState.DeniedLift => DragnetReviewAction.DenyLift,
+            DragnetReviewState.IgnoredLift => DragnetReviewAction.IgnoreLift,
+            _ => throw new ArgumentOutOfRangeException(nameof(targetState), targetState, null)
+        };
     }
 
     private async Task<DragnetStoredEvent?> FindEventAsync(GameEvent gameEvent, string[] args)
@@ -176,21 +197,13 @@ public sealed class DragnetCommand : Command
             return null;
         }
 
-        var idPrefix = args[1];
-        var matches = (await _store.ListAsync(CancellationToken.None))
-            .Where(item => item.Event.EventId.StartsWith(idPrefix, StringComparison.OrdinalIgnoreCase))
-            .Take(2)
-            .ToList();
-
-        if (matches.Count == 1)
+        var lookup = await _reviewService.FindByPrefixAsync(args[1], CancellationToken.None);
+        if (!lookup.Result.Success)
         {
-            return matches[0];
+            gameEvent.Origin.Tell(lookup.Result.Message);
         }
 
-        gameEvent.Origin.Tell(matches.Count == 0
-            ? "No Dragnet event matched that id."
-            : "Multiple Dragnet events matched that id. Use a longer id prefix.");
-        return null;
+        return lookup.Match;
     }
 
     private void TellHelp(GameEvent gameEvent)
@@ -203,10 +216,5 @@ public sealed class DragnetCommand : Command
         return string.IsNullOrWhiteSpace(data)
             ? []
             : data.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-    }
-
-    private static string ShortId(string eventId)
-    {
-        return eventId.Length <= 12 ? eventId : eventId[..12];
     }
 }
