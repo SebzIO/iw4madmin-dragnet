@@ -10,6 +10,11 @@
   "importApprovedEvents": true,
   "peerHeartbeatInterval": "00:01:00",
   "peerStaleAfter": "00:10:00",
+  "webfrontPermission": "Administrator",
+  "reviewPermission": "Administrator",
+  "trustPermission": "Administrator",
+  "peerManagementPermission": "Administrator",
+  "commandPermission": "Administrator",
   "bootstrapPeers": [
     {
       "endpoint": "https://peer.example.com/dragnet",

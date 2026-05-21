@@ -44,6 +44,23 @@ src/Dragnet/bin/Release/net10.0/Dragnet.dll
 
 Copy `Dragnet.dll` into the IW4MAdmin `Plugins` directory, then restart IW4MAdmin.
 
+To create the same zip package used by GitHub releases:
+
+```bash
+dotnet restore tests/Dragnet.Tests/Dragnet.Tests.csproj
+dotnet run --no-restore --project tests/Dragnet.Tests/Dragnet.Tests.csproj
+./scripts/package-release.sh
+```
+
+The package is written to `artifacts/Dragnet.IW4MAdmin.Plugin-<version>.zip` and contains:
+
+- `Plugins/Dragnet.dll`
+- `Configuration/DragnetSettings.example.json`
+- `README.md`
+- `INSTALL.txt`
+
+Tagged pushes matching `v*` run the GitHub Actions release workflow and attach the zip package to the GitHub release.
+
 ## Configuration
 
 IW4MAdmin creates/loads the plugin configuration as `DragnetSettings`. The default data directory is `Configuration/Dragnet`.
@@ -153,5 +170,4 @@ dotnet run --no-restore --project tests/Dragnet.Tests/Dragnet.Tests.csproj
 ## Known Gaps
 
 - broader tests for IW4MAdmin import/local event integration
-- a repeatable package/deploy script
 - more complete operator documentation for multi-peer production deployments
