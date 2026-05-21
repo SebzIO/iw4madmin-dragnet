@@ -93,6 +93,7 @@ public sealed class Plugin : IPluginV2
             return new DragnetPeerStore(Path.GetFullPath(configuration.DataDirectory));
         });
         serviceCollection.AddSingleton<DragnetLocalEventService>();
+        serviceCollection.AddSingleton<DragnetImportService>();
         serviceCollection.AddSingleton<DragnetReviewService>();
         serviceCollection.AddSingleton<DragnetTransportService>();
         serviceCollection.AddSingleton<DragnetWebfrontService>();

@@ -129,7 +129,7 @@ public sealed class DragnetWebfrontService
         html.AppendLine("</tbody></table></div></div>");
         html.AppendLine("<div class=\"rounded-lg border border-line bg-surface/50 overflow-hidden\">");
         html.AppendLine("<div class=\"px-4 py-3 border-b border-line\"><h3 class=\"text-lg font-semibold\">Recent Dragnet events</h3></div>");
-        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3\">Player</th><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Type</th><th class=\"px-4 py-3\">State</th><th class=\"px-4 py-3\">Created</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
+        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3\">Player</th><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Type</th><th class=\"px-4 py-3\">State</th><th class=\"px-4 py-3\">Import</th><th class=\"px-4 py-3\">Created</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
 
         foreach (var item in events.Take(25))
         {
@@ -146,6 +146,9 @@ public sealed class DragnetWebfrontService
             html.Append("<td class=\"px-4 py-3\">");
             html.Append(Encode(item.ReviewState.ToString()));
             html.AppendLine("</td>");
+            html.Append("<td class=\"px-4 py-3\">");
+            AppendImportStatus(html, item);
+            html.AppendLine("</td>");
             html.Append("<td class=\"px-4 py-3 text-muted\">");
             html.Append(Encode(DescribeAge(now - item.Event.CreatedAtUtc)));
             html.AppendLine("</td>");
@@ -157,7 +160,7 @@ public sealed class DragnetWebfrontService
 
         if (events.Count == 0)
         {
-            html.AppendLine("<tr><td colspan=\"6\" class=\"px-4 py-6 text-center text-muted\">No Dragnet events stored.</td></tr>");
+            html.AppendLine("<tr><td colspan=\"7\" class=\"px-4 py-6 text-center text-muted\">No Dragnet events stored.</td></tr>");
         }
 
         html.AppendLine("</tbody></table></div></div>");
@@ -209,6 +212,25 @@ public sealed class DragnetWebfrontService
                 html.Append("<span class=\"text-muted\">Reviewed</span>");
                 break;
         }
+    }
+
+    private static void AppendImportStatus(StringBuilder html, DragnetStoredEvent item)
+    {
+        if (item.ImportedAtUtc is not null)
+        {
+            html.Append("<span class=\"text-success\">Imported</span>");
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.ImportError))
+        {
+            html.Append("<span class=\"text-danger\">");
+            html.Append(Encode(item.ImportError));
+            html.Append("</span>");
+            return;
+        }
+
+        html.Append("<span class=\"text-muted\">Pending</span>");
     }
 
     private static void AppendActionButton(

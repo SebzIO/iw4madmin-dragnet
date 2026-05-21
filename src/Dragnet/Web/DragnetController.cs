@@ -69,7 +69,9 @@ public sealed class DragnetController : ControllerBase
             PendingBanCount = events.Count(item => item.ReviewState is DragnetReviewState.PendingBan),
             PendingLiftCount = events.Count(item => item.ReviewState is DragnetReviewState.PendingLift),
             ApprovedBanCount = events.Count(item => item.ReviewState is DragnetReviewState.ApprovedBan),
-            ApprovedLiftCount = events.Count(item => item.ReviewState is DragnetReviewState.ApprovedLift)
+            ApprovedLiftCount = events.Count(item => item.ReviewState is DragnetReviewState.ApprovedLift),
+            ImportedCount = events.Count(item => item.ImportedAtUtc is not null),
+            ImportErrorCount = events.Count(item => !string.IsNullOrWhiteSpace(item.ImportError))
         });
     }
 
@@ -103,4 +105,8 @@ public sealed record DragnetStatusResponse
     public required int ApprovedBanCount { get; init; }
 
     public required int ApprovedLiftCount { get; init; }
+
+    public required int ImportedCount { get; init; }
+
+    public required int ImportErrorCount { get; init; }
 }

@@ -6,6 +6,7 @@
   "requireHttps": true,
   "trustForwardedHttpsHeader": true,
   "maxEventsPerHeartbeat": 100,
+  "importApprovedEvents": true,
   "peerHeartbeatInterval": "00:01:00",
   "peerStaleAfter": "00:10:00",
   "bootstrapPeers": [

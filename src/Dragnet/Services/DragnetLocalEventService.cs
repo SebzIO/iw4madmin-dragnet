@@ -123,6 +123,7 @@ public sealed class DragnetLocalEventService
             PenaltyKind = penaltyKind,
             Iw4mAdminPenaltyId = penalty.PenaltyId,
             PlayerNetworkId = client.NetworkId.ToString(),
+            PlayerGame = client.GameName.ToString(),
             PlayerName = client.CleanedName ?? client.Name,
             Reason = penalty.AutomatedOffense ?? penalty.Offense,
             AdminName = penalty.Punisher?.CurrentAlias?.Name,

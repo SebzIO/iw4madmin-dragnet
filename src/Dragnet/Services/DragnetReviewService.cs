@@ -6,10 +6,14 @@ namespace Dragnet.Services;
 public sealed class DragnetReviewService
 {
     private readonly DragnetEventStore _store;
+    private readonly DragnetImportService _importService;
 
-    public DragnetReviewService(DragnetEventStore store)
+    public DragnetReviewService(
+        DragnetEventStore store,
+        DragnetImportService importService)
     {
         _store = store;
+        _importService = importService;
     }
 
     public async Task<IReadOnlyList<DragnetStoredEvent>> ListPendingAsync(
@@ -43,9 +47,24 @@ public sealed class DragnetReviewService
                 $"Dragnet event is {item.Match.ReviewState}, not {expectedState}.");
         }
 
+        var importResult = IsApproval(action)
+            ? await _importService.ImportApprovedAsync(item.Match, token)
+            : null;
+
+        if (importResult is { Success: false })
+        {
+            return DragnetReviewResult.Failed(
+                $"Dragnet import failed: {importResult.Message}");
+        }
+
         await _store.SetReviewStateAsync(item.Match.Event.EventId, targetState, reason, token);
-        return DragnetReviewResult.Succeeded(
-            $"Dragnet event {ShortId(item.Match.Event.EventId)} marked {targetState}.");
+        var message = $"Dragnet event {ShortId(item.Match.Event.EventId)} marked {targetState}.";
+        if (importResult is { Imported: true })
+        {
+            message += " Imported into IW4MAdmin.";
+        }
+
+        return DragnetReviewResult.Succeeded(message);
     }
 
     public async Task<(DragnetStoredEvent? Match, DragnetReviewResult Result)> FindByPrefixAsync(
@@ -83,6 +102,9 @@ public sealed class DragnetReviewService
         DragnetReviewAction.IgnoreLift => (DragnetReviewState.PendingLift, DragnetReviewState.IgnoredLift),
         _ => throw new ArgumentOutOfRangeException(nameof(action), action, null)
     };
+
+    private static bool IsApproval(DragnetReviewAction action) =>
+        action is DragnetReviewAction.ApproveBan or DragnetReviewAction.ApproveLift;
 }
 
 public enum DragnetReviewAction

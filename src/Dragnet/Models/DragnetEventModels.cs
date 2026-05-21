@@ -54,6 +54,8 @@ public sealed record DragnetEventEnvelope
 
     public required string PlayerNetworkId { get; init; }
 
+    public string? PlayerGame { get; init; }
+
     public required string PlayerName { get; init; }
 
     public IReadOnlyList<string> PlayerAliases { get; init; } = [];
@@ -97,6 +99,12 @@ public sealed record DragnetStoredEvent
     public DateTimeOffset LastSeenUtc { get; set; } = DateTimeOffset.UtcNow;
 
     public string? LocalDecisionReason { get; set; }
+
+    public int? ImportedPenaltyId { get; set; }
+
+    public DateTimeOffset? ImportedAtUtc { get; set; }
+
+    public string? ImportError { get; set; }
 }
 
 public static class DragnetJson

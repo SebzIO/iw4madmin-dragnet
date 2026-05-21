@@ -143,6 +143,32 @@ public sealed class DragnetEventStore
         }
     }
 
+    public async Task SetImportResultAsync(
+        string eventId,
+        bool imported,
+        int? importedPenaltyId,
+        string? importError,
+        CancellationToken token)
+    {
+        await _lock.WaitAsync(token);
+        try
+        {
+            if (!_events.TryGetValue(eventId, out var storedEvent))
+            {
+                return;
+            }
+
+            storedEvent.ImportedPenaltyId = importedPenaltyId;
+            storedEvent.ImportedAtUtc = imported ? DateTimeOffset.UtcNow : null;
+            storedEvent.ImportError = importError;
+            await SaveUnlockedAsync(token);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
     private async Task SaveUnlockedAsync(CancellationToken token)
     {
         var tempPath = $"{_storePath}.tmp";
