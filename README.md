@@ -14,6 +14,7 @@ This repository is in the MVP scaffold stage. The current implementation:
 - exposes `POST /dragnet/heartbeat` for peer heartbeat/gossip
 - adds an administrator-only Dragnet webfront interaction page
 - supports webfront-first approve, deny, and ignore decisions for pending bans and lifts
+- supports webfront event filters and event detail inspection
 - imports approved remote bans and lifts into IW4MAdmin
 - registers the `!dragnet` / `!dn` admin command for local review state management
 - omits IP addresses from the event model
@@ -40,4 +41,4 @@ Trust commands persist changes to `DragnetSettings`.
 
 Next planned pieces:
 
-- richer webfront filtering and event detail views
+- peer management and transport health controls
