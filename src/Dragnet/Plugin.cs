@@ -93,6 +93,7 @@ public sealed class Plugin : IPluginV2
             return new DragnetPeerStore(Path.GetFullPath(configuration.DataDirectory));
         });
         serviceCollection.AddSingleton<DragnetLocalEventService>();
+        serviceCollection.AddSingleton<DragnetTrustService>();
         serviceCollection.AddSingleton<DragnetImportService>();
         serviceCollection.AddSingleton<DragnetReviewService>();
         serviceCollection.AddSingleton<DragnetTransportService>();
@@ -110,6 +111,9 @@ public sealed class Plugin : IPluginV2
         _interactionRegistration.RegisterInteraction(
             DragnetWebfrontService.ReviewInteractionId,
             (_, _, interactionToken) => _webfrontService.CreateReviewInteractionAsync(interactionToken));
+        _interactionRegistration.RegisterInteraction(
+            DragnetWebfrontService.TrustInteractionId,
+            (_, _, interactionToken) => _webfrontService.CreateTrustInteractionAsync(interactionToken));
         _transportService.Start();
 
         _logger.LogInformation(
@@ -125,6 +129,7 @@ public sealed class Plugin : IPluginV2
         IManagementEventSubscriptions.ClientPenaltyRevoked -= _localEventService.CapturePenaltyRevokeAsync;
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.NavigationInteractionId);
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.ReviewInteractionId);
+        _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.TrustInteractionId);
         _transportService.StopAsync().GetAwaiter().GetResult();
         _logger.LogInformation("Dragnet unloaded");
     }

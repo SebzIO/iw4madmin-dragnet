@@ -7,13 +7,16 @@ public sealed class DragnetReviewService
 {
     private readonly DragnetEventStore _store;
     private readonly DragnetImportService _importService;
+    private readonly DragnetTrustService _trustService;
 
     public DragnetReviewService(
         DragnetEventStore store,
-        DragnetImportService importService)
+        DragnetImportService importService,
+        DragnetTrustService trustService)
     {
         _store = store;
         _importService = importService;
+        _trustService = trustService;
     }
 
     public async Task<IReadOnlyList<DragnetStoredEvent>> ListPendingAsync(
@@ -45,6 +48,12 @@ public sealed class DragnetReviewService
         {
             return DragnetReviewResult.Failed(
                 $"Dragnet event is {item.Match.ReviewState}, not {expectedState}.");
+        }
+
+        if (IsApproval(action) && !_trustService.Evaluate(item.Match.Event).IsTrusted)
+        {
+            return DragnetReviewResult.Failed(
+                "Dragnet origin is not trusted. Trust the origin before approving/importing this event.");
         }
 
         var importResult = IsApproval(action)

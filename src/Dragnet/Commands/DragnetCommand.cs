@@ -14,6 +14,7 @@ public sealed class DragnetCommand : Command
 {
     private readonly DragnetEventStore _store;
     private readonly DragnetReviewService _reviewService;
+    private readonly DragnetTrustService _trustService;
     private readonly DragnetIdentityDocument _identity;
 
     public DragnetCommand(
@@ -21,11 +22,13 @@ public sealed class DragnetCommand : Command
         ITranslationLookup translationLookup,
         DragnetEventStore store,
         DragnetReviewService reviewService,
+        DragnetTrustService trustService,
         DragnetIdentityDocument identity)
         : base(config, translationLookup)
     {
         _store = store;
         _reviewService = reviewService;
+        _trustService = trustService;
         _identity = identity;
         Name = "dragnet";
         Alias = "dn";
@@ -85,6 +88,18 @@ public sealed class DragnetCommand : Command
 
             case "ignore":
                 await SetStateAsync(gameEvent, args, DragnetReviewState.PendingBan, DragnetReviewState.IgnoredBan);
+                return;
+
+            case "trust":
+                await TrustOriginAsync(gameEvent, args);
+                return;
+
+            case "trustauto":
+                await TrustOriginAsync(gameEvent, args, autoApproveBans: true, autoApproveLifts: true);
+                return;
+
+            case "untrust":
+                await UntrustOriginAsync(gameEvent, args);
                 return;
 
             case "liftapprove":
@@ -189,6 +204,42 @@ public sealed class DragnetCommand : Command
         };
     }
 
+    private async Task TrustOriginAsync(
+        GameEvent gameEvent,
+        string[] args,
+        bool autoApproveBans = false,
+        bool autoApproveLifts = false)
+    {
+        var item = await FindEventAsync(gameEvent, args);
+        if (item is null)
+        {
+            return;
+        }
+
+        await _trustService.TrustAsync(
+            item.Event.OriginId,
+            item.Event.OriginName,
+            autoApproveBans,
+            autoApproveLifts,
+            CancellationToken.None);
+
+        gameEvent.Origin.Tell(
+            $"Trusted Dragnet origin {item.Event.OriginName}.");
+    }
+
+    private async Task UntrustOriginAsync(GameEvent gameEvent, string[] args)
+    {
+        var item = await FindEventAsync(gameEvent, args);
+        if (item is null)
+        {
+            return;
+        }
+
+        gameEvent.Origin.Tell(await _trustService.UntrustAsync(item.Event.OriginId, CancellationToken.None)
+            ? $"Untrusted Dragnet origin {item.Event.OriginName}."
+            : "That Dragnet origin was not trusted.");
+    }
+
     private async Task<DragnetStoredEvent?> FindEventAsync(GameEvent gameEvent, string[] args)
     {
         if (args.Length < 2)
@@ -208,7 +259,7 @@ public sealed class DragnetCommand : Command
 
     private void TellHelp(GameEvent gameEvent)
     {
-        gameEvent.Origin.Tell("Dragnet commands: pending, lifts, info <id>, approve <id>, deny <id> [reason], ignore <id>, liftapprove <id>, liftdeny <id> [reason], identity");
+        gameEvent.Origin.Tell("Dragnet commands: pending, lifts, info <id>, approve <id>, deny <id> [reason], ignore <id>, trust <id>, trustauto <id>, untrust <id>, liftapprove <id>, liftdeny <id> [reason], identity");
     }
 
     private static string[] SplitArgs(string? data)

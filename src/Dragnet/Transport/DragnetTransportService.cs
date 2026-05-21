@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using Dragnet.Configuration;
 using Dragnet.Identity;
 using Dragnet.Models;
+using Dragnet.Services;
 using Dragnet.Storage;
 using Microsoft.Extensions.Logging;
 
@@ -14,6 +15,8 @@ public sealed class DragnetTransportService : IDisposable
     private readonly DragnetPeerStore _peerStore;
     private readonly DragnetIdentityDocument _identity;
     private readonly DragnetIdentityService _identityService;
+    private readonly DragnetReviewService _reviewService;
+    private readonly DragnetTrustService _trustService;
     private readonly ILogger<DragnetTransportService> _logger;
     private readonly HttpClient _httpClient = new();
     private CancellationTokenSource? _runCancellation;
@@ -25,6 +28,8 @@ public sealed class DragnetTransportService : IDisposable
         DragnetPeerStore peerStore,
         DragnetIdentityDocument identity,
         DragnetIdentityService identityService,
+        DragnetReviewService reviewService,
+        DragnetTrustService trustService,
         ILogger<DragnetTransportService> logger)
     {
         _configuration = configuration;
@@ -32,6 +37,8 @@ public sealed class DragnetTransportService : IDisposable
         _peerStore = peerStore;
         _identity = identity;
         _identityService = identityService;
+        _reviewService = reviewService;
+        _trustService = trustService;
         _logger = logger;
     }
 
@@ -201,12 +208,15 @@ public sealed class DragnetTransportService : IDisposable
                 continue;
             }
 
+            var trust = _trustService.Evaluate(envelope);
+            var reviewState = envelope.EventType is DragnetEventType.BanLifted
+                ? DragnetReviewState.PendingLift
+                : DragnetReviewState.PendingBan;
+
             var inserted = await _eventStore.UpsertAsync(new DragnetStoredEvent
             {
                 Event = envelope,
-                ReviewState = envelope.EventType is DragnetEventType.BanLifted
-                    ? DragnetReviewState.PendingLift
-                    : DragnetReviewState.PendingBan
+                ReviewState = reviewState
             }, token);
 
             if (inserted)
@@ -215,6 +225,21 @@ public sealed class DragnetTransportService : IDisposable
                     "Imported Dragnet event {EventId} from {OriginName}",
                     envelope.EventId,
                     envelope.OriginName);
+            }
+
+            if (inserted && trust.AutoApprove)
+            {
+                var action = envelope.EventType is DragnetEventType.BanLifted
+                    ? DragnetReviewAction.ApproveLift
+                    : DragnetReviewAction.ApproveBan;
+                var result = await _reviewService.ApplyActionAsync(envelope.EventId, action, "Auto-approved trusted origin", token);
+                if (!result.Success)
+                {
+                    _logger.LogWarning(
+                        "Auto-approval failed for Dragnet event {EventId}: {Reason}",
+                        envelope.EventId,
+                        result.Message);
+                }
             }
         }
     }

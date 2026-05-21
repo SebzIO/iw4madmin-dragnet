@@ -16,11 +16,13 @@ public sealed class DragnetWebfrontService
 {
     public const string NavigationInteractionId = "Webfront::Nav::Admin::Dragnet";
     public const string ReviewInteractionId = "Dragnet::Review";
+    public const string TrustInteractionId = "Dragnet::Trust";
 
     private readonly DragnetConfiguration _configuration;
     private readonly DragnetEventStore _eventStore;
     private readonly DragnetPeerStore _peerStore;
     private readonly DragnetReviewService _reviewService;
+    private readonly DragnetTrustService _trustService;
     private readonly IManager _manager;
 
     public DragnetWebfrontService(
@@ -28,12 +30,14 @@ public sealed class DragnetWebfrontService
         DragnetEventStore eventStore,
         DragnetPeerStore peerStore,
         DragnetReviewService reviewService,
+        DragnetTrustService trustService,
         IManager manager)
     {
         _configuration = configuration;
         _eventStore = eventStore;
         _peerStore = peerStore;
         _reviewService = reviewService;
+        _trustService = trustService;
         _manager = manager;
     }
 
@@ -67,6 +71,24 @@ public sealed class DragnetWebfrontService
             Source = "Dragnet",
             Action = async (originId, _, _, meta, actionToken) =>
                 await ProcessReviewActionAsync(originId, meta, actionToken)
+        };
+
+        return Task.FromResult(interaction);
+    }
+
+    public Task<IInteractionData> CreateTrustInteractionAsync(CancellationToken token)
+    {
+        IInteractionData interaction = new InteractionData
+        {
+            Name = "Dragnet Trust",
+            Description = "Manage Dragnet origin trust",
+            DisplayMeta = "ph-shield-check",
+            InteractionId = TrustInteractionId,
+            MinimumPermission = EFClient.Permission.Administrator,
+            InteractionType = InteractionType.RawContent,
+            Source = "Dragnet",
+            Action = async (originId, _, _, meta, actionToken) =>
+                await ProcessTrustActionAsync(originId, meta, actionToken)
         };
 
         return Task.FromResult(interaction);
@@ -129,7 +151,7 @@ public sealed class DragnetWebfrontService
         html.AppendLine("</tbody></table></div></div>");
         html.AppendLine("<div class=\"rounded-lg border border-line bg-surface/50 overflow-hidden\">");
         html.AppendLine("<div class=\"px-4 py-3 border-b border-line\"><h3 class=\"text-lg font-semibold\">Recent Dragnet events</h3></div>");
-        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3\">Player</th><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Type</th><th class=\"px-4 py-3\">State</th><th class=\"px-4 py-3\">Import</th><th class=\"px-4 py-3\">Created</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
+        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3\">Player</th><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Trust</th><th class=\"px-4 py-3\">Type</th><th class=\"px-4 py-3\">State</th><th class=\"px-4 py-3\">Import</th><th class=\"px-4 py-3\">Created</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
 
         foreach (var item in events.Take(25))
         {
@@ -139,6 +161,9 @@ public sealed class DragnetWebfrontService
             html.AppendLine("</td>");
             html.Append("<td class=\"px-4 py-3 text-muted\">");
             html.Append(Encode(item.Event.OriginName));
+            html.AppendLine("</td>");
+            html.Append("<td class=\"px-4 py-3\">");
+            AppendTrustStatus(html, item.Event);
             html.AppendLine("</td>");
             html.Append("<td class=\"px-4 py-3\">");
             html.Append(Encode(item.Event.EventType.ToString()));
@@ -153,6 +178,7 @@ public sealed class DragnetWebfrontService
             html.Append(Encode(DescribeAge(now - item.Event.CreatedAtUtc)));
             html.AppendLine("</td>");
             html.Append("<td class=\"px-4 py-3 text-right\">");
+            AppendTrustButtons(html, item.Event);
             AppendReviewButtons(html, item);
             html.AppendLine("</td>");
             html.AppendLine("</tr>");
@@ -160,7 +186,7 @@ public sealed class DragnetWebfrontService
 
         if (events.Count == 0)
         {
-            html.AppendLine("<tr><td colspan=\"7\" class=\"px-4 py-6 text-center text-muted\">No Dragnet events stored.</td></tr>");
+            html.AppendLine("<tr><td colspan=\"8\" class=\"px-4 py-6 text-center text-muted\">No Dragnet events stored.</td></tr>");
         }
 
         html.AppendLine("</tbody></table></div></div>");
@@ -192,18 +218,66 @@ public sealed class DragnetWebfrontService
         return result.Message;
     }
 
-    private static void AppendReviewButtons(StringBuilder html, DragnetStoredEvent item)
+    private async Task<string> ProcessTrustActionAsync(
+        int originId,
+        IDictionary<string, string>? meta,
+        CancellationToken token)
     {
+        var origin = originId > 0 ? await _manager.GetClientService().Get(originId) : null;
+        if (origin?.Level < EFClient.Permission.Administrator)
+        {
+            return "You are not authorized to manage Dragnet trust.";
+        }
+
+        if (meta is null ||
+            !meta.TryGetValue("OriginId", out var remoteOriginId) ||
+            !meta.TryGetValue("OriginName", out var remoteOriginName) ||
+            !meta.TryGetValue("TrustAction", out var trustAction))
+        {
+            return "Invalid Dragnet trust action.";
+        }
+
+        switch (trustAction)
+        {
+            case "Trust":
+                await _trustService.TrustAsync(remoteOriginId, remoteOriginName, false, false, token);
+                return $"Trusted Dragnet origin {remoteOriginName}.";
+
+            case "TrustAuto":
+                await _trustService.TrustAsync(remoteOriginId, remoteOriginName, true, true, token);
+                return $"Trusted Dragnet origin {remoteOriginName} with auto-approval.";
+
+            case "Untrust":
+                return await _trustService.UntrustAsync(remoteOriginId, token)
+                    ? $"Untrusted Dragnet origin {remoteOriginName}."
+                    : "That Dragnet origin was not trusted.";
+
+            default:
+                return "Invalid Dragnet trust action.";
+        }
+    }
+
+    private void AppendReviewButtons(StringBuilder html, DragnetStoredEvent item)
+    {
+        var isTrusted = _trustService.Evaluate(item.Event).IsTrusted;
         switch (item.ReviewState)
         {
             case DragnetReviewState.PendingBan:
-                AppendActionButton(html, item.Event.EventId, DragnetReviewAction.ApproveBan, "Approve", "ph-check");
+                if (isTrusted)
+                {
+                    AppendActionButton(html, item.Event.EventId, DragnetReviewAction.ApproveBan, "Approve", "ph-check");
+                }
+
                 AppendActionButton(html, item.Event.EventId, DragnetReviewAction.DenyBan, "Deny", "ph-x", includeReason: true);
                 AppendActionButton(html, item.Event.EventId, DragnetReviewAction.IgnoreBan, "Ignore", "ph-eye-slash");
                 break;
 
             case DragnetReviewState.PendingLift:
-                AppendActionButton(html, item.Event.EventId, DragnetReviewAction.ApproveLift, "Approve lift", "ph-check");
+                if (isTrusted)
+                {
+                    AppendActionButton(html, item.Event.EventId, DragnetReviewAction.ApproveLift, "Approve lift", "ph-check");
+                }
+
                 AppendActionButton(html, item.Event.EventId, DragnetReviewAction.DenyLift, "Deny lift", "ph-x", includeReason: true);
                 AppendActionButton(html, item.Event.EventId, DragnetReviewAction.IgnoreLift, "Ignore", "ph-eye-slash");
                 break;
@@ -212,6 +286,63 @@ public sealed class DragnetWebfrontService
                 html.Append("<span class=\"text-muted\">Reviewed</span>");
                 break;
         }
+    }
+
+    private void AppendTrustButtons(StringBuilder html, DragnetEventEnvelope envelope)
+    {
+        var trust = _trustService.Evaluate(envelope);
+        if (trust.IsTrusted)
+        {
+            AppendTrustActionButton(html, envelope, "Untrust", "Untrust", "ph-shield-slash");
+            return;
+        }
+
+        AppendTrustActionButton(html, envelope, "Trust", "Trust", "ph-shield-check");
+        AppendTrustActionButton(html, envelope, "TrustAuto", "Trust + auto", "ph-shield-star");
+    }
+
+    private static void AppendTrustActionButton(
+        StringBuilder html,
+        DragnetEventEnvelope envelope,
+        string trustAction,
+        string label,
+        string icon)
+    {
+        var meta = new Dictionary<string, string>
+        {
+            ["InteractionId"] = TrustInteractionId,
+            ["ActionButtonLabel"] = label,
+            ["Name"] = label,
+            ["ShouldRefresh"] = "true",
+            ["Inputs"] = BuildTrustInputs(envelope, trustAction)
+        };
+
+        var encodedMeta = Uri.EscapeDataString(JsonSerializer.Serialize(meta));
+        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer ml-2\" data-action=\"DynamicAction\" data-action-meta=\"");
+        html.Append(Encode(encodedMeta));
+        html.Append("\"><span class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ");
+        html.Append(Encode(icon));
+        html.Append(" mr-1\"></i>");
+        html.Append(Encode(label));
+        html.Append("</span></button>");
+    }
+
+    private void AppendTrustStatus(StringBuilder html, DragnetEventEnvelope envelope)
+    {
+        var trust = _trustService.Evaluate(envelope);
+        if (!trust.IsTrusted)
+        {
+            html.Append("<span class=\"text-danger\">Untrusted</span>");
+            return;
+        }
+
+        if (trust.AutoApprove)
+        {
+            html.Append("<span class=\"text-success\">Trusted + auto</span>");
+            return;
+        }
+
+        html.Append("<span class=\"text-success\">Trusted</span>");
     }
 
     private static void AppendImportStatus(StringBuilder html, DragnetStoredEvent item)
@@ -290,6 +421,33 @@ public sealed class DragnetWebfrontService
                 ["Placeholder"] = "Optional local decision note"
             });
         }
+
+        return JsonSerializer.Serialize(inputs);
+    }
+
+    private static string BuildTrustInputs(DragnetEventEnvelope envelope, string trustAction)
+    {
+        var inputs = new List<Dictionary<string, object?>>
+        {
+            new()
+            {
+                ["Name"] = "OriginId",
+                ["Type"] = "hidden",
+                ["Value"] = envelope.OriginId
+            },
+            new()
+            {
+                ["Name"] = "OriginName",
+                ["Type"] = "hidden",
+                ["Value"] = envelope.OriginName
+            },
+            new()
+            {
+                ["Name"] = "TrustAction",
+                ["Type"] = "hidden",
+                ["Value"] = trustAction
+            }
+        };
 
         return JsonSerializer.Serialize(inputs);
     }

@@ -29,11 +29,15 @@ Initial commands:
 - `!dragnet approve <eventId>`
 - `!dragnet deny <eventId> [reason]`
 - `!dragnet ignore <eventId>`
+- `!dragnet trust <eventId>`
+- `!dragnet trustauto <eventId>`
+- `!dragnet untrust <eventId>`
 - `!dragnet liftapprove <eventId>`
 - `!dragnet liftdeny <eventId> [reason]`
 - `!dragnet liftignore <eventId>`
 
+Trust commands persist changes to `DragnetSettings`.
+
 Next planned pieces:
 
-- trust-origin commands and auto-approval policy enforcement
 - richer webfront filtering and event detail views
