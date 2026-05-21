@@ -1,0 +1,23 @@
+{
+  "enabled": true,
+  "originName": "Sebz.XYZ",
+  "publicEndpoint": "https://example.com/dragnet",
+  "dataDirectory": "Configuration/Dragnet",
+  "peerHeartbeatInterval": "00:01:00",
+  "peerStaleAfter": "00:10:00",
+  "bootstrapPeers": [
+    {
+      "endpoint": "https://peer.example.com/dragnet",
+      "expectedOriginId": null,
+      "enabled": true
+    }
+  ],
+  "trustedOrigins": [
+    {
+      "originId": "sha256-public-key-fingerprint",
+      "displayName": "Trusted Network",
+      "autoApproveBans": false,
+      "autoApproveLifts": false
+    }
+  ]
+}
