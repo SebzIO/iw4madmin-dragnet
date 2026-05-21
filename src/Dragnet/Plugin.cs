@@ -114,6 +114,9 @@ public sealed class Plugin : IPluginV2
         _interactionRegistration.RegisterInteraction(
             DragnetWebfrontService.TrustInteractionId,
             (_, _, interactionToken) => _webfrontService.CreateTrustInteractionAsync(interactionToken));
+        _interactionRegistration.RegisterInteraction(
+            DragnetWebfrontService.PeerInteractionId,
+            (_, _, interactionToken) => _webfrontService.CreatePeerInteractionAsync(interactionToken));
         _transportService.Start();
 
         _logger.LogInformation(
@@ -130,6 +133,7 @@ public sealed class Plugin : IPluginV2
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.NavigationInteractionId);
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.ReviewInteractionId);
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.TrustInteractionId);
+        _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.PeerInteractionId);
         _transportService.StopAsync().GetAwaiter().GetResult();
         _logger.LogInformation("Dragnet unloaded");
     }

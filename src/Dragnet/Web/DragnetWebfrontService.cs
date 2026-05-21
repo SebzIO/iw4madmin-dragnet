@@ -18,6 +18,7 @@ public sealed class DragnetWebfrontService
     public const string NavigationInteractionId = "Webfront::Nav::Admin::Dragnet";
     public const string ReviewInteractionId = "Dragnet::Review";
     public const string TrustInteractionId = "Dragnet::Trust";
+    public const string PeerInteractionId = "Dragnet::Peer";
 
     private readonly DragnetConfiguration _configuration;
     private readonly DragnetEventStore _eventStore;
@@ -95,6 +96,24 @@ public sealed class DragnetWebfrontService
         return Task.FromResult(interaction);
     }
 
+    public Task<IInteractionData> CreatePeerInteractionAsync(CancellationToken token)
+    {
+        IInteractionData interaction = new InteractionData
+        {
+            Name = "Dragnet Peer",
+            Description = "Manage Dragnet peer",
+            DisplayMeta = "ph-plugs",
+            InteractionId = PeerInteractionId,
+            MinimumPermission = EFClient.Permission.Administrator,
+            InteractionType = InteractionType.RawContent,
+            Source = "Dragnet",
+            Action = async (originId, _, _, meta, actionToken) =>
+                await ProcessPeerActionAsync(originId, meta, actionToken)
+        };
+
+        return Task.FromResult(interaction);
+    }
+
     private async Task<string> RenderDashboardAsync(
         IDictionary<string, string>? meta,
         CancellationToken token)
@@ -108,19 +127,21 @@ public sealed class DragnetWebfrontService
         var pendingBans = events.Count(item => item.ReviewState is DragnetReviewState.PendingBan);
         var pendingLifts = events.Count(item => item.ReviewState is DragnetReviewState.PendingLift);
         var importFailures = events.Count(item => !string.IsNullOrWhiteSpace(item.ImportError));
-        var healthyPeers = peers.Count(peer => string.IsNullOrWhiteSpace(peer.LastError));
         var now = DateTimeOffset.UtcNow;
+        var healthyPeers = peers.Count(peer => IsHealthyPeer(peer, now));
+        var stalePeers = peers.Count(peer => IsStalePeer(peer, now));
         var filteredEvents = FilterEvents(events, filter).Take(50).ToList();
         var selectedEvent = ResolveSelectedEvent(events, selectedEventId) ?? filteredEvents.FirstOrDefault();
 
         var html = new StringBuilder();
         html.AppendLine("<div class=\"space-y-6\">");
-        html.AppendLine("<div class=\"grid grid-cols-1 md:grid-cols-5 gap-4\">");
+        html.AppendLine("<div class=\"grid grid-cols-1 md:grid-cols-6 gap-4\">");
         AppendMetric(html, "Pending bans", pendingBans.ToString());
         AppendMetric(html, "Pending lifts", pendingLifts.ToString());
         AppendMetric(html, "Import failures", importFailures.ToString());
         AppendMetric(html, "Known peers", peers.Count.ToString());
         AppendMetric(html, "Healthy peers", healthyPeers.ToString());
+        AppendMetric(html, "Stale peers", stalePeers.ToString());
         html.AppendLine("</div>");
 
         html.AppendLine("<div class=\"rounded-lg border border-line bg-surface/50 overflow-hidden\">");
@@ -130,11 +151,11 @@ public sealed class DragnetWebfrontService
         html.Append(Encode(_configuration.PublicEndpoint ?? "not configured"));
         html.AppendLine("</span>");
         html.AppendLine("</div>");
-        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Endpoint</th><th class=\"px-4 py-3\">Last seen</th><th class=\"px-4 py-3\">Status</th></tr></thead><tbody>");
+        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Endpoint</th><th class=\"px-4 py-3\">Source</th><th class=\"px-4 py-3\">Last seen</th><th class=\"px-4 py-3\">Status</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
 
         if (peers.Count == 0)
         {
-            html.AppendLine("<tr><td colspan=\"4\" class=\"px-4 py-6 text-center text-muted\">No peers discovered.</td></tr>");
+            html.AppendLine("<tr><td colspan=\"6\" class=\"px-4 py-6 text-center text-muted\">No peers discovered.</td></tr>");
         }
         else
         {
@@ -148,12 +169,16 @@ public sealed class DragnetWebfrontService
                 html.Append(Encode(peer.Endpoint));
                 html.AppendLine("</td>");
                 html.Append("<td class=\"px-4 py-3 text-muted\">");
+                html.Append(peer.IsBootstrap ? "Bootstrap" : "Discovered");
+                html.AppendLine("</td>");
+                html.Append("<td class=\"px-4 py-3 text-muted\">");
                 html.Append(Encode(DescribeAge(now - peer.LastSeenUtc)));
                 html.AppendLine("</td>");
                 html.Append("<td class=\"px-4 py-3\">");
-                html.Append(string.IsNullOrWhiteSpace(peer.LastError)
-                    ? "<span class=\"text-success\">Healthy</span>"
-                    : $"<span class=\"text-danger\">{Encode(peer.LastError)}</span>");
+                AppendPeerStatus(html, peer, now);
+                html.AppendLine("</td>");
+                html.Append("<td class=\"px-4 py-3 text-right\">");
+                AppendPeerButtons(html, peer);
                 html.AppendLine("</td>");
                 html.AppendLine("</tr>");
             }
@@ -274,6 +299,40 @@ public sealed class DragnetWebfrontService
 
             default:
                 return "Invalid Dragnet trust action.";
+        }
+    }
+
+    private async Task<string> ProcessPeerActionAsync(
+        int originId,
+        IDictionary<string, string>? meta,
+        CancellationToken token)
+    {
+        var origin = originId > 0 ? await _manager.GetClientService().Get(originId) : null;
+        if (origin?.Level < EFClient.Permission.Administrator)
+        {
+            return "You are not authorized to manage Dragnet peers.";
+        }
+
+        if (meta is null ||
+            !meta.TryGetValue("OriginId", out var peerOriginId) ||
+            !meta.TryGetValue("PeerAction", out var peerAction))
+        {
+            return "Invalid Dragnet peer action.";
+        }
+
+        switch (peerAction)
+        {
+            case "ClearError":
+                await _peerStore.ClearErrorAsync(peerOriginId, token);
+                return "Cleared Dragnet peer error.";
+
+            case "Remove":
+                return await _peerStore.RemoveAsync(peerOriginId, token)
+                    ? "Removed Dragnet peer."
+                    : "That Dragnet peer was not found.";
+
+            default:
+                return "Invalid Dragnet peer action.";
         }
     }
 
@@ -453,6 +512,67 @@ public sealed class DragnetWebfrontService
         html.Append("</span></button>");
     }
 
+    private void AppendPeerButtons(StringBuilder html, DragnetPeerRecord peer)
+    {
+        if (!string.IsNullOrWhiteSpace(peer.LastError))
+        {
+            AppendPeerActionButton(html, peer, "ClearError", "Clear error", "ph-eraser");
+        }
+
+        if (!peer.IsBootstrap)
+        {
+            AppendPeerActionButton(html, peer, "Remove", "Remove", "ph-trash");
+        }
+    }
+
+    private static void AppendPeerActionButton(
+        StringBuilder html,
+        DragnetPeerRecord peer,
+        string peerAction,
+        string label,
+        string icon)
+    {
+        var meta = new Dictionary<string, string>
+        {
+            ["InteractionId"] = PeerInteractionId,
+            ["ActionButtonLabel"] = label,
+            ["Name"] = label,
+            ["ShouldRefresh"] = "true",
+            ["Inputs"] = BuildPeerInputs(peer, peerAction)
+        };
+
+        var encodedMeta = Uri.EscapeDataString(JsonSerializer.Serialize(meta));
+        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer ml-2\" data-action=\"DynamicAction\" data-action-meta=\"");
+        html.Append(Encode(encodedMeta));
+        html.Append("\"><span class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ");
+        html.Append(Encode(icon));
+        html.Append(" mr-1\"></i>");
+        html.Append(Encode(label));
+        html.Append("</span></button>");
+    }
+
+    private void AppendPeerStatus(
+        StringBuilder html,
+        DragnetPeerRecord peer,
+        DateTimeOffset now)
+    {
+        if (!string.IsNullOrWhiteSpace(peer.LastError))
+        {
+            html.Append("<span class=\"text-danger\">");
+            html.Append(Encode(peer.LastError));
+            html.Append("</span>");
+            return;
+        }
+
+        if (IsStalePeer(peer, now))
+        {
+            html.Append("<span class=\"text-warning\">Stale</span>");
+            return;
+        }
+
+        html.Append("<span class=\"text-success\">Healthy</span>");
+    }
+
     private void AppendTrustStatus(StringBuilder html, DragnetEventEnvelope envelope)
     {
         var trust = _trustService.Evaluate(envelope);
@@ -572,6 +692,27 @@ public sealed class DragnetWebfrontService
                 ["Name"] = "TrustAction",
                 ["Type"] = "hidden",
                 ["Value"] = trustAction
+            }
+        };
+
+        return JsonSerializer.Serialize(inputs);
+    }
+
+    private static string BuildPeerInputs(DragnetPeerRecord peer, string peerAction)
+    {
+        var inputs = new List<Dictionary<string, object?>>
+        {
+            new()
+            {
+                ["Name"] = "OriginId",
+                ["Type"] = "hidden",
+                ["Value"] = peer.OriginId
+            },
+            new()
+            {
+                ["Name"] = "PeerAction",
+                ["Type"] = "hidden",
+                ["Value"] = peerAction
             }
         };
 
@@ -709,6 +850,12 @@ public sealed class DragnetWebfrontService
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(publicKeyPem));
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
+
+    private bool IsHealthyPeer(DragnetPeerRecord peer, DateTimeOffset now) =>
+        string.IsNullOrWhiteSpace(peer.LastError) && !IsStalePeer(peer, now);
+
+    private bool IsStalePeer(DragnetPeerRecord peer, DateTimeOffset now) =>
+        now - peer.LastSeenUtc > _configuration.PeerStaleAfter;
 
     private static string DescribeAge(TimeSpan age)
     {

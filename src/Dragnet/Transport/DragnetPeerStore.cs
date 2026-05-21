@@ -41,12 +41,22 @@ public sealed class DragnetPeerStore
                     ? peer.Endpoint.TrimEnd('/')
                     : peer.ExpectedOriginId;
 
-                _peers.TryAdd(originId, new DragnetPeerRecord
+                if (_peers.TryGetValue(originId, out var existing))
                 {
-                    OriginId = originId,
-                    OriginName = peer.Endpoint,
-                    Endpoint = peer.Endpoint.TrimEnd('/')
-                });
+                    existing.Endpoint = peer.Endpoint.TrimEnd('/');
+                    existing.IsBootstrap = true;
+                    existing.LastError = null;
+                }
+                else
+                {
+                    _peers[originId] = new DragnetPeerRecord
+                    {
+                        OriginId = originId,
+                        OriginName = peer.Endpoint,
+                        Endpoint = peer.Endpoint.TrimEnd('/'),
+                        IsBootstrap = true
+                    };
+                }
             }
 
             await SaveUnlockedAsync(token);
@@ -118,6 +128,42 @@ public sealed class DragnetPeerStore
                 existing.LastError = error;
                 await SaveUnlockedAsync(token);
             }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task ClearErrorAsync(string originId, CancellationToken token)
+    {
+        await _lock.WaitAsync(token);
+        try
+        {
+            if (_peers.TryGetValue(originId, out var existing))
+            {
+                existing.LastError = null;
+                await SaveUnlockedAsync(token);
+            }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task<bool> RemoveAsync(string originId, CancellationToken token)
+    {
+        await _lock.WaitAsync(token);
+        try
+        {
+            var removed = _peers.Remove(originId);
+            if (removed)
+            {
+                await SaveUnlockedAsync(token);
+            }
+
+            return removed;
         }
         finally
         {

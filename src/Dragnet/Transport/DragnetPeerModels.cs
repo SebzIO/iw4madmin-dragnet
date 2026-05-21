@@ -44,4 +44,6 @@ public sealed record DragnetPeerRecord
     public DateTimeOffset LastSeenUtc { get; set; } = DateTimeOffset.UtcNow;
 
     public string? LastError { get; set; }
+
+    public bool IsBootstrap { get; set; }
 }
