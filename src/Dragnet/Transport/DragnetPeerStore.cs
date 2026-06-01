@@ -31,12 +31,23 @@ public sealed class DragnetPeerStore
 
                 foreach (var peer in stored ?? [])
                 {
+                    if (IsLocalEndpoint(peer.Endpoint, configuration.PublicEndpoint) ||
+                        IsLocalEndpoint(peer.OriginId, configuration.PublicEndpoint))
+                    {
+                        continue;
+                    }
+
                     _peers[peer.OriginId] = peer;
                 }
             }
 
             foreach (var peer in configuration.BootstrapPeers.Where(peer => peer.Enabled && !string.IsNullOrWhiteSpace(peer.Endpoint)))
             {
+                if (IsLocalEndpoint(peer.Endpoint, configuration.PublicEndpoint))
+                {
+                    continue;
+                }
+
                 var originId = string.IsNullOrWhiteSpace(peer.ExpectedOriginId)
                     ? peer.Endpoint.TrimEnd('/')
                     : peer.ExpectedOriginId;
@@ -254,5 +265,11 @@ public sealed class DragnetPeerStore
         }
 
         File.Move(tempPath, _storePath, true);
+    }
+
+    private static bool IsLocalEndpoint(string value, string? publicEndpoint)
+    {
+        return !string.IsNullOrWhiteSpace(publicEndpoint) &&
+               value.TrimEnd('/').Equals(publicEndpoint.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
     }
 }

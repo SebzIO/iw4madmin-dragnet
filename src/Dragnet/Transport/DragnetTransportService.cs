@@ -111,12 +111,16 @@ public sealed class DragnetTransportService : IDisposable
     {
         ValidateHeartbeatRequest(request);
 
-        await _peerStore.UpsertAsync(request.Sender, token);
+        if (!IsLocalPeer(request.Sender))
+        {
+            await _peerStore.UpsertAsync(request.Sender, token);
+        }
+
         await ImportEventsAsync(request.Events, token);
 
         foreach (var peer in request.KnownPeers)
         {
-            if (!string.Equals(peer.OriginId, _identity.OriginId, StringComparison.OrdinalIgnoreCase))
+            if (!IsLocalPeer(peer))
             {
                 await _peerStore.UpsertAsync(peer, token);
             }
@@ -150,7 +154,7 @@ public sealed class DragnetTransportService : IDisposable
         var peers = await _peerStore.ListAsync(token);
         foreach (var peer in peers)
         {
-            if (string.Equals(peer.OriginId, _identity.OriginId, StringComparison.OrdinalIgnoreCase))
+            if (IsLocalPeer(peer))
             {
                 continue;
             }
@@ -201,7 +205,7 @@ public sealed class DragnetTransportService : IDisposable
                 await _peerStore.UpsertAsync(heartbeat.Receiver, token);
                 foreach (var knownPeer in heartbeat.KnownPeers)
                 {
-                    if (!string.Equals(knownPeer.OriginId, _identity.OriginId, StringComparison.OrdinalIgnoreCase))
+                    if (!IsLocalPeer(knownPeer))
                     {
                         await _peerStore.UpsertAsync(knownPeer, token);
                     }
@@ -388,6 +392,27 @@ public sealed class DragnetTransportService : IDisposable
         }
 
         return !_configuration.RequireHttps || uri.Scheme == Uri.UriSchemeHttps;
+    }
+
+    private bool IsLocalPeer(DragnetPeerInfo peer)
+    {
+        return string.Equals(peer.OriginId, _identity.OriginId, StringComparison.OrdinalIgnoreCase) ||
+               IsLocalEndpoint(peer.PublicEndpoint) ||
+               IsLocalEndpoint(peer.OriginId);
+    }
+
+    private bool IsLocalPeer(DragnetPeerRecord peer)
+    {
+        return string.Equals(peer.OriginId, _identity.OriginId, StringComparison.OrdinalIgnoreCase) ||
+               IsLocalEndpoint(peer.Endpoint) ||
+               IsLocalEndpoint(peer.OriginId);
+    }
+
+    private bool IsLocalEndpoint(string? endpoint)
+    {
+        return !string.IsNullOrWhiteSpace(_configuration.PublicEndpoint) &&
+               !string.IsNullOrWhiteSpace(endpoint) &&
+               endpoint.TrimEnd('/').Equals(_configuration.PublicEndpoint.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsFixedOriginPeer(DragnetPeerRecord peer) =>

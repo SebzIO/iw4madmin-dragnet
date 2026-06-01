@@ -175,7 +175,7 @@ public sealed class DragnetWebfrontService
                 html.Append(Encode(DescribeAge(now - peer.LastSeenUtc)));
                 html.AppendLine("</td>");
                 html.Append("<td class=\"px-4 py-3 text-muted\">");
-                html.Append(peer.LastEventSentAtUtc is null
+                html.Append(peer.LastEventSentAtUtc is null || peer.LastEventSentAtUtc.Value <= DateTimeOffset.UnixEpoch
                     ? "Never"
                     : Encode(DescribeAge(now - peer.LastEventSentAtUtc.Value)));
                 html.AppendLine("</td>");

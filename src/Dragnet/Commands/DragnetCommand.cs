@@ -19,6 +19,7 @@ public sealed class DragnetCommand : Command
     private readonly DragnetReviewService _reviewService;
     private readonly DragnetTrustService _trustService;
     private readonly DragnetIdentityDocument _identity;
+    private readonly DragnetConfiguration _configuration;
 
     public DragnetCommand(
         CommandConfiguration config,
@@ -36,6 +37,7 @@ public sealed class DragnetCommand : Command
         _reviewService = reviewService;
         _trustService = trustService;
         _identity = identity;
+        _configuration = configuration;
         Name = "dragnet";
         Alias = "dn";
         Description = "Review and manage Dragnet ban exchange events";
@@ -186,6 +188,13 @@ public sealed class DragnetCommand : Command
             uri.Scheme != Uri.UriSchemeHttps)
         {
             gameEvent.Origin.Tell("Dragnet peer endpoint must be an absolute HTTPS URL.");
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_configuration.PublicEndpoint) &&
+            uri.ToString().TrimEnd('/').Equals(_configuration.PublicEndpoint.TrimEnd('/'), StringComparison.OrdinalIgnoreCase))
+        {
+            gameEvent.Origin.Tell("That endpoint is this Dragnet instance. Add a remote peer endpoint instead.");
             return;
         }
 

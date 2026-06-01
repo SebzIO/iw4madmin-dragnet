@@ -123,12 +123,18 @@ static async Task TestPeerStoreAsync()
     var store = new DragnetPeerStore(testDir.Path);
     var configuration = new DragnetConfiguration
     {
+        PublicEndpoint = "https://local.example/dragnet",
         BootstrapPeers =
         [
             new DragnetPeerConfiguration
             {
                 Endpoint = "https://bootstrap.example/dragnet",
                 ExpectedOriginId = "bootstrap-origin"
+            },
+            new DragnetPeerConfiguration
+            {
+                Endpoint = "https://local.example/dragnet",
+                ExpectedOriginId = "local-self"
             }
         ]
     };
@@ -137,6 +143,8 @@ static async Task TestPeerStoreAsync()
     var peers = await store.ListAsync(CancellationToken.None);
     var bootstrap = peers.Single(peer => peer.OriginId == "bootstrap-origin");
     Assert.True(bootstrap.IsBootstrap, "configured peer should be marked bootstrap");
+    Assert.False(peers.Any(peer => peer.Endpoint == "https://local.example/dragnet"),
+        "configured local endpoint should not be added as a peer");
 
     await store.UpsertAsync(new DragnetPeerInfo
     {
@@ -145,6 +153,12 @@ static async Task TestPeerStoreAsync()
         PublicEndpoint = "https://discovered.example/dragnet"
     }, CancellationToken.None);
     await store.AddManualPeerAsync("https://manual.example/dragnet", null, CancellationToken.None);
+    await store.UpsertAsync(new DragnetPeerInfo
+    {
+        OriginId = "local-self",
+        OriginName = "Local",
+        PublicEndpoint = "https://local.example/dragnet"
+    }, CancellationToken.None);
     await store.MarkErrorAsync("discovered-origin", "boom", CancellationToken.None);
     await store.ClearErrorAsync("discovered-origin", CancellationToken.None);
 
@@ -152,6 +166,10 @@ static async Task TestPeerStoreAsync()
         .Single(peer => peer.Endpoint == "https://manual.example/dragnet");
     Assert.False(manual.IsBootstrap, "manually added peer should not be marked bootstrap");
     Assert.Equal("https://manual.example/dragnet", manual.OriginId, "manual peer should use endpoint as provisional origin id");
+
+    await store.LoadAsync(configuration, CancellationToken.None);
+    Assert.False((await store.ListAsync(CancellationToken.None)).Any(peer => peer.Endpoint == "https://local.example/dragnet"),
+        "stored local endpoint should be pruned on load");
 
     var discovered = (await store.ListAsync(CancellationToken.None))
         .Single(peer => peer.OriginId == "discovered-origin");
