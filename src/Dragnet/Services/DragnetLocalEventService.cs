@@ -106,7 +106,7 @@ public sealed class DragnetLocalEventService
     {
         var penalty = penaltyEvent.Penalty;
         var client = penaltyEvent.Client;
-        var createdAtUtc = DateTime.SpecifyKind(penalty.When, DateTimeKind.Utc);
+        var createdAtUtc = NormalizeCreatedAt(penalty.When, penaltyEvent.CreatedAt);
         var expiresAtUtc = penalty.Expires is { } expires
             ? DateTime.SpecifyKind(expires, DateTimeKind.Utc)
             : (DateTime?)null;
@@ -136,6 +136,21 @@ public sealed class DragnetLocalEventService
         {
             Signature = _identityService.Sign(_identity, unsignedEnvelope.GetSigningPayload())
         };
+    }
+
+    private static DateTime NormalizeCreatedAt(DateTime penaltyWhen, DateTimeOffset eventCreatedAt)
+    {
+        if (penaltyWhen > DateTime.UnixEpoch)
+        {
+            return DateTime.SpecifyKind(penaltyWhen, DateTimeKind.Utc);
+        }
+
+        if (eventCreatedAt > DateTimeOffset.UnixEpoch)
+        {
+            return eventCreatedAt.UtcDateTime;
+        }
+
+        return DateTime.UtcNow;
     }
 
     private string CreateEventId(

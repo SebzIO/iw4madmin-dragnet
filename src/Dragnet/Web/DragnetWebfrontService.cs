@@ -225,7 +225,7 @@ public sealed class DragnetWebfrontService
             AppendImportStatus(html, item);
             html.AppendLine("</td>");
             html.Append("<td class=\"px-4 py-3 text-muted\">");
-            html.Append(Encode(DescribeAge(now - item.Event.CreatedAtUtc)));
+            html.Append(Encode(DescribeEventAge(item.Event, now)));
             html.AppendLine("</td>");
             html.Append("<td class=\"px-4 py-3 text-right\">");
             AppendTrustButtons(html, item.Event);
@@ -385,11 +385,11 @@ public sealed class DragnetWebfrontService
         AppendDetailCell(html, "Player network", string.IsNullOrWhiteSpace(envelope.PlayerGame)
             ? envelope.PlayerNetworkId
             : $"{envelope.PlayerNetworkId} ({envelope.PlayerGame})");
-        AppendDetailCell(html, "Created", $"{envelope.CreatedAtUtc:yyyy-MM-dd HH:mm:ss} UTC ({DescribeAge(now - envelope.CreatedAtUtc)})");
+        AppendDetailCell(html, "Created", DescribeEventCreatedAt(envelope, now));
         AppendDetailCell(html, "Expires", envelope.ExpiresAtUtc is null
             ? "Permanent"
             : $"{envelope.ExpiresAtUtc:yyyy-MM-dd HH:mm:ss} UTC");
-        AppendDetailCell(html, "IW4MAdmin penalty", envelope.Iw4mAdminPenaltyId.ToString());
+        AppendDetailCell(html, "IW4MAdmin penalty", envelope.Iw4mAdminPenaltyId > 0 ? envelope.Iw4mAdminPenaltyId.ToString() : "Unknown");
         AppendDetailCell(html, "Admin", envelope.AdminName ?? "Unknown");
         html.AppendLine("</div>");
 
@@ -917,6 +917,19 @@ public sealed class DragnetWebfrontService
 
     private bool IsStalePeer(DragnetPeerRecord peer, DateTimeOffset now) =>
         now - peer.LastSeenUtc > _configuration.PeerStaleAfter;
+
+    private static string DescribeEventAge(DragnetEventEnvelope envelope, DateTimeOffset now) =>
+        HasKnownCreatedAt(envelope)
+            ? DescribeAge(now - envelope.CreatedAtUtc)
+            : "Unknown";
+
+    private static string DescribeEventCreatedAt(DragnetEventEnvelope envelope, DateTimeOffset now) =>
+        HasKnownCreatedAt(envelope)
+            ? $"{envelope.CreatedAtUtc:yyyy-MM-dd HH:mm:ss} UTC ({DescribeAge(now - envelope.CreatedAtUtc)})"
+            : "Unknown";
+
+    private static bool HasKnownCreatedAt(DragnetEventEnvelope envelope) =>
+        envelope.CreatedAtUtc > DateTimeOffset.UnixEpoch;
 
     private static string DescribeAge(TimeSpan age)
     {

@@ -400,6 +400,16 @@ static async Task TestWebfrontDashboardRendersAsync()
     };
     var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
     await eventStore.LoadAsync(CancellationToken.None);
+    var legacyEvent = CreateEnvelope(originId: "legacy-origin", eventType: DragnetEventType.BanCreated) with
+    {
+        CreatedAtUtc = DateTimeOffset.MinValue,
+        Iw4mAdminPenaltyId = 0
+    };
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = legacyEvent,
+        ReviewState = DragnetReviewState.PendingBan
+    }, CancellationToken.None);
     var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
     await peerStore.LoadAsync(configuration, CancellationToken.None);
     var trustService = new DragnetTrustService(configuration, new RecordingConfigurationHandler<DragnetConfiguration>());
@@ -429,9 +439,13 @@ static async Task TestWebfrontDashboardRendersAsync()
     Assert.Equal(EFClient.Permission.Owner, trustInteraction.MinimumPermission, "trust action should use configured trust permission");
     Assert.Equal(EFClient.Permission.SeniorAdmin, peerInteraction.MinimumPermission, "peer action should use configured peer permission");
 
-    var html = await interaction.Action(0, null, null, null, CancellationToken.None);
+    var html = await interaction.Action(0, null, null, new Dictionary<string, string>
+    {
+        ["eventId"] = legacyEvent.EventId
+    }, CancellationToken.None);
     Assert.Contains("Peer transport", html, "dashboard should include peer section");
     Assert.Contains("Dragnet events", html, "dashboard should include event section");
+    Assert.Contains("Unknown", html, "dashboard should render unknown legacy timestamps and penalty ids without huge ages");
 }
 
 static async Task TestHeartbeatValidationAsync()
