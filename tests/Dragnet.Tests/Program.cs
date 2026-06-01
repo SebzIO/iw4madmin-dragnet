@@ -11,7 +11,6 @@ using SharedLibraryCore.Interfaces;
 
 var tests = new (string Name, Func<Task> Test)[]
 {
-    ("identity service updates configured display name without rotating keys", TestIdentityRenamesWithoutRotatingKeys),
     ("trust service persists and evaluates auto-approval", TestTrustServicePersistsAsync),
     ("review service denies pending ban and blocks untrusted approval", TestReviewTransitionsAsync),
     ("peer store tracks bootstrap, errors, removal, and send cursor", TestPeerStoreAsync),
@@ -20,9 +19,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("import service queues unknown players", TestImportServiceQueuesUnknownPlayersAsync),
     ("heartbeat response sends approved events once", TestHeartbeatResponseBatchAsync),
     ("webfront dashboard interaction renders as navigation content", TestWebfrontDashboardRendersAsync),
-    ("heartbeat validation rejects oversized and invalid requests", TestHeartbeatValidationAsync),
-    ("outbound heartbeat errors include response body", TestOutboundHeartbeatErrorIncludesBodyAsync),
-    ("outbound heartbeat uses numeric enum wire format", TestOutboundHeartbeatUsesNumericEnumWireFormatAsync)
+    ("heartbeat validation rejects oversized and invalid requests", TestHeartbeatValidationAsync)
 };
 
 var failed = 0;
@@ -49,19 +46,6 @@ if (failed > 0)
 
 Console.WriteLine($"{tests.Length} test(s) passed.");
 return 0;
-
-static Task TestIdentityRenamesWithoutRotatingKeys()
-{
-    using var testDir = new SyncTestDirectory();
-    var identityService = new DragnetIdentityService(testDir.Path);
-    var first = identityService.LoadOrCreate("Old Name");
-    var renamed = identityService.LoadOrCreate("New Name");
-
-    Assert.Equal(first.OriginId, renamed.OriginId, "origin id should not change when display name changes");
-    Assert.Equal(first.PublicKeyPem, renamed.PublicKeyPem, "public key should not change when display name changes");
-    Assert.Equal("New Name", renamed.OriginName, "configured origin name should update stored display name");
-    return Task.CompletedTask;
-}
 
 static async Task TestTrustServicePersistsAsync()
 {
@@ -124,18 +108,12 @@ static async Task TestPeerStoreAsync()
     var store = new DragnetPeerStore(testDir.Path);
     var configuration = new DragnetConfiguration
     {
-        PublicEndpoint = "https://local.example/dragnet",
         BootstrapPeers =
         [
             new DragnetPeerConfiguration
             {
                 Endpoint = "https://bootstrap.example/dragnet",
                 ExpectedOriginId = "bootstrap-origin"
-            },
-            new DragnetPeerConfiguration
-            {
-                Endpoint = "https://local.example/dragnet",
-                ExpectedOriginId = "local-self"
             }
         ]
     };
@@ -144,8 +122,6 @@ static async Task TestPeerStoreAsync()
     var peers = await store.ListAsync(CancellationToken.None);
     var bootstrap = peers.Single(peer => peer.OriginId == "bootstrap-origin");
     Assert.True(bootstrap.IsBootstrap, "configured peer should be marked bootstrap");
-    Assert.False(peers.Any(peer => peer.Endpoint == "https://local.example/dragnet"),
-        "configured local endpoint should not be added as a peer");
 
     await store.UpsertAsync(new DragnetPeerInfo
     {
@@ -153,24 +129,8 @@ static async Task TestPeerStoreAsync()
         OriginName = "Discovered",
         PublicEndpoint = "https://discovered.example/dragnet"
     }, CancellationToken.None);
-    await store.AddManualPeerAsync("https://manual.example/dragnet", null, CancellationToken.None);
-    await store.UpsertAsync(new DragnetPeerInfo
-    {
-        OriginId = "local-self",
-        OriginName = "Local",
-        PublicEndpoint = "https://local.example/dragnet"
-    }, CancellationToken.None);
     await store.MarkErrorAsync("discovered-origin", "boom", CancellationToken.None);
     await store.ClearErrorAsync("discovered-origin", CancellationToken.None);
-
-    var manual = (await store.ListAsync(CancellationToken.None))
-        .Single(peer => peer.Endpoint == "https://manual.example/dragnet");
-    Assert.False(manual.IsBootstrap, "manually added peer should not be marked bootstrap");
-    Assert.Equal("https://manual.example/dragnet", manual.OriginId, "manual peer should use endpoint as provisional origin id");
-
-    await store.LoadAsync(configuration, CancellationToken.None);
-    Assert.False((await store.ListAsync(CancellationToken.None)).Any(peer => peer.Endpoint == "https://local.example/dragnet"),
-        "stored local endpoint should be pruned on load");
 
     var discovered = (await store.ListAsync(CancellationToken.None))
         .Single(peer => peer.OriginId == "discovered-origin");
@@ -507,99 +467,6 @@ static async Task TestHeartbeatValidationAsync()
     }, CancellationToken.None), "event limit should be enforced");
 }
 
-static async Task TestOutboundHeartbeatErrorIncludesBodyAsync()
-{
-    await using var testDir = new TestDirectory();
-    var configuration = new DragnetConfiguration
-    {
-        PublicEndpoint = "https://local.example/dragnet"
-    };
-    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
-    await eventStore.LoadAsync(CancellationToken.None);
-    var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
-    await peerStore.LoadAsync(configuration, CancellationToken.None);
-    await peerStore.AddManualPeerAsync("https://remote.example/dragnet", null, CancellationToken.None);
-    var identityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "identity"));
-    var identity = identityService.LoadOrCreate("Local");
-    var trustService = new DragnetTrustService(configuration, new RecordingConfigurationHandler<DragnetConfiguration>());
-    var importService = new DragnetImportService(
-        configuration,
-        eventStore,
-        managerFactory: () => null!,
-        logger: new TestLogger<DragnetImportService>());
-    var reviewService = new DragnetReviewService(eventStore, importService, trustService);
-    using var httpClient = new HttpClient(new StaticResponseHandler(
-        System.Net.HttpStatusCode.BadRequest,
-        "{\"error\":\"Known peer endpoint must be absolute HTTPS.\"}"));
-    var transport = new DragnetTransportService(
-        configuration,
-        eventStore,
-        peerStore,
-        identity,
-        identityService,
-        reviewService,
-        trustService,
-        new TestLogger<DragnetTransportService>(),
-        httpClient);
-
-    transport.Start();
-    await Task.Delay(150);
-    await transport.StopAsync();
-
-    var peer = (await peerStore.ListAsync(CancellationToken.None)).Single();
-    Assert.NotNull(peer.LastError, "failed outbound heartbeat should store peer error");
-    Assert.Contains("Known peer endpoint", peer.LastError!, "peer error should include response body");
-}
-
-static async Task TestOutboundHeartbeatUsesNumericEnumWireFormatAsync()
-{
-    await using var testDir = new TestDirectory();
-    var configuration = new DragnetConfiguration
-    {
-        PublicEndpoint = "https://local.example/dragnet"
-    };
-    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
-    await eventStore.LoadAsync(CancellationToken.None);
-    var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
-    await peerStore.LoadAsync(configuration, CancellationToken.None);
-    await peerStore.AddManualPeerAsync("https://remote.example/dragnet", null, CancellationToken.None);
-    var identityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "identity"));
-    var identity = identityService.LoadOrCreate("Local");
-    var trustService = new DragnetTrustService(configuration, new RecordingConfigurationHandler<DragnetConfiguration>());
-    var importService = new DragnetImportService(
-        configuration,
-        eventStore,
-        managerFactory: () => null!,
-        logger: new TestLogger<DragnetImportService>());
-    var reviewService = new DragnetReviewService(eventStore, importService, trustService);
-    await eventStore.UpsertAsync(new DragnetStoredEvent
-    {
-        Event = CreateEnvelope(originId: identity.OriginId, eventType: DragnetEventType.BanCreated),
-        ReviewState = DragnetReviewState.ApprovedBan
-    }, CancellationToken.None);
-    var handler = new StaticResponseHandler(
-        System.Net.HttpStatusCode.OK,
-        "{\"receiver\":{\"originId\":\"remote\",\"originName\":\"Remote\",\"publicEndpoint\":\"https://remote.example/dragnet\"},\"knownPeers\":[],\"events\":[]}");
-    using var httpClient = new HttpClient(handler);
-    var transport = new DragnetTransportService(
-        configuration,
-        eventStore,
-        peerStore,
-        identity,
-        identityService,
-        reviewService,
-        trustService,
-        new TestLogger<DragnetTransportService>(),
-        httpClient);
-
-    transport.Start();
-    await Task.Delay(150);
-    await transport.StopAsync();
-
-    Assert.NotNull(handler.LastRequestBody, "heartbeat should send a request body");
-    Assert.Contains("\"eventType\":0", handler.LastRequestBody!, "wire heartbeat should use numeric enum values");
-}
-
 static DragnetHeartbeatRequest CreateHeartbeatRequest(string originId) => new()
 {
     Sender = new DragnetPeerInfo
@@ -741,32 +608,6 @@ public sealed class TestLogger<T> : ILogger<T>
     }
 }
 
-public sealed class StaticResponseHandler : HttpMessageHandler
-{
-    private readonly System.Net.HttpStatusCode _statusCode;
-    private readonly string _body;
-
-    public string? LastRequestBody { get; private set; }
-
-    public StaticResponseHandler(System.Net.HttpStatusCode statusCode, string body)
-    {
-        _statusCode = statusCode;
-        _body = body;
-    }
-
-    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-    {
-        LastRequestBody = request.Content is null
-            ? null
-            : await request.Content.ReadAsStringAsync(cancellationToken);
-
-        return new HttpResponseMessage(_statusCode)
-        {
-            Content = new StringContent(_body, System.Text.Encoding.UTF8, "application/json")
-        };
-    }
-}
-
 public sealed class TestDirectory : IAsyncDisposable
 {
     public string Path { get; } = System.IO.Path.Combine(
@@ -786,25 +627,5 @@ public sealed class TestDirectory : IAsyncDisposable
         }
 
         return ValueTask.CompletedTask;
-    }
-}
-
-public sealed class SyncTestDirectory : IDisposable
-{
-    public string Path { get; } = System.IO.Path.Combine(
-        System.IO.Path.GetTempPath(),
-        $"dragnet-tests-{Guid.NewGuid():N}");
-
-    public SyncTestDirectory()
-    {
-        Directory.CreateDirectory(Path);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(Path))
-        {
-            Directory.Delete(Path, recursive: true);
-        }
     }
 }

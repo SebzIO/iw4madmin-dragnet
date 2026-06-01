@@ -18,8 +18,7 @@ public sealed class DragnetTransportService : IDisposable
     private readonly DragnetReviewService _reviewService;
     private readonly DragnetTrustService _trustService;
     private readonly ILogger<DragnetTransportService> _logger;
-    private readonly HttpClient _httpClient;
-    private readonly bool _ownsHttpClient;
+    private readonly HttpClient _httpClient = new();
     private CancellationTokenSource? _runCancellation;
     private Task? _runTask;
 
@@ -32,31 +31,6 @@ public sealed class DragnetTransportService : IDisposable
         DragnetReviewService reviewService,
         DragnetTrustService trustService,
         ILogger<DragnetTransportService> logger)
-        : this(
-            configuration,
-            eventStore,
-            peerStore,
-            identity,
-            identityService,
-            reviewService,
-            trustService,
-            logger,
-            new HttpClient(),
-            ownsHttpClient: true)
-    {
-    }
-
-    public DragnetTransportService(
-        DragnetConfiguration configuration,
-        DragnetEventStore eventStore,
-        DragnetPeerStore peerStore,
-        DragnetIdentityDocument identity,
-        DragnetIdentityService identityService,
-        DragnetReviewService reviewService,
-        DragnetTrustService trustService,
-        ILogger<DragnetTransportService> logger,
-        HttpClient httpClient,
-        bool ownsHttpClient = false)
     {
         _configuration = configuration;
         _eventStore = eventStore;
@@ -66,8 +40,6 @@ public sealed class DragnetTransportService : IDisposable
         _reviewService = reviewService;
         _trustService = trustService;
         _logger = logger;
-        _httpClient = httpClient;
-        _ownsHttpClient = ownsHttpClient;
     }
 
     public void Start()
@@ -111,16 +83,12 @@ public sealed class DragnetTransportService : IDisposable
     {
         ValidateHeartbeatRequest(request);
 
-        if (!IsLocalPeer(request.Sender))
-        {
-            await _peerStore.UpsertAsync(request.Sender, token);
-        }
-
+        await _peerStore.UpsertAsync(request.Sender, token);
         await ImportEventsAsync(request.Events, token);
 
         foreach (var peer in request.KnownPeers)
         {
-            if (!IsLocalPeer(peer))
+            if (!string.Equals(peer.OriginId, _identity.OriginId, StringComparison.OrdinalIgnoreCase))
             {
                 await _peerStore.UpsertAsync(peer, token);
             }
@@ -154,7 +122,7 @@ public sealed class DragnetTransportService : IDisposable
         var peers = await _peerStore.ListAsync(token);
         foreach (var peer in peers)
         {
-            if (IsLocalPeer(peer))
+            if (string.Equals(peer.OriginId, _identity.OriginId, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -178,12 +146,12 @@ public sealed class DragnetTransportService : IDisposable
                 var response = await _httpClient.PostAsJsonAsync(
                     $"{peer.Endpoint.TrimEnd('/')}/heartbeat",
                     request,
-                    DragnetJson.WireOptions,
+                    DragnetJson.Options,
                     token);
 
-                await EnsureSuccessAsync(response, token);
+                response.EnsureSuccessStatusCode();
                 var heartbeat = await response.Content.ReadFromJsonAsync<DragnetHeartbeatResponse>(
-                    DragnetJson.WireOptions,
+                    DragnetJson.Options,
                     token);
 
                 if (heartbeat is null)
@@ -205,7 +173,7 @@ public sealed class DragnetTransportService : IDisposable
                 await _peerStore.UpsertAsync(heartbeat.Receiver, token);
                 foreach (var knownPeer in heartbeat.KnownPeers)
                 {
-                    if (!IsLocalPeer(knownPeer))
+                    if (!string.Equals(knownPeer.OriginId, _identity.OriginId, StringComparison.OrdinalIgnoreCase))
                     {
                         await _peerStore.UpsertAsync(knownPeer, token);
                     }
@@ -271,7 +239,13 @@ public sealed class DragnetTransportService : IDisposable
                 var action = envelope.EventType is DragnetEventType.BanLifted
                     ? DragnetReviewAction.ApproveLift
                     : DragnetReviewAction.ApproveBan;
-                var result = await _reviewService.ApplyActionAsync(envelope.EventId, action, "Auto-approved trusted origin", token);
+                var result = await _reviewService.ApplyActionAsync(
+                    envelope.EventId,
+                    action,
+                    "Auto-approved trusted origin",
+                    "Dragnet auto-approval",
+                    null,
+                    token);
                 if (!result.Success)
                 {
                     _logger.LogWarning(
@@ -394,51 +368,13 @@ public sealed class DragnetTransportService : IDisposable
         return !_configuration.RequireHttps || uri.Scheme == Uri.UriSchemeHttps;
     }
 
-    private bool IsLocalPeer(DragnetPeerInfo peer)
-    {
-        return string.Equals(peer.OriginId, _identity.OriginId, StringComparison.OrdinalIgnoreCase) ||
-               IsLocalEndpoint(peer.PublicEndpoint) ||
-               IsLocalEndpoint(peer.OriginId);
-    }
-
-    private bool IsLocalPeer(DragnetPeerRecord peer)
-    {
-        return string.Equals(peer.OriginId, _identity.OriginId, StringComparison.OrdinalIgnoreCase) ||
-               IsLocalEndpoint(peer.Endpoint) ||
-               IsLocalEndpoint(peer.OriginId);
-    }
-
-    private bool IsLocalEndpoint(string? endpoint)
-    {
-        return !string.IsNullOrWhiteSpace(_configuration.PublicEndpoint) &&
-               !string.IsNullOrWhiteSpace(endpoint) &&
-               endpoint.TrimEnd('/').Equals(_configuration.PublicEndpoint.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
-    }
-
     private static bool IsFixedOriginPeer(DragnetPeerRecord peer) =>
         !Uri.TryCreate(peer.OriginId, UriKind.Absolute, out _);
-
-    private static async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken token)
-    {
-        if (response.IsSuccessStatusCode)
-        {
-            return;
-        }
-
-        var responseBody = await response.Content.ReadAsStringAsync(token);
-        var message = string.IsNullOrWhiteSpace(responseBody)
-            ? $"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase})."
-            : $"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase}). {responseBody}";
-        throw new HttpRequestException(message, null, response.StatusCode);
-    }
 
     public void Dispose()
     {
         _runCancellation?.Cancel();
         _runCancellation?.Dispose();
-        if (_ownsHttpClient)
-        {
-            _httpClient.Dispose();
-        }
+        _httpClient.Dispose();
     }
 }

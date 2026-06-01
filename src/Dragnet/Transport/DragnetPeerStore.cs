@@ -31,23 +31,12 @@ public sealed class DragnetPeerStore
 
                 foreach (var peer in stored ?? [])
                 {
-                    if (IsLocalEndpoint(peer.Endpoint, configuration.PublicEndpoint) ||
-                        IsLocalEndpoint(peer.OriginId, configuration.PublicEndpoint))
-                    {
-                        continue;
-                    }
-
                     _peers[peer.OriginId] = peer;
                 }
             }
 
             foreach (var peer in configuration.BootstrapPeers.Where(peer => peer.Enabled && !string.IsNullOrWhiteSpace(peer.Endpoint)))
             {
-                if (IsLocalEndpoint(peer.Endpoint, configuration.PublicEndpoint))
-                {
-                    continue;
-                }
-
                 var originId = string.IsNullOrWhiteSpace(peer.ExpectedOriginId)
                     ? peer.Endpoint.TrimEnd('/')
                     : peer.ExpectedOriginId;
@@ -118,47 +107,6 @@ public sealed class DragnetPeerStore
                     OriginName = peerInfo.OriginName,
                     Endpoint = peerInfo.PublicEndpoint.TrimEnd('/'),
                     LastSeenUtc = DateTimeOffset.UtcNow
-                };
-            }
-
-            await SaveUnlockedAsync(token);
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
-
-    public async Task AddManualPeerAsync(string endpoint, string? expectedOriginId, CancellationToken token)
-    {
-        if (string.IsNullOrWhiteSpace(endpoint) ||
-            !Uri.TryCreate(endpoint.TrimEnd('/'), UriKind.Absolute, out var uri))
-        {
-            throw new InvalidOperationException("Peer endpoint must be an absolute URL.");
-        }
-
-        var originId = string.IsNullOrWhiteSpace(expectedOriginId)
-            ? uri.ToString().TrimEnd('/')
-            : expectedOriginId.Trim();
-
-        await _lock.WaitAsync(token);
-        try
-        {
-            if (_peers.TryGetValue(originId, out var existing))
-            {
-                existing.Endpoint = uri.ToString().TrimEnd('/');
-                existing.OriginName = existing.OriginName == existing.OriginId ? uri.ToString().TrimEnd('/') : existing.OriginName;
-                existing.LastError = null;
-                existing.IsBootstrap = false;
-            }
-            else
-            {
-                _peers[originId] = new DragnetPeerRecord
-                {
-                    OriginId = originId,
-                    OriginName = uri.ToString().TrimEnd('/'),
-                    Endpoint = uri.ToString().TrimEnd('/'),
-                    IsBootstrap = false
                 };
             }
 
@@ -265,11 +213,5 @@ public sealed class DragnetPeerStore
         }
 
         File.Move(tempPath, _storePath, true);
-    }
-
-    private static bool IsLocalEndpoint(string value, string? publicEndpoint)
-    {
-        return !string.IsNullOrWhiteSpace(publicEndpoint) &&
-               value.TrimEnd('/').Equals(publicEndpoint.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
     }
 }

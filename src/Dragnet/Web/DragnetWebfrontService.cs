@@ -175,7 +175,7 @@ public sealed class DragnetWebfrontService
                 html.Append(Encode(DescribeAge(now - peer.LastSeenUtc)));
                 html.AppendLine("</td>");
                 html.Append("<td class=\"px-4 py-3 text-muted\">");
-                html.Append(peer.LastEventSentAtUtc is null || peer.LastEventSentAtUtc.Value <= DateTimeOffset.UnixEpoch
+                html.Append(peer.LastEventSentAtUtc is null
                     ? "Never"
                     : Encode(DescribeAge(now - peer.LastEventSentAtUtc.Value)));
                 html.AppendLine("</td>");
@@ -226,6 +226,13 @@ public sealed class DragnetWebfrontService
             html.AppendLine("</td>");
             html.Append("<td class=\"px-4 py-3 text-muted\">");
             html.Append(Encode(DescribeAge(now - item.Event.CreatedAtUtc)));
+            if (item.ReviewedAtUtc is not null)
+            {
+                html.Append("<div class=\"text-xs text-muted\">Reviewed by ");
+                html.Append(Encode(item.ReviewedByName ?? "Unknown"));
+                html.Append("</div>");
+            }
+
             html.AppendLine("</td>");
             html.Append("<td class=\"px-4 py-3 text-right\">");
             AppendTrustButtons(html, item.Event);
@@ -275,7 +282,13 @@ public sealed class DragnetWebfrontService
         }
 
         meta.TryGetValue("Reason", out var reason);
-        var result = await _reviewService.ApplyActionAsync(eventId, action, reason, token);
+        var result = await _reviewService.ApplyActionAsync(
+            eventId,
+            action,
+            reason,
+            GetReviewerName(origin),
+            origin?.ClientId,
+            token);
         return result.Message;
     }
 
@@ -391,6 +404,9 @@ public sealed class DragnetWebfrontService
             : $"{envelope.ExpiresAtUtc:yyyy-MM-dd HH:mm:ss} UTC");
         AppendDetailCell(html, "IW4MAdmin penalty", envelope.Iw4mAdminPenaltyId.ToString());
         AppendDetailCell(html, "Admin", envelope.AdminName ?? "Unknown");
+        AppendDetailCell(html, "Reviewed by", item.ReviewedAtUtc is null
+            ? "Not reviewed"
+            : $"{item.ReviewedByName ?? "Unknown"} at {item.ReviewedAtUtc:yyyy-MM-dd HH:mm:ss} UTC");
         html.AppendLine("</div>");
 
         html.AppendLine("<div class=\"p-4 space-y-4\">");
@@ -418,6 +434,40 @@ public sealed class DragnetWebfrontService
             html.Append("<div class=\"whitespace-pre-wrap\">");
             html.Append(Encode(item.LocalDecisionReason));
             html.AppendLine("</div></div>");
+        }
+
+        if (item.AuditTrail.Count > 0)
+        {
+            html.AppendLine("<div>");
+            html.AppendLine("<div class=\"text-sm text-muted mb-2\">Audit trail</div>");
+            html.AppendLine("<div class=\"overflow-x-auto rounded-md border border-line\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-3 py-2\">When</th><th class=\"px-3 py-2\">Reviewer</th><th class=\"px-3 py-2\">Change</th><th class=\"px-3 py-2\">Reason</th></tr></thead><tbody>");
+
+            foreach (var entry in item.AuditTrail.OrderByDescending(entry => entry.ReviewedAtUtc))
+            {
+                html.AppendLine("<tr class=\"border-b border-line/60\">");
+                html.Append("<td class=\"px-3 py-2 text-muted\">");
+                html.Append(Encode($"{entry.ReviewedAtUtc:yyyy-MM-dd HH:mm:ss} UTC"));
+                html.AppendLine("</td>");
+                html.Append("<td class=\"px-3 py-2\">");
+                html.Append(Encode(entry.ReviewedByName));
+                if (entry.ReviewedByClientId is not null)
+                {
+                    html.Append(" <span class=\"text-muted\">#");
+                    html.Append(Encode(entry.ReviewedByClientId.Value.ToString()));
+                    html.Append("</span>");
+                }
+
+                html.AppendLine("</td>");
+                html.Append("<td class=\"px-3 py-2\">");
+                html.Append(Encode($"{entry.PreviousState} -> {entry.NewState}"));
+                html.AppendLine("</td>");
+                html.Append("<td class=\"px-3 py-2 text-muted\">");
+                html.Append(Encode(string.IsNullOrWhiteSpace(entry.Reason) ? "No reason provided" : entry.Reason));
+                html.AppendLine("</td>");
+                html.AppendLine("</tr>");
+            }
+
+            html.AppendLine("</tbody></table></div></div>");
         }
 
         if (!string.IsNullOrWhiteSpace(item.ImportError))
@@ -942,6 +992,10 @@ public sealed class DragnetWebfrontService
 
     private static bool HasPermission(EFClient? client, EFClient.Permission permission) =>
         client?.Level >= permission;
+
+    private static string GetReviewerName(EFClient? client) =>
+        client?.CurrentAlias?.Name ??
+        (client is null ? "Unknown reviewer" : $"Client #{client.ClientId}");
 }
 
 public enum DragnetEventFilter
