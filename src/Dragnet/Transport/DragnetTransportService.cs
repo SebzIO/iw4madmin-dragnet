@@ -178,12 +178,12 @@ public sealed class DragnetTransportService : IDisposable
                 var response = await _httpClient.PostAsJsonAsync(
                     $"{peer.Endpoint.TrimEnd('/')}/heartbeat",
                     request,
-                    DragnetJson.Options,
+                    DragnetJson.WireOptions,
                     token);
 
                 await EnsureSuccessAsync(response, token);
                 var heartbeat = await response.Content.ReadFromJsonAsync<DragnetHeartbeatResponse>(
-                    DragnetJson.Options,
+                    DragnetJson.WireOptions,
                     token);
 
                 if (heartbeat is null)

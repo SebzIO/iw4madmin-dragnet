@@ -21,7 +21,8 @@ var tests = new (string Name, Func<Task> Test)[]
     ("heartbeat response sends approved events once", TestHeartbeatResponseBatchAsync),
     ("webfront dashboard interaction renders as navigation content", TestWebfrontDashboardRendersAsync),
     ("heartbeat validation rejects oversized and invalid requests", TestHeartbeatValidationAsync),
-    ("outbound heartbeat errors include response body", TestOutboundHeartbeatErrorIncludesBodyAsync)
+    ("outbound heartbeat errors include response body", TestOutboundHeartbeatErrorIncludesBodyAsync),
+    ("outbound heartbeat uses numeric enum wire format", TestOutboundHeartbeatUsesNumericEnumWireFormatAsync)
 };
 
 var failed = 0;
@@ -550,6 +551,55 @@ static async Task TestOutboundHeartbeatErrorIncludesBodyAsync()
     Assert.Contains("Known peer endpoint", peer.LastError!, "peer error should include response body");
 }
 
+static async Task TestOutboundHeartbeatUsesNumericEnumWireFormatAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        PublicEndpoint = "https://local.example/dragnet"
+    };
+    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
+    await eventStore.LoadAsync(CancellationToken.None);
+    var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
+    await peerStore.LoadAsync(configuration, CancellationToken.None);
+    await peerStore.AddManualPeerAsync("https://remote.example/dragnet", null, CancellationToken.None);
+    var identityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "identity"));
+    var identity = identityService.LoadOrCreate("Local");
+    var trustService = new DragnetTrustService(configuration, new RecordingConfigurationHandler<DragnetConfiguration>());
+    var importService = new DragnetImportService(
+        configuration,
+        eventStore,
+        managerFactory: () => null!,
+        logger: new TestLogger<DragnetImportService>());
+    var reviewService = new DragnetReviewService(eventStore, importService, trustService);
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = CreateEnvelope(originId: identity.OriginId, eventType: DragnetEventType.BanCreated),
+        ReviewState = DragnetReviewState.ApprovedBan
+    }, CancellationToken.None);
+    var handler = new StaticResponseHandler(
+        System.Net.HttpStatusCode.OK,
+        "{\"receiver\":{\"originId\":\"remote\",\"originName\":\"Remote\",\"publicEndpoint\":\"https://remote.example/dragnet\"},\"knownPeers\":[],\"events\":[]}");
+    using var httpClient = new HttpClient(handler);
+    var transport = new DragnetTransportService(
+        configuration,
+        eventStore,
+        peerStore,
+        identity,
+        identityService,
+        reviewService,
+        trustService,
+        new TestLogger<DragnetTransportService>(),
+        httpClient);
+
+    transport.Start();
+    await Task.Delay(150);
+    await transport.StopAsync();
+
+    Assert.NotNull(handler.LastRequestBody, "heartbeat should send a request body");
+    Assert.Contains("\"eventType\":0", handler.LastRequestBody!, "wire heartbeat should use numeric enum values");
+}
+
 static DragnetHeartbeatRequest CreateHeartbeatRequest(string originId) => new()
 {
     Sender = new DragnetPeerInfo
@@ -696,18 +746,24 @@ public sealed class StaticResponseHandler : HttpMessageHandler
     private readonly System.Net.HttpStatusCode _statusCode;
     private readonly string _body;
 
+    public string? LastRequestBody { get; private set; }
+
     public StaticResponseHandler(System.Net.HttpStatusCode statusCode, string body)
     {
         _statusCode = statusCode;
         _body = body;
     }
 
-    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        return Task.FromResult(new HttpResponseMessage(_statusCode)
+        LastRequestBody = request.Content is null
+            ? null
+            : await request.Content.ReadAsStringAsync(cancellationToken);
+
+        return new HttpResponseMessage(_statusCode)
         {
             Content = new StringContent(_body, System.Text.Encoding.UTF8, "application/json")
-        });
+        };
     }
 }
 

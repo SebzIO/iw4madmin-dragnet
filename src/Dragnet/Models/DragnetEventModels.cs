@@ -114,4 +114,6 @@ public static class DragnetJson
         WriteIndented = true,
         Converters = { new JsonStringEnumConverter() }
     };
+
+    public static readonly JsonSerializerOptions WireOptions = new(JsonSerializerDefaults.Web);
 }
