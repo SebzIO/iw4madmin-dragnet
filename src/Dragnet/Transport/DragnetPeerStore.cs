@@ -118,6 +118,47 @@ public sealed class DragnetPeerStore
         }
     }
 
+    public async Task AddManualPeerAsync(string endpoint, string? expectedOriginId, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint) ||
+            !Uri.TryCreate(endpoint.TrimEnd('/'), UriKind.Absolute, out var uri))
+        {
+            throw new InvalidOperationException("Peer endpoint must be an absolute URL.");
+        }
+
+        var originId = string.IsNullOrWhiteSpace(expectedOriginId)
+            ? uri.ToString().TrimEnd('/')
+            : expectedOriginId.Trim();
+
+        await _lock.WaitAsync(token);
+        try
+        {
+            if (_peers.TryGetValue(originId, out var existing))
+            {
+                existing.Endpoint = uri.ToString().TrimEnd('/');
+                existing.OriginName = existing.OriginName == existing.OriginId ? uri.ToString().TrimEnd('/') : existing.OriginName;
+                existing.LastError = null;
+                existing.IsBootstrap = false;
+            }
+            else
+            {
+                _peers[originId] = new DragnetPeerRecord
+                {
+                    OriginId = originId,
+                    OriginName = uri.ToString().TrimEnd('/'),
+                    Endpoint = uri.ToString().TrimEnd('/'),
+                    IsBootstrap = false
+                };
+            }
+
+            await SaveUnlockedAsync(token);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
     public async Task MarkErrorAsync(string originId, string error, CancellationToken token)
     {
         await _lock.WaitAsync(token);

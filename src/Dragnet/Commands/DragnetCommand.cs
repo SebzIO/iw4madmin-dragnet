@@ -4,6 +4,7 @@ using Dragnet.Identity;
 using Dragnet.Models;
 using Dragnet.Services;
 using Dragnet.Storage;
+using Dragnet.Transport;
 using SharedLibraryCore;
 using SharedLibraryCore.Commands;
 using SharedLibraryCore.Configuration;
@@ -14,6 +15,7 @@ namespace Dragnet.Commands;
 public sealed class DragnetCommand : Command
 {
     private readonly DragnetEventStore _store;
+    private readonly DragnetPeerStore _peerStore;
     private readonly DragnetReviewService _reviewService;
     private readonly DragnetTrustService _trustService;
     private readonly DragnetIdentityDocument _identity;
@@ -22,6 +24,7 @@ public sealed class DragnetCommand : Command
         CommandConfiguration config,
         ITranslationLookup translationLookup,
         DragnetEventStore store,
+        DragnetPeerStore peerStore,
         DragnetReviewService reviewService,
         DragnetTrustService trustService,
         DragnetIdentityDocument identity,
@@ -29,6 +32,7 @@ public sealed class DragnetCommand : Command
         : base(config, translationLookup)
     {
         _store = store;
+        _peerStore = peerStore;
         _reviewService = reviewService;
         _trustService = trustService;
         _identity = identity;
@@ -66,6 +70,14 @@ public sealed class DragnetCommand : Command
             case "identity":
                 gameEvent.Origin.Tell($"Dragnet origin: {_identity.OriginName}");
                 gameEvent.Origin.Tell($"Dragnet origin id: {_identity.OriginId}");
+                return;
+
+            case "peers":
+                await ListPeersAsync(gameEvent);
+                return;
+
+            case "peeradd":
+                await AddPeerAsync(gameEvent, args);
                 return;
 
             case "pending":
@@ -141,6 +153,45 @@ public sealed class DragnetCommand : Command
             gameEvent.Origin.Tell(
                 $"{DragnetReviewService.ShortId(item.Event.EventId)} | {item.Event.PlayerName} | {item.Event.OriginName} | {expires} | {item.Event.Reason}");
         }
+    }
+
+    private async Task ListPeersAsync(GameEvent gameEvent)
+    {
+        var peers = (await _peerStore.ListAsync(CancellationToken.None)).Take(8).ToList();
+        if (peers.Count == 0)
+        {
+            gameEvent.Origin.Tell("No Dragnet peers are known. Add one with !dragnet peeradd <https-url> [originId].");
+            return;
+        }
+
+        foreach (var peer in peers)
+        {
+            var state = string.IsNullOrWhiteSpace(peer.LastError)
+                ? "ok"
+                : $"error: {peer.LastError}";
+            gameEvent.Origin.Tell(
+                $"{peer.OriginName} | {peer.Endpoint} | {(peer.IsBootstrap ? "bootstrap" : "discovered/manual")} | {state}");
+        }
+    }
+
+    private async Task AddPeerAsync(GameEvent gameEvent, string[] args)
+    {
+        if (args.Length < 2)
+        {
+            gameEvent.Origin.Tell("Usage: !dragnet peeradd <https-url> [expectedOriginId]");
+            return;
+        }
+
+        if (!Uri.TryCreate(args[1], UriKind.Absolute, out var uri) ||
+            uri.Scheme != Uri.UriSchemeHttps)
+        {
+            gameEvent.Origin.Tell("Dragnet peer endpoint must be an absolute HTTPS URL.");
+            return;
+        }
+
+        var expectedOriginId = args.Length > 2 ? args[2] : null;
+        await _peerStore.AddManualPeerAsync(uri.ToString().TrimEnd('/'), expectedOriginId, CancellationToken.None);
+        gameEvent.Origin.Tell($"Added Dragnet peer {uri.ToString().TrimEnd('/')}. Heartbeat will run on the next interval.");
     }
 
     private async Task ShowInfoAsync(GameEvent gameEvent, string[] args)
@@ -261,7 +312,7 @@ public sealed class DragnetCommand : Command
 
     private void TellHelp(GameEvent gameEvent)
     {
-        gameEvent.Origin.Tell("Dragnet commands: pending, lifts, info <id>, approve <id>, deny <id> [reason], ignore <id>, trust <id>, trustauto <id>, untrust <id>, liftapprove <id>, liftdeny <id> [reason], identity");
+        gameEvent.Origin.Tell("Dragnet commands: pending, lifts, peers, peeradd <https-url> [originId], info <id>, approve <id>, deny <id> [reason], ignore <id>, trust <id>, trustauto <id>, untrust <id>, liftapprove <id>, liftdeny <id> [reason], identity");
     }
 
     private static string[] SplitArgs(string? data)

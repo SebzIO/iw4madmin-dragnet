@@ -11,6 +11,7 @@ using SharedLibraryCore.Interfaces;
 
 var tests = new (string Name, Func<Task> Test)[]
 {
+    ("identity service updates configured display name without rotating keys", TestIdentityRenamesWithoutRotatingKeys),
     ("trust service persists and evaluates auto-approval", TestTrustServicePersistsAsync),
     ("review service denies pending ban and blocks untrusted approval", TestReviewTransitionsAsync),
     ("peer store tracks bootstrap, errors, removal, and send cursor", TestPeerStoreAsync),
@@ -46,6 +47,19 @@ if (failed > 0)
 
 Console.WriteLine($"{tests.Length} test(s) passed.");
 return 0;
+
+static Task TestIdentityRenamesWithoutRotatingKeys()
+{
+    using var testDir = new SyncTestDirectory();
+    var identityService = new DragnetIdentityService(testDir.Path);
+    var first = identityService.LoadOrCreate("Old Name");
+    var renamed = identityService.LoadOrCreate("New Name");
+
+    Assert.Equal(first.OriginId, renamed.OriginId, "origin id should not change when display name changes");
+    Assert.Equal(first.PublicKeyPem, renamed.PublicKeyPem, "public key should not change when display name changes");
+    Assert.Equal("New Name", renamed.OriginName, "configured origin name should update stored display name");
+    return Task.CompletedTask;
+}
 
 static async Task TestTrustServicePersistsAsync()
 {
@@ -129,8 +143,14 @@ static async Task TestPeerStoreAsync()
         OriginName = "Discovered",
         PublicEndpoint = "https://discovered.example/dragnet"
     }, CancellationToken.None);
+    await store.AddManualPeerAsync("https://manual.example/dragnet", null, CancellationToken.None);
     await store.MarkErrorAsync("discovered-origin", "boom", CancellationToken.None);
     await store.ClearErrorAsync("discovered-origin", CancellationToken.None);
+
+    var manual = (await store.ListAsync(CancellationToken.None))
+        .Single(peer => peer.Endpoint == "https://manual.example/dragnet");
+    Assert.False(manual.IsBootstrap, "manually added peer should not be marked bootstrap");
+    Assert.Equal("https://manual.example/dragnet", manual.OriginId, "manual peer should use endpoint as provisional origin id");
 
     var discovered = (await store.ListAsync(CancellationToken.None))
         .Single(peer => peer.OriginId == "discovered-origin");
@@ -627,5 +647,25 @@ public sealed class TestDirectory : IAsyncDisposable
         }
 
         return ValueTask.CompletedTask;
+    }
+}
+
+public sealed class SyncTestDirectory : IDisposable
+{
+    public string Path { get; } = System.IO.Path.Combine(
+        System.IO.Path.GetTempPath(),
+        $"dragnet-tests-{Guid.NewGuid():N}");
+
+    public SyncTestDirectory()
+    {
+        Directory.CreateDirectory(Path);
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(Path))
+        {
+            Directory.Delete(Path, recursive: true);
+        }
     }
 }

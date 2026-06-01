@@ -25,6 +25,7 @@ This repository is in the MVP testing stage. The current implementation:
 - imports approved remote bans and lifts into IW4MAdmin
 - queues unknown-player import failures for later retry from the webfront
 - registers the `!dragnet` / `!dn` command for local review state management
+- supports command-based peer seeding with `!dragnet peeradd`
 - omits IP addresses from the event model
 - discards expired temp-ban events before storing
 - ignores penalties already imported with a `[Dragnet]` reason prefix to avoid propagation loops
@@ -98,6 +99,20 @@ Example configuration:
 
 `PublicEndpoint` should be the externally reachable Dragnet base URL for this IW4MAdmin instance. Peers call `POST {PublicEndpoint}/heartbeat`.
 
+Peer discovery is gossip-based, not global zero-config discovery. At least one side needs a seed peer before two networks can find each other. You can seed a peer either by adding it to `BootstrapPeers` and restarting IW4MAdmin, or at runtime with:
+
+```text
+!dragnet peeradd https://peer.example.com/dragnet
+```
+
+If you already know the peer's origin fingerprint, pin it:
+
+```text
+!dragnet peeradd https://peer.example.com/dragnet <expectedOriginId>
+```
+
+After the first successful heartbeat, each peer advertises the other peers it knows and the graph can expand without every server manually listing every other server.
+
 ## Reverse Proxy
 
 If IW4MAdmin is served behind a reverse proxy, the proxy must support Blazor Server WebSockets. Without this, the Dragnet page can appear briefly and then be replaced by IW4MAdmin's generic error UI.
@@ -135,6 +150,8 @@ Current behavior:
 ## Commands
 
 - `!dragnet identity`
+- `!dragnet peers`
+- `!dragnet peeradd <https-url> [expectedOriginId]`
 - `!dragnet pending`
 - `!dragnet lifts`
 - `!dragnet info <eventId>`
@@ -159,7 +176,7 @@ Trust commands persist changes to `DragnetSettings`.
 5. Open the IW4MAdmin webfront as an administrator and click the Dragnet admin nav item.
 6. Ban/temp-ban a test client and confirm the event appears in the Dragnet webfront or `Configuration/Dragnet/events.json`.
 
-For peer testing, run two IW4MAdmin instances with reachable HTTPS endpoints and configure each instance's `BootstrapPeers` to point at the other instance's Dragnet endpoint.
+For peer testing, run two IW4MAdmin instances with reachable HTTPS endpoints. On at least one instance, either configure `BootstrapPeers` to point at the other Dragnet endpoint and restart IW4MAdmin, or run `!dragnet peeradd <other-endpoint>`.
 
 ## Tests
 

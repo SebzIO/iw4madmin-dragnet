@@ -35,7 +35,15 @@ public sealed class DragnetIdentityService
             var identity = System.Text.Json.JsonSerializer.Deserialize<DragnetIdentityDocument>(existing, DragnetJson.Options);
             if (identity is not null)
             {
-                return identity with { OriginName = string.IsNullOrWhiteSpace(identity.OriginName) ? originName : identity.OriginName };
+                if (string.IsNullOrWhiteSpace(originName) ||
+                    string.Equals(identity.OriginName, originName, StringComparison.Ordinal))
+                {
+                    return identity;
+                }
+
+                var renamedIdentity = identity with { OriginName = originName };
+                File.WriteAllText(_identityPath, System.Text.Json.JsonSerializer.Serialize(renamedIdentity, DragnetJson.Options));
+                return renamedIdentity;
             }
         }
 
