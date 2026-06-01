@@ -18,7 +18,8 @@ public sealed class DragnetTransportService : IDisposable
     private readonly DragnetReviewService _reviewService;
     private readonly DragnetTrustService _trustService;
     private readonly ILogger<DragnetTransportService> _logger;
-    private readonly HttpClient _httpClient = new();
+    private readonly HttpClient _httpClient;
+    private readonly bool _ownsHttpClient;
     private CancellationTokenSource? _runCancellation;
     private Task? _runTask;
 
@@ -31,6 +32,31 @@ public sealed class DragnetTransportService : IDisposable
         DragnetReviewService reviewService,
         DragnetTrustService trustService,
         ILogger<DragnetTransportService> logger)
+        : this(
+            configuration,
+            eventStore,
+            peerStore,
+            identity,
+            identityService,
+            reviewService,
+            trustService,
+            logger,
+            new HttpClient(),
+            ownsHttpClient: true)
+    {
+    }
+
+    public DragnetTransportService(
+        DragnetConfiguration configuration,
+        DragnetEventStore eventStore,
+        DragnetPeerStore peerStore,
+        DragnetIdentityDocument identity,
+        DragnetIdentityService identityService,
+        DragnetReviewService reviewService,
+        DragnetTrustService trustService,
+        ILogger<DragnetTransportService> logger,
+        HttpClient httpClient,
+        bool ownsHttpClient = false)
     {
         _configuration = configuration;
         _eventStore = eventStore;
@@ -40,6 +66,8 @@ public sealed class DragnetTransportService : IDisposable
         _reviewService = reviewService;
         _trustService = trustService;
         _logger = logger;
+        _httpClient = httpClient;
+        _ownsHttpClient = ownsHttpClient;
     }
 
     public void Start()
@@ -149,7 +177,7 @@ public sealed class DragnetTransportService : IDisposable
                     DragnetJson.Options,
                     token);
 
-                response.EnsureSuccessStatusCode();
+                await EnsureSuccessAsync(response, token);
                 var heartbeat = await response.Content.ReadFromJsonAsync<DragnetHeartbeatResponse>(
                     DragnetJson.Options,
                     token);
@@ -365,10 +393,27 @@ public sealed class DragnetTransportService : IDisposable
     private static bool IsFixedOriginPeer(DragnetPeerRecord peer) =>
         !Uri.TryCreate(peer.OriginId, UriKind.Absolute, out _);
 
+    private static async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken token)
+    {
+        if (response.IsSuccessStatusCode)
+        {
+            return;
+        }
+
+        var responseBody = await response.Content.ReadAsStringAsync(token);
+        var message = string.IsNullOrWhiteSpace(responseBody)
+            ? $"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase})."
+            : $"Response status code does not indicate success: {(int)response.StatusCode} ({response.ReasonPhrase}). {responseBody}";
+        throw new HttpRequestException(message, null, response.StatusCode);
+    }
+
     public void Dispose()
     {
         _runCancellation?.Cancel();
         _runCancellation?.Dispose();
-        _httpClient.Dispose();
+        if (_ownsHttpClient)
+        {
+            _httpClient.Dispose();
+        }
     }
 }

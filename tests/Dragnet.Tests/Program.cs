@@ -20,7 +20,8 @@ var tests = new (string Name, Func<Task> Test)[]
     ("import service queues unknown players", TestImportServiceQueuesUnknownPlayersAsync),
     ("heartbeat response sends approved events once", TestHeartbeatResponseBatchAsync),
     ("webfront dashboard interaction renders as navigation content", TestWebfrontDashboardRendersAsync),
-    ("heartbeat validation rejects oversized and invalid requests", TestHeartbeatValidationAsync)
+    ("heartbeat validation rejects oversized and invalid requests", TestHeartbeatValidationAsync),
+    ("outbound heartbeat errors include response body", TestOutboundHeartbeatErrorIncludesBodyAsync)
 };
 
 var failed = 0;
@@ -487,6 +488,50 @@ static async Task TestHeartbeatValidationAsync()
     }, CancellationToken.None), "event limit should be enforced");
 }
 
+static async Task TestOutboundHeartbeatErrorIncludesBodyAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        PublicEndpoint = "https://local.example/dragnet"
+    };
+    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
+    await eventStore.LoadAsync(CancellationToken.None);
+    var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
+    await peerStore.LoadAsync(configuration, CancellationToken.None);
+    await peerStore.AddManualPeerAsync("https://remote.example/dragnet", null, CancellationToken.None);
+    var identityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "identity"));
+    var identity = identityService.LoadOrCreate("Local");
+    var trustService = new DragnetTrustService(configuration, new RecordingConfigurationHandler<DragnetConfiguration>());
+    var importService = new DragnetImportService(
+        configuration,
+        eventStore,
+        managerFactory: () => null!,
+        logger: new TestLogger<DragnetImportService>());
+    var reviewService = new DragnetReviewService(eventStore, importService, trustService);
+    using var httpClient = new HttpClient(new StaticResponseHandler(
+        System.Net.HttpStatusCode.BadRequest,
+        "{\"error\":\"Known peer endpoint must be absolute HTTPS.\"}"));
+    var transport = new DragnetTransportService(
+        configuration,
+        eventStore,
+        peerStore,
+        identity,
+        identityService,
+        reviewService,
+        trustService,
+        new TestLogger<DragnetTransportService>(),
+        httpClient);
+
+    transport.Start();
+    await Task.Delay(150);
+    await transport.StopAsync();
+
+    var peer = (await peerStore.ListAsync(CancellationToken.None)).Single();
+    Assert.NotNull(peer.LastError, "failed outbound heartbeat should store peer error");
+    Assert.Contains("Known peer endpoint", peer.LastError!, "peer error should include response body");
+}
+
 static DragnetHeartbeatRequest CreateHeartbeatRequest(string originId) => new()
 {
     Sender = new DragnetPeerInfo
@@ -625,6 +670,26 @@ public sealed class TestLogger<T> : ILogger<T>
         Exception? exception,
         Func<TState, Exception?, string> formatter)
     {
+    }
+}
+
+public sealed class StaticResponseHandler : HttpMessageHandler
+{
+    private readonly System.Net.HttpStatusCode _statusCode;
+    private readonly string _body;
+
+    public StaticResponseHandler(System.Net.HttpStatusCode statusCode, string body)
+    {
+        _statusCode = statusCode;
+        _body = body;
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        return Task.FromResult(new HttpResponseMessage(_statusCode)
+        {
+            Content = new StringContent(_body, System.Text.Encoding.UTF8, "application/json")
+        });
     }
 }
 
