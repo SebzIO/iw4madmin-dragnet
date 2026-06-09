@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Xml.Linq;
 using Dragnet.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -73,29 +74,40 @@ public sealed class DragnetUpdateService : IDisposable
         var checkedAtUtc = DateTimeOffset.UtcNow;
         try
         {
-            using var response = await _httpClient.GetAsync(_configuration.ReleaseApiUrl, token);
-            response.EnsureSuccessStatusCode();
-            await using var stream = await response.Content.ReadAsStreamAsync(token);
-            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: token);
-            var root = document.RootElement;
-            var tag = root.TryGetProperty("tag_name", out var tagElement)
-                ? tagElement.GetString()
-                : null;
-            var releaseUrl = root.TryGetProperty("html_url", out var urlElement)
-                ? urlElement.GetString()
-                : DragnetBuildInfo.RepositoryUrl + "/releases";
-
-            if (string.IsNullOrWhiteSpace(tag))
+            ReleaseMetadata metadata;
+            try
             {
-                throw new InvalidOperationException("GitHub release response did not include a tag.");
+                metadata = await ReadApiReleaseAsync(token);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception apiException)
+            {
+                _logger.LogDebug(apiException, "Dragnet GitHub API update check failed; trying release feed");
+                try
+                {
+                    metadata = await ReadFeedReleaseAsync(token);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception feedException)
+                {
+                    throw new InvalidOperationException(
+                        $"GitHub API failed: {apiException.Message} Release feed failed: {feedException.Message}",
+                        feedException);
+                }
             }
 
-            var latestVersion = NormalizeVersion(tag);
+            var latestVersion = NormalizeVersion(metadata.Tag);
             var updateAvailable = CompareVersions(latestVersion, DragnetBuildInfo.Version) > 0;
             SetStatus(new DragnetUpdateStatus(
                 DragnetBuildInfo.Version,
                 latestVersion,
-                releaseUrl,
+                metadata.ReleaseUrl,
                 updateAvailable,
                 checkedAtUtc,
                 null,
@@ -117,6 +129,76 @@ public sealed class DragnetUpdateService : IDisposable
                 IsChecking = false
             });
         }
+    }
+
+    private async Task<ReleaseMetadata> ReadApiReleaseAsync(CancellationToken token)
+    {
+        using var response = await _httpClient.GetAsync(_configuration.ReleaseApiUrl, token);
+        var body = await response.Content.ReadAsStringAsync(token);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException(DescribeFailure(response, body));
+        }
+
+        using var document = JsonDocument.Parse(body);
+        var root = document.RootElement;
+        var tag = root.TryGetProperty("tag_name", out var tagElement)
+            ? tagElement.GetString()
+            : null;
+        var releaseUrl = root.TryGetProperty("html_url", out var urlElement)
+            ? urlElement.GetString()
+            : null;
+
+        return CreateMetadata(tag, releaseUrl, "GitHub release response");
+    }
+
+    private async Task<ReleaseMetadata> ReadFeedReleaseAsync(CancellationToken token)
+    {
+        using var response = await _httpClient.GetAsync(_configuration.ReleaseFeedUrl, token);
+        var body = await response.Content.ReadAsStringAsync(token);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException(DescribeFailure(response, body));
+        }
+
+        var document = XDocument.Parse(body);
+        XNamespace atom = "http://www.w3.org/2005/Atom";
+        var entry = document.Root?.Element(atom + "entry");
+        var tag = entry?.Element(atom + "title")?.Value;
+        var releaseUrl = entry?.Elements(atom + "link")
+            .FirstOrDefault(element =>
+                string.Equals((string?)element.Attribute("rel"), "alternate", StringComparison.OrdinalIgnoreCase))
+            ?.Attribute("href")
+            ?.Value;
+
+        return CreateMetadata(tag, releaseUrl, "GitHub release feed");
+    }
+
+    private static ReleaseMetadata CreateMetadata(string? tag, string? releaseUrl, string source)
+    {
+        if (string.IsNullOrWhiteSpace(tag))
+        {
+            throw new InvalidOperationException($"{source} did not include a release tag.");
+        }
+
+        return new ReleaseMetadata(
+            tag,
+            string.IsNullOrWhiteSpace(releaseUrl)
+                ? DragnetBuildInfo.RepositoryUrl + "/releases"
+                : releaseUrl);
+    }
+
+    private static string DescribeFailure(HttpResponseMessage response, string body)
+    {
+        var detail = body.Trim();
+        if (detail.Length > 240)
+        {
+            detail = detail[..237] + "...";
+        }
+
+        return string.IsNullOrWhiteSpace(detail)
+            ? $"{(int)response.StatusCode} ({response.ReasonPhrase})"
+            : $"{(int)response.StatusCode} ({response.ReasonPhrase}): {detail}";
     }
 
     private void SetStatus(DragnetUpdateStatus status)
@@ -241,6 +323,8 @@ public sealed class DragnetUpdateService : IDisposable
             new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         return client;
     }
+
+    private sealed record ReleaseMetadata(string Tag, string ReleaseUrl);
 }
 
 public sealed record DragnetUpdateStatus(

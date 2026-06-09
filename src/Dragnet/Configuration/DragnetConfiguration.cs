@@ -35,6 +35,9 @@ public sealed class DragnetConfiguration
     public string ReleaseApiUrl { get; set; } =
         "https://api.github.com/repos/SebzIO/iw4madmin-dragnet/releases/latest";
 
+    public string ReleaseFeedUrl { get; set; } =
+        "https://github.com/SebzIO/iw4madmin-dragnet/releases.atom";
+
     public EFClient.Permission WebfrontPermission { get; set; } = EFClient.Permission.Administrator;
 
     public EFClient.Permission ReviewPermission { get; set; } = EFClient.Permission.Administrator;

@@ -86,6 +86,7 @@ Example configuration:
   "UpdateCheckEnabled": true,
   "UpdateCheckInterval": "06:00:00",
   "ReleaseApiUrl": "https://api.github.com/repos/SebzIO/iw4madmin-dragnet/releases/latest",
+  "ReleaseFeedUrl": "https://github.com/SebzIO/iw4madmin-dragnet/releases.atom",
   "WebfrontPermission": "Administrator",
   "ReviewPermission": "Administrator",
   "TrustPermission": "Administrator",
@@ -106,7 +107,7 @@ Example configuration:
 
 `PeerFailureThreshold` controls how many consecutive heartbeat failures are required before a peer is shown as errored. A successful heartbeat clears the failure count and visible error automatically.
 
-The dashboard checks the official GitHub releases API in the background and caches the result. `UpdateCheckEnabled` disables that outbound check, while `UpdateCheckInterval` controls its refresh interval.
+The dashboard checks the official GitHub releases API in the background and caches the result. If the API is unavailable or rate-limited, Dragnet falls back to the repository's public Atom release feed. `UpdateCheckEnabled` disables the outbound check, while `UpdateCheckInterval` controls its refresh interval.
 
 Peer discovery is gossip-based, not global zero-config discovery. At least one side needs a seed peer before two networks can find each other. You can seed a peer either by adding it to `BootstrapPeers` and restarting IW4MAdmin, or at runtime with:
 

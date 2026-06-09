@@ -14,6 +14,7 @@
   "updateCheckEnabled": true,
   "updateCheckInterval": "06:00:00",
   "releaseApiUrl": "https://api.github.com/repos/SebzIO/iw4madmin-dragnet/releases/latest",
+  "releaseFeedUrl": "https://github.com/SebzIO/iw4madmin-dragnet/releases.atom",
   "webfrontPermission": "Administrator",
   "reviewPermission": "Administrator",
   "trustPermission": "Administrator",

@@ -25,7 +25,8 @@ var tests = new (string Name, Func<Task> Test)[]
     ("outbound heartbeat errors include response body", TestOutboundHeartbeatErrorIncludesBodyAsync),
     ("outbound heartbeat uses numeric enum wire format", TestOutboundHeartbeatUsesNumericEnumWireFormatAsync),
     ("update service compares release versions", TestUpdateVersionComparisonAsync),
-    ("update service reads GitHub release metadata", TestUpdateReleaseMetadataAsync)
+    ("update service reads GitHub release metadata", TestUpdateReleaseMetadataAsync),
+    ("update service falls back to GitHub release feed", TestUpdateReleaseFeedFallbackAsync)
 };
 
 var failed = 0;
@@ -581,6 +582,52 @@ static async Task TestUpdateReleaseMetadataAsync()
         "release URL should be retained");
 }
 
+static async Task TestUpdateReleaseFeedFallbackAsync()
+{
+    var configuration = new DragnetConfiguration
+    {
+        UpdateCheckEnabled = true,
+        ReleaseApiUrl = "https://api.example.test/releases/latest",
+        ReleaseFeedUrl = "https://example.test/releases.atom"
+    };
+    using var httpClient = new HttpClient(new RoutingResponseHandler(request =>
+        request.RequestUri == new Uri(configuration.ReleaseApiUrl)
+            ? new HttpResponseMessage(System.Net.HttpStatusCode.Forbidden)
+            {
+                Content = new StringContent("""{"message":"API rate limit exceeded"}""")
+            }
+            : new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <feed xmlns="http://www.w3.org/2005/Atom">
+                      <entry>
+                        <link rel="alternate" href="https://example.test/releases/v0.2.1"/>
+                        <title>v0.2.1</title>
+                      </entry>
+                    </feed>
+                    """,
+                    System.Text.Encoding.UTF8,
+                    "application/atom+xml")
+            }));
+    using var updateService = new DragnetUpdateService(
+        configuration,
+        new TestLogger<DragnetUpdateService>(),
+        httpClient);
+
+    updateService.Start();
+    for (var attempt = 0; attempt < 50 && updateService.Status.CheckedAtUtc is null; attempt++)
+    {
+        await Task.Delay(20);
+    }
+
+    var status = updateService.Status;
+    Assert.Equal("0.2.1", status.LatestVersion, "feed release tag should be normalized");
+    Assert.True(status.UpdateAvailable, "feed fallback should report a newer release");
+    Assert.Null(status.CheckError, "successful feed fallback should clear API failure");
+}
+
 static async Task TestHeartbeatValidationAsync()
 {
     await using var testDir = new TestDirectory();
@@ -917,6 +964,15 @@ public sealed class StaticResponseHandler : HttpMessageHandler
             Content = new StringContent(_body, System.Text.Encoding.UTF8, "application/json")
         };
     }
+}
+
+public sealed class RoutingResponseHandler(
+    Func<HttpRequestMessage, HttpResponseMessage> responseFactory) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(responseFactory(request));
 }
 
 public sealed class TestDirectory : IAsyncDisposable
