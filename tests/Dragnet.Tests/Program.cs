@@ -219,17 +219,42 @@ static async Task TestPeerStoreAsync()
         .Single(peer => peer.OriginId == "discovered-origin");
     Assert.Null(discovered.LastError, "clear error should remove error");
 
+    await store.MarkErrorAsync("discovered-origin", "temporary", CancellationToken.None, failureThreshold: 3);
+    await store.MarkErrorAsync("discovered-origin", "temporary", CancellationToken.None, failureThreshold: 3);
+    discovered = (await store.ListAsync(CancellationToken.None))
+        .Single(peer => peer.OriginId == "discovered-origin");
+    Assert.Null(discovered.LastError, "transient failures below threshold should not show an error");
+    Assert.Equal(2, discovered.ConsecutiveFailures, "transient failure count should be retained");
+
+    await store.MarkErrorAsync("discovered-origin", "sustained", CancellationToken.None, failureThreshold: 3);
+    discovered = (await store.ListAsync(CancellationToken.None))
+        .Single(peer => peer.OriginId == "discovered-origin");
+    Assert.Equal("sustained", discovered.LastError, "threshold failure should become visible");
+
+    await store.MarkHeartbeatSucceededAsync("discovered-origin", new DragnetPeerInfo
+    {
+        OriginId = "canonical-origin",
+        OriginName = "Canonical",
+        PublicEndpoint = "https://discovered.example/dragnet"
+    }, CancellationToken.None);
+    var reconciledPeers = await store.ListAsync(CancellationToken.None);
+    Assert.False(reconciledPeers.Any(peer => peer.OriginId == "discovered-origin"),
+        "successful heartbeat should remove the provisional identity");
+    var canonical = reconciledPeers.Single(peer => peer.OriginId == "canonical-origin");
+    Assert.Null(canonical.LastError, "successful heartbeat should clear visible errors");
+    Assert.Equal(0, canonical.ConsecutiveFailures, "successful heartbeat should reset failure count");
+
     var sentEvent = CreateEnvelope(originId: "local", eventType: DragnetEventType.BanCreated) with
     {
         CreatedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-1)
     };
-    await store.MarkEventBatchSentAsync("discovered-origin", [sentEvent], CancellationToken.None);
+    await store.MarkEventBatchSentAsync("canonical-origin", [sentEvent], CancellationToken.None);
     discovered = (await store.ListAsync(CancellationToken.None))
-        .Single(peer => peer.OriginId == "discovered-origin");
+        .Single(peer => peer.OriginId == "canonical-origin");
     Assert.Equal(sentEvent.CreatedAtUtc, discovered.LastEventSentAtUtc, "send cursor should advance");
 
-    Assert.True(await store.RemoveAsync("discovered-origin", CancellationToken.None), "discovered peer should be removable");
-    Assert.False((await store.ListAsync(CancellationToken.None)).Any(peer => peer.OriginId == "discovered-origin"),
+    Assert.True(await store.RemoveAsync("canonical-origin", CancellationToken.None), "discovered peer should be removable");
+    Assert.False((await store.ListAsync(CancellationToken.None)).Any(peer => peer.OriginId == "canonical-origin"),
         "removed peer should not remain");
 }
 
@@ -569,7 +594,8 @@ static async Task TestOutboundHeartbeatErrorIncludesBodyAsync()
     await using var testDir = new TestDirectory();
     var configuration = new DragnetConfiguration
     {
-        PublicEndpoint = "https://local.example/dragnet"
+        PublicEndpoint = "https://local.example/dragnet",
+        PeerFailureThreshold = 1
     };
     var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
     await eventStore.LoadAsync(CancellationToken.None);
@@ -655,6 +681,10 @@ static async Task TestOutboundHeartbeatUsesNumericEnumWireFormatAsync()
 
     Assert.NotNull(handler.LastRequestBody, "heartbeat should send a request body");
     Assert.Contains("\"eventType\":0", handler.LastRequestBody!, "wire heartbeat should use numeric enum values");
+    var peers = await peerStore.ListAsync(CancellationToken.None);
+    Assert.Equal(1, peers.Count, "successful heartbeat should reconcile the provisional peer");
+    Assert.Equal("remote", peers[0].OriginId, "successful heartbeat should retain the canonical peer identity");
+    Assert.Null(peers[0].LastError, "successful heartbeat should clear peer errors");
 }
 
 static DragnetHeartbeatRequest CreateHeartbeatRequest(string originId) => new()

@@ -26,6 +26,8 @@ public sealed class DragnetConfiguration
 
     public TimeSpan PeerStaleAfter { get; set; } = TimeSpan.FromMinutes(10);
 
+    public int PeerFailureThreshold { get; set; } = 3;
+
     public EFClient.Permission WebfrontPermission { get; set; } = EFClient.Permission.Administrator;
 
     public EFClient.Permission ReviewPermission { get; set; } = EFClient.Permission.Administrator;

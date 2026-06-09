@@ -188,7 +188,11 @@ public sealed class DragnetTransportService : IDisposable
 
                 if (heartbeat is null)
                 {
-                    await _peerStore.MarkErrorAsync(peer.OriginId, "Empty heartbeat response", token);
+                    await _peerStore.MarkErrorAsync(
+                        peer.OriginId,
+                        "Empty heartbeat response",
+                        token,
+                        _configuration.PeerFailureThreshold);
                     continue;
                 }
 
@@ -202,7 +206,6 @@ public sealed class DragnetTransportService : IDisposable
                     continue;
                 }
 
-                await _peerStore.UpsertAsync(heartbeat.Receiver, token);
                 foreach (var knownPeer in heartbeat.KnownPeers)
                 {
                     if (!IsLocalPeer(knownPeer))
@@ -212,7 +215,8 @@ public sealed class DragnetTransportService : IDisposable
                 }
 
                 await ImportEventsAsync(heartbeat.Events, token);
-                await _peerStore.MarkEventBatchSentAsync(peer.OriginId, eventBatch, token);
+                await _peerStore.MarkHeartbeatSucceededAsync(peer.OriginId, heartbeat.Receiver, token);
+                await _peerStore.MarkEventBatchSentAsync(heartbeat.Receiver.OriginId, eventBatch, token);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -220,7 +224,11 @@ public sealed class DragnetTransportService : IDisposable
             }
             catch (Exception ex)
             {
-                await _peerStore.MarkErrorAsync(peer.OriginId, ex.Message, token);
+                await _peerStore.MarkErrorAsync(
+                    peer.OriginId,
+                    ex.Message,
+                    token,
+                    _configuration.PeerFailureThreshold);
                 _logger.LogWarning(ex, "Dragnet heartbeat to {Endpoint} failed", peer.Endpoint);
             }
         }

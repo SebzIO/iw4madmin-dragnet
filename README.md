@@ -82,6 +82,7 @@ Example configuration:
   "ImportApprovedEvents": true,
   "PeerHeartbeatInterval": "00:01:00",
   "PeerStaleAfter": "00:10:00",
+  "PeerFailureThreshold": 3,
   "WebfrontPermission": "Administrator",
   "ReviewPermission": "Administrator",
   "TrustPermission": "Administrator",
@@ -99,6 +100,8 @@ Example configuration:
 ```
 
 `PublicEndpoint` should be the externally reachable Dragnet base URL for this IW4MAdmin instance. Peers call `POST {PublicEndpoint}/heartbeat`.
+
+`PeerFailureThreshold` controls how many consecutive heartbeat failures are required before a peer is shown as errored. A successful heartbeat clears the failure count and visible error automatically.
 
 Peer discovery is gossip-based, not global zero-config discovery. At least one side needs a seed peer before two networks can find each other. You can seed a peer either by adding it to `BootstrapPeers` and restarting IW4MAdmin, or at runtime with:
 

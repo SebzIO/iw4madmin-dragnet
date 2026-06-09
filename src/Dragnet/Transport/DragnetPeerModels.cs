@@ -47,5 +47,11 @@ public sealed record DragnetPeerRecord
 
     public string? LastError { get; set; }
 
+    public int ConsecutiveFailures { get; set; }
+
+    public DateTimeOffset? LastFailureAtUtc { get; set; }
+
+    public string? LastFailureMessage { get; set; }
+
     public bool IsBootstrap { get; set; }
 }

@@ -56,7 +56,7 @@ public sealed class DragnetPeerStore
                 {
                     existing.Endpoint = peer.Endpoint.TrimEnd('/');
                     existing.IsBootstrap = true;
-                    existing.LastError = null;
+                    ClearFailureState(existing);
                 }
                 else
                 {
@@ -108,7 +108,7 @@ public sealed class DragnetPeerStore
                 existing.OriginName = peerInfo.OriginName;
                 existing.Endpoint = peerInfo.PublicEndpoint.TrimEnd('/');
                 existing.LastSeenUtc = DateTimeOffset.UtcNow;
-                existing.LastError = null;
+                ClearFailureState(existing);
             }
             else
             {
@@ -148,7 +148,7 @@ public sealed class DragnetPeerStore
             {
                 existing.Endpoint = uri.ToString().TrimEnd('/');
                 existing.OriginName = existing.OriginName == existing.OriginId ? uri.ToString().TrimEnd('/') : existing.OriginName;
-                existing.LastError = null;
+                ClearFailureState(existing);
                 existing.IsBootstrap = false;
             }
             else
@@ -170,16 +170,89 @@ public sealed class DragnetPeerStore
         }
     }
 
-    public async Task MarkErrorAsync(string originId, string error, CancellationToken token)
+    public async Task MarkErrorAsync(
+        string originId,
+        string error,
+        CancellationToken token,
+        int failureThreshold = 1)
     {
         await _lock.WaitAsync(token);
         try
         {
             if (_peers.TryGetValue(originId, out var existing))
             {
-                existing.LastError = error;
+                existing.ConsecutiveFailures++;
+                existing.LastFailureAtUtc = DateTimeOffset.UtcNow;
+                existing.LastFailureMessage = error;
+                existing.LastError = existing.ConsecutiveFailures >= Math.Max(1, failureThreshold)
+                    ? error
+                    : null;
                 await SaveUnlockedAsync(token);
             }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task MarkHeartbeatSucceededAsync(
+        string attemptedOriginId,
+        DragnetPeerInfo receiver,
+        CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(receiver.PublicEndpoint))
+        {
+            return;
+        }
+
+        await _lock.WaitAsync(token);
+        try
+        {
+            _peers.TryGetValue(attemptedOriginId, out var attempted);
+            _peers.TryGetValue(receiver.OriginId, out var canonical);
+
+            var matchingEndpointRecords = _peers.Values
+                .Where(peer => peer.Endpoint.TrimEnd('/').Equals(
+                    receiver.PublicEndpoint.TrimEnd('/'),
+                    StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            var relatedRecords = matchingEndpointRecords
+                .Append(attempted)
+                .Append(canonical)
+                .Where(peer => peer is not null)
+                .Cast<DragnetPeerRecord>()
+                .Distinct()
+                .ToList();
+
+            var firstSeenUtc = relatedRecords.Count > 0
+                ? relatedRecords.Min(peer => peer.FirstSeenUtc)
+                : DateTimeOffset.UtcNow;
+            var lastEventSentAtUtc = relatedRecords
+                .Where(peer => peer.LastEventSentAtUtc is not null)
+                .Select(peer => peer.LastEventSentAtUtc)
+                .Max();
+            var isBootstrap = relatedRecords.Any(peer => peer.IsBootstrap);
+
+            foreach (var related in relatedRecords)
+            {
+                _peers.Remove(related.OriginId);
+            }
+
+            var healthy = new DragnetPeerRecord
+            {
+                OriginId = receiver.OriginId,
+                OriginName = receiver.OriginName,
+                Endpoint = receiver.PublicEndpoint.TrimEnd('/'),
+                FirstSeenUtc = firstSeenUtc,
+                LastSeenUtc = DateTimeOffset.UtcNow,
+                LastEventSentAtUtc = lastEventSentAtUtc,
+                IsBootstrap = isBootstrap
+            };
+            ClearFailureState(healthy);
+            _peers[healthy.OriginId] = healthy;
+            await SaveUnlockedAsync(token);
         }
         finally
         {
@@ -223,7 +296,7 @@ public sealed class DragnetPeerStore
         {
             if (_peers.TryGetValue(originId, out var existing))
             {
-                existing.LastError = null;
+                ClearFailureState(existing);
                 await SaveUnlockedAsync(token);
             }
         }
@@ -271,5 +344,13 @@ public sealed class DragnetPeerStore
     {
         return !string.IsNullOrWhiteSpace(publicEndpoint) &&
                value.TrimEnd('/').Equals(publicEndpoint.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void ClearFailureState(DragnetPeerRecord peer)
+    {
+        peer.LastError = null;
+        peer.ConsecutiveFailures = 0;
+        peer.LastFailureAtUtc = null;
+        peer.LastFailureMessage = null;
     }
 }

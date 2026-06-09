@@ -10,6 +10,7 @@
   "importApprovedEvents": true,
   "peerHeartbeatInterval": "00:01:00",
   "peerStaleAfter": "00:10:00",
+  "peerFailureThreshold": 3,
   "webfrontPermission": "Administrator",
   "reviewPermission": "Administrator",
   "trustPermission": "Administrator",
