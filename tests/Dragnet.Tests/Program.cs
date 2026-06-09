@@ -530,6 +530,10 @@ static async Task TestWebfrontDashboardRendersAsync()
     Assert.Contains("Queued imports", html, "dashboard should distinguish queued imports");
     Assert.Contains("Degraded peers", html, "dashboard should expose transient peer health");
     Assert.Contains("Unknown", html, "dashboard should render unknown legacy timestamps and penalty ids without huge ages");
+    Assert.Contains(
+        "data-enhance-nav=\"false\"",
+        html,
+        "dashboard filter links should force a fresh interaction render when query parameters change");
 
     var localEvent = CreateEnvelope(originId: identity.OriginId, eventType: DragnetEventType.BanCreated) with
     {

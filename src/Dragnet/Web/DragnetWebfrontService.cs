@@ -1037,7 +1037,7 @@ public sealed class DragnetWebfrontService
             var activeClass = filter == activeFilter
                 ? "bg-action-primary text-foreground border-action-primary"
                 : "border-line text-muted hover:bg-surface-hover";
-            html.Append("<a class=\"inline-flex items-center px-3 py-1.5 rounded-md border text-sm ");
+            html.Append("<a data-enhance-nav=\"false\" class=\"inline-flex items-center px-3 py-1.5 rounded-md border text-sm ");
             html.Append(activeClass);
             html.Append("\" href=\"");
             html.Append(BuildDashboardUri(filter));
@@ -1055,7 +1055,7 @@ public sealed class DragnetWebfrontService
         string label,
         DragnetEventFilter filter)
     {
-        html.Append("<a class=\"text-primary hover:underline\" href=\"");
+        html.Append("<a data-enhance-nav=\"false\" class=\"text-primary hover:underline\" href=\"");
         html.Append(BuildDashboardUri(filter, eventId));
         html.Append("\">");
         html.Append(Encode(label));
