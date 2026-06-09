@@ -1,4 +1,5 @@
 using Data.Models.Client;
+using Dragnet;
 using Dragnet.Configuration;
 using Dragnet.Identity;
 using Dragnet.Models;
@@ -22,7 +23,9 @@ var tests = new (string Name, Func<Task> Test)[]
     ("webfront dashboard interaction renders as navigation content", TestWebfrontDashboardRendersAsync),
     ("heartbeat validation rejects oversized and invalid requests", TestHeartbeatValidationAsync),
     ("outbound heartbeat errors include response body", TestOutboundHeartbeatErrorIncludesBodyAsync),
-    ("outbound heartbeat uses numeric enum wire format", TestOutboundHeartbeatUsesNumericEnumWireFormatAsync)
+    ("outbound heartbeat uses numeric enum wire format", TestOutboundHeartbeatUsesNumericEnumWireFormatAsync),
+    ("update service compares release versions", TestUpdateVersionComparisonAsync),
+    ("update service reads GitHub release metadata", TestUpdateReleaseMetadataAsync)
 };
 
 var failed = 0;
@@ -461,6 +464,7 @@ static async Task TestWebfrontDashboardRendersAsync()
     var configuration = new DragnetConfiguration
     {
         PublicEndpoint = "https://local.example/dragnet",
+        UpdateCheckEnabled = false,
         WebfrontPermission = EFClient.Permission.SeniorAdmin,
         ReviewPermission = EFClient.Permission.Owner,
         TrustPermission = EFClient.Permission.Owner,
@@ -487,12 +491,17 @@ static async Task TestWebfrontDashboardRendersAsync()
         managerFactory: () => null!,
         logger: new TestLogger<DragnetImportService>());
     var reviewService = new DragnetReviewService(eventStore, importService, trustService);
+    using var updateService = new DragnetUpdateService(
+        configuration,
+        new TestLogger<DragnetUpdateService>(),
+        new HttpClient(new StaticResponseHandler(System.Net.HttpStatusCode.OK, "{}")));
     var webfront = new DragnetWebfrontService(
         configuration,
         eventStore,
         peerStore,
         reviewService,
         trustService,
+        updateService,
         managerFactory: () => null!);
     var interaction = await webfront.CreateNavigationInteractionAsync(CancellationToken.None);
 
@@ -513,7 +522,63 @@ static async Task TestWebfrontDashboardRendersAsync()
     }, CancellationToken.None);
     Assert.Contains("Peer transport", html, "dashboard should include peer section");
     Assert.Contains("Dragnet events", html, "dashboard should include event section");
+    Assert.Contains($"Dragnet {DragnetBuildInfo.Version}", html, "dashboard should show deployed Dragnet version");
+    Assert.Contains("Queued imports", html, "dashboard should distinguish queued imports");
+    Assert.Contains("Degraded peers", html, "dashboard should expose transient peer health");
     Assert.Contains("Unknown", html, "dashboard should render unknown legacy timestamps and penalty ids without huge ages");
+}
+
+static Task TestUpdateVersionComparisonAsync()
+{
+    Assert.True(
+        DragnetUpdateService.CompareVersions("v0.1.2", "0.1.1") > 0,
+        "newer stable version should be detected");
+    Assert.True(
+        DragnetUpdateService.CompareVersions("v0.1.1-alpha.6", "0.1.1") < 0,
+        "prerelease should compare below the matching stable release");
+    Assert.Equal(
+        0,
+        DragnetUpdateService.CompareVersions("v0.1.1", "0.1.1"),
+        "v prefix should not affect comparison");
+    Assert.True(
+        DragnetUpdateService.CompareVersions("v0.1.2-alpha.10", "v0.1.2-alpha.9") > 0,
+        "numeric prerelease identifiers should compare numerically");
+    return Task.CompletedTask;
+}
+
+static async Task TestUpdateReleaseMetadataAsync()
+{
+    var configuration = new DragnetConfiguration
+    {
+        UpdateCheckEnabled = true,
+        ReleaseApiUrl = "https://api.example.test/releases/latest"
+    };
+    using var httpClient = new HttpClient(new StaticResponseHandler(
+        System.Net.HttpStatusCode.OK,
+        """
+        {
+          "tag_name": "v0.2.0",
+          "html_url": "https://example.test/releases/v0.2.0"
+        }
+        """));
+    using var updateService = new DragnetUpdateService(
+        configuration,
+        new TestLogger<DragnetUpdateService>(),
+        httpClient);
+
+    updateService.Start();
+    for (var attempt = 0; attempt < 50 && updateService.Status.CheckedAtUtc is null; attempt++)
+    {
+        await Task.Delay(20);
+    }
+
+    var status = updateService.Status;
+    Assert.Equal("0.2.0", status.LatestVersion, "release tag should be normalized");
+    Assert.True(status.UpdateAvailable, "newer release should be reported");
+    Assert.Equal(
+        "https://example.test/releases/v0.2.0",
+        status.ReleaseUrl,
+        "release URL should be retained");
 }
 
 static async Task TestHeartbeatValidationAsync()

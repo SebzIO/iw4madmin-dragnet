@@ -25,6 +25,7 @@ public sealed class DragnetWebfrontService
     private readonly DragnetPeerStore _peerStore;
     private readonly DragnetReviewService _reviewService;
     private readonly DragnetTrustService _trustService;
+    private readonly DragnetUpdateService _updateService;
     private readonly Func<IManager> _managerFactory;
 
     public DragnetWebfrontService(
@@ -33,6 +34,7 @@ public sealed class DragnetWebfrontService
         DragnetPeerStore peerStore,
         DragnetReviewService reviewService,
         DragnetTrustService trustService,
+        DragnetUpdateService updateService,
         Func<IManager> managerFactory)
     {
         _configuration = configuration;
@@ -40,6 +42,7 @@ public sealed class DragnetWebfrontService
         _peerStore = peerStore;
         _reviewService = reviewService;
         _trustService = trustService;
+        _updateService = updateService;
         _managerFactory = managerFactory;
     }
 
@@ -126,22 +129,38 @@ public sealed class DragnetWebfrontService
             : null;
         var pendingBans = events.Count(item => item.ReviewState is DragnetReviewState.PendingBan);
         var pendingLifts = events.Count(item => item.ReviewState is DragnetReviewState.PendingLift);
-        var importFailures = events.Count(item => !string.IsNullOrWhiteSpace(item.ImportError));
+        var queuedImports = events.Count(item =>
+            item.ImportError?.StartsWith("Queued:", StringComparison.OrdinalIgnoreCase) == true);
+        var importFailures = events.Count(item =>
+            !string.IsNullOrWhiteSpace(item.ImportError) &&
+            !item.ImportError.StartsWith("Queued:", StringComparison.OrdinalIgnoreCase));
+        var importedEvents = events.Count(item => item.ImportedAtUtc is not null);
         var now = DateTimeOffset.UtcNow;
         var healthyPeers = peers.Count(peer => IsHealthyPeer(peer, now));
         var stalePeers = peers.Count(peer => IsStalePeer(peer, now));
+        var erroredPeers = peers.Count(peer => !string.IsNullOrWhiteSpace(peer.LastError));
+        var degradedPeers = peers.Count(peer =>
+            string.IsNullOrWhiteSpace(peer.LastError) &&
+            !IsStalePeer(peer, now) &&
+            peer.ConsecutiveFailures > 0);
+        var updateStatus = _updateService.Status;
         var filteredEvents = FilterEvents(events, filter).Take(50).ToList();
         var selectedEvent = ResolveSelectedEvent(events, selectedEventId) ?? filteredEvents.FirstOrDefault();
 
         var html = new StringBuilder();
         html.AppendLine("<div class=\"space-y-6\">");
-        html.AppendLine("<div class=\"grid grid-cols-1 md:grid-cols-6 gap-4\">");
+        AppendOperationalHeader(html, updateStatus, now);
+        html.AppendLine("<div class=\"grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-4\">");
         AppendMetric(html, "Pending bans", pendingBans.ToString());
         AppendMetric(html, "Pending lifts", pendingLifts.ToString());
+        AppendMetric(html, "Queued imports", queuedImports.ToString());
         AppendMetric(html, "Import failures", importFailures.ToString());
+        AppendMetric(html, "Imported", importedEvents.ToString());
         AppendMetric(html, "Known peers", peers.Count.ToString());
         AppendMetric(html, "Healthy peers", healthyPeers.ToString());
+        AppendMetric(html, "Degraded peers", degradedPeers.ToString());
         AppendMetric(html, "Stale peers", stalePeers.ToString());
+        AppendMetric(html, "Errored peers", erroredPeers.ToString());
         html.AppendLine("</div>");
 
         html.AppendLine("<div class=\"rounded-lg border border-line bg-surface/50 overflow-hidden\">");
@@ -662,6 +681,14 @@ public sealed class DragnetWebfrontService
             return;
         }
 
+        if (peer.ConsecutiveFailures > 0)
+        {
+            html.Append("<span class=\"text-warning\">Retrying (");
+            html.Append(Encode($"{peer.ConsecutiveFailures}/{Math.Max(1, _configuration.PeerFailureThreshold)}"));
+            html.Append(")</span>");
+            return;
+        }
+
         html.Append("<span class=\"text-success\">Healthy</span>");
     }
 
@@ -836,6 +863,64 @@ public sealed class DragnetWebfrontService
         html.AppendLine("</div></div>");
     }
 
+    private static void AppendOperationalHeader(
+        StringBuilder html,
+        DragnetUpdateStatus update,
+        DateTimeOffset now)
+    {
+        html.AppendLine("<div class=\"border border-line bg-surface/50 px-4 py-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between\">");
+        html.AppendLine("<div class=\"flex flex-wrap items-center gap-x-5 gap-y-2\">");
+        html.Append("<div><span class=\"text-sm text-muted\">Deployed</span><div class=\"font-semibold\">Dragnet ");
+        html.Append(Encode(update.CurrentVersion));
+        html.AppendLine("</div></div>");
+        html.Append("<div><span class=\"text-sm text-muted\">Release status</span><div class=\"font-medium\">");
+        if (update.UpdateAvailable)
+        {
+            html.Append("<span class=\"text-warning\">Update available: ");
+            html.Append(Encode(update.LatestVersion ?? "new release"));
+            html.Append("</span>");
+        }
+        else if (!string.IsNullOrWhiteSpace(update.LatestVersion))
+        {
+            html.Append("<span class=\"text-success\">Current</span>");
+        }
+        else if (!update.CheckEnabled)
+        {
+            html.Append("<span class=\"text-muted\">Disabled</span>");
+        }
+        else if (update.IsChecking)
+        {
+            html.Append("<span class=\"text-muted\">Checking</span>");
+        }
+        else
+        {
+            html.Append("<span class=\"text-muted\">Unavailable</span>");
+        }
+
+        html.AppendLine("</div></div>");
+        html.Append("<div><span class=\"text-sm text-muted\">Last checked</span><div class=\"font-medium\">");
+        html.Append(update.CheckedAtUtc is null
+            ? "Not yet"
+            : Encode(DescribeAge(now - update.CheckedAtUtc.Value)));
+        html.AppendLine("</div></div></div>");
+
+        html.AppendLine("<div class=\"flex items-center gap-3\">");
+        if (update.UpdateAvailable && !string.IsNullOrWhiteSpace(update.ReleaseUrl))
+        {
+            html.Append("<a class=\"text-primary hover:underline\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"");
+            html.Append(Encode(update.ReleaseUrl));
+            html.AppendLine("\">View release</a>");
+        }
+        else
+        {
+            html.Append("<a class=\"text-primary hover:underline\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"");
+            html.Append(Encode(DragnetBuildInfo.RepositoryUrl + "/releases"));
+            html.AppendLine("\">Releases</a>");
+        }
+
+        html.AppendLine("</div></div>");
+    }
+
     private static DragnetEventFilter ParseFilter(IDictionary<string, string>? meta)
     {
         if (meta is not null &&
@@ -963,7 +1048,9 @@ public sealed class DragnetWebfrontService
     }
 
     private bool IsHealthyPeer(DragnetPeerRecord peer, DateTimeOffset now) =>
-        string.IsNullOrWhiteSpace(peer.LastError) && !IsStalePeer(peer, now);
+        string.IsNullOrWhiteSpace(peer.LastError) &&
+        peer.ConsecutiveFailures == 0 &&
+        !IsStalePeer(peer, now);
 
     private bool IsStalePeer(DragnetPeerRecord peer, DateTimeOffset now) =>
         now - peer.LastSeenUtc > _configuration.PeerStaleAfter;

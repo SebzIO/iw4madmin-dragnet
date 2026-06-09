@@ -21,6 +21,7 @@ public sealed class Plugin : IPluginV2
     private readonly DragnetImportService _importService;
     private readonly DragnetPeerStore _peerStore;
     private readonly DragnetTransportService _transportService;
+    private readonly DragnetUpdateService _updateService;
     private readonly DragnetWebfrontService _webfrontService;
     private readonly IInteractionRegistration _interactionRegistration;
     private readonly DragnetConfiguration _configuration;
@@ -30,7 +31,7 @@ public sealed class Plugin : IPluginV2
 
     public string Author => "Sebz";
 
-    public string Version => "0.1.0";
+    public string Version => DragnetBuildInfo.Version;
 
     public Plugin(
         ILogger<Plugin> logger,
@@ -40,6 +41,7 @@ public sealed class Plugin : IPluginV2
         DragnetEventStore eventStore,
         DragnetPeerStore peerStore,
         DragnetTransportService transportService,
+        DragnetUpdateService updateService,
         DragnetWebfrontService webfrontService,
         IInteractionRegistration interactionRegistration,
         DragnetIdentityDocument identity)
@@ -51,6 +53,7 @@ public sealed class Plugin : IPluginV2
         _eventStore = eventStore;
         _peerStore = peerStore;
         _transportService = transportService;
+        _updateService = updateService;
         _webfrontService = webfrontService;
         _interactionRegistration = interactionRegistration;
         _identity = identity;
@@ -101,6 +104,7 @@ public sealed class Plugin : IPluginV2
         serviceCollection.AddSingleton<DragnetImportService>();
         serviceCollection.AddSingleton<DragnetReviewService>();
         serviceCollection.AddSingleton<DragnetTransportService>();
+        serviceCollection.AddSingleton<DragnetUpdateService>();
         serviceCollection.AddSingleton<DragnetWebfrontService>();
         serviceCollection.AddSingleton<IManagerCommand, DragnetCommand>();
     }
@@ -122,6 +126,7 @@ public sealed class Plugin : IPluginV2
             DragnetWebfrontService.PeerInteractionId,
             (_, _, interactionToken) => _webfrontService.CreatePeerInteractionAsync(interactionToken));
         _transportService.Start();
+        _updateService.Start();
 
         _logger.LogInformation(
             "Dragnet loaded for IW4MAdmin {Version} with {ServerCount} server(s)",
@@ -141,6 +146,7 @@ public sealed class Plugin : IPluginV2
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.TrustInteractionId);
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.PeerInteractionId);
         _transportService.StopAsync().GetAwaiter().GetResult();
+        _updateService.Dispose();
         _logger.LogInformation("Dragnet unloaded");
     }
 }

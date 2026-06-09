@@ -28,6 +28,13 @@ public sealed class DragnetConfiguration
 
     public int PeerFailureThreshold { get; set; } = 3;
 
+    public bool UpdateCheckEnabled { get; set; } = true;
+
+    public TimeSpan UpdateCheckInterval { get; set; } = TimeSpan.FromHours(6);
+
+    public string ReleaseApiUrl { get; set; } =
+        "https://api.github.com/repos/SebzIO/iw4madmin-dragnet/releases/latest";
+
     public EFClient.Permission WebfrontPermission { get; set; } = EFClient.Permission.Administrator;
 
     public EFClient.Permission ReviewPermission { get; set; } = EFClient.Permission.Administrator;
