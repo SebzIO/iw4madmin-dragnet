@@ -32,6 +32,8 @@ public sealed class DragnetConfiguration
 
     public TimeSpan UpdateCheckInterval { get; set; } = TimeSpan.FromHours(6);
 
+    public TimeSpan PageLoadUpdateCheckMaxAge { get; set; } = TimeSpan.FromMinutes(5);
+
     public string ReleaseApiUrl { get; set; } =
         "https://api.github.com/repos/SebzIO/iw4madmin-dragnet/releases/latest";
 

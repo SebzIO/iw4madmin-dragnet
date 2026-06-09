@@ -125,6 +125,7 @@ public sealed class DragnetWebfrontService
         IDictionary<string, string>? meta,
         CancellationToken token)
     {
+        await _updateService.RefreshForPageLoadAsync(token);
         var events = await _eventStore.ListAsync(token);
         var peers = await _peerStore.ListAsync(token);
         var filter = ParseFilter(meta);

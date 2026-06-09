@@ -27,7 +27,8 @@ var tests = new (string Name, Func<Task> Test)[]
     ("outbound heartbeat uses numeric enum wire format", TestOutboundHeartbeatUsesNumericEnumWireFormatAsync),
     ("update service compares release versions", TestUpdateVersionComparisonAsync),
     ("update service reads GitHub release metadata", TestUpdateReleaseMetadataAsync),
-    ("update service falls back to GitHub release feed", TestUpdateReleaseFeedFallbackAsync)
+    ("update service falls back to GitHub release feed", TestUpdateReleaseFeedFallbackAsync),
+    ("update service refreshes stale dashboard loads once", TestUpdatePageLoadRefreshAsync)
 };
 
 var failed = 0;
@@ -698,6 +699,36 @@ static async Task TestUpdateReleaseFeedFallbackAsync()
     Assert.Null(status.CheckError, "successful feed fallback should clear API failure");
 }
 
+static async Task TestUpdatePageLoadRefreshAsync()
+{
+    var configuration = new DragnetConfiguration
+    {
+        UpdateCheckEnabled = true,
+        PageLoadUpdateCheckMaxAge = TimeSpan.FromMinutes(5),
+        ReleaseApiUrl = "https://api.example.test/releases/latest"
+    };
+    var handler = new CountingResponseHandler(
+        System.Net.HttpStatusCode.OK,
+        """
+        {
+          "tag_name": "v0.2.0",
+          "html_url": "https://example.test/releases/v0.2.0"
+        }
+        """);
+    using var updateService = new DragnetUpdateService(
+        configuration,
+        new TestLogger<DragnetUpdateService>(),
+        new HttpClient(handler));
+
+    await Task.WhenAll(
+        updateService.RefreshForPageLoadAsync(CancellationToken.None),
+        updateService.RefreshForPageLoadAsync(CancellationToken.None));
+    await updateService.RefreshForPageLoadAsync(CancellationToken.None);
+
+    Assert.Equal(1, handler.RequestCount, "concurrent and recent page loads should share the cached update check");
+    Assert.Equal("0.2.0", updateService.Status.LatestVersion, "page-load refresh should populate release metadata");
+}
+
 static async Task TestHeartbeatValidationAsync()
 {
     await using var testDir = new TestDirectory();
@@ -1046,6 +1077,24 @@ public sealed class RoutingResponseHandler(
         HttpRequestMessage request,
         CancellationToken cancellationToken) =>
         Task.FromResult(responseFactory(request));
+}
+
+public sealed class CountingResponseHandler(
+    System.Net.HttpStatusCode statusCode,
+    string body) : HttpMessageHandler
+{
+    public int RequestCount { get; private set; }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        RequestCount++;
+        return Task.FromResult(new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json")
+        });
+    }
 }
 
 public sealed class TestDirectory : IAsyncDisposable

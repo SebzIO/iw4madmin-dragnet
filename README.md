@@ -85,6 +85,7 @@ Example configuration:
   "PeerFailureThreshold": 3,
   "UpdateCheckEnabled": true,
   "UpdateCheckInterval": "06:00:00",
+  "PageLoadUpdateCheckMaxAge": "00:05:00",
   "ReleaseApiUrl": "https://api.github.com/repos/SebzIO/iw4madmin-dragnet/releases/latest",
   "ReleaseFeedUrl": "https://github.com/SebzIO/iw4madmin-dragnet/releases.atom",
   "WebfrontPermission": "Administrator",
@@ -107,7 +108,7 @@ Example configuration:
 
 `PeerFailureThreshold` controls how many consecutive heartbeat failures are required before a peer is shown as errored. A successful heartbeat clears the failure count and visible error automatically.
 
-The dashboard checks the official GitHub releases API in the background and caches the result. If the API is unavailable or rate-limited, Dragnet falls back to the repository's public Atom release feed. `UpdateCheckEnabled` disables the outbound check, while `UpdateCheckInterval` controls its refresh interval.
+The dashboard checks the official GitHub releases API in the background and caches the result. Opening the Dragnet dashboard refreshes release information when the cached check is older than `PageLoadUpdateCheckMaxAge` (five minutes by default). Concurrent page loads share the same check. If the API is unavailable or rate-limited, Dragnet falls back to the repository's public Atom release feed. `UpdateCheckEnabled` disables outbound checks, while `UpdateCheckInterval` controls the background refresh interval.
 
 ## Automatic message tokens
 

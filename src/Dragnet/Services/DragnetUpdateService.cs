@@ -13,6 +13,7 @@ public sealed class DragnetUpdateService : IDisposable
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
     private readonly object _sync = new();
+    private readonly SemaphoreSlim _checkLock = new(1, 1);
     private CancellationTokenSource? _runCancellation;
     private Task? _runTask;
     private DragnetUpdateStatus _status = DragnetUpdateStatus.Initial;
@@ -61,12 +62,46 @@ public sealed class DragnetUpdateService : IDisposable
 
     private async Task RunAsync(CancellationToken token)
     {
-        await CheckAsync(token);
+        await RefreshAsync(force: true, token);
         using var timer = new PeriodicTimer(NormalizeInterval(_configuration.UpdateCheckInterval));
         while (await timer.WaitForNextTickAsync(token))
         {
+            await RefreshAsync(force: true, token);
+        }
+    }
+
+    public Task RefreshForPageLoadAsync(CancellationToken token) =>
+        RefreshAsync(force: false, token);
+
+    private async Task RefreshAsync(bool force, CancellationToken token)
+    {
+        if (!_configuration.UpdateCheckEnabled)
+        {
+            return;
+        }
+
+        await _checkLock.WaitAsync(token);
+        try
+        {
+            if (!force && !IsPageLoadCheckDue(DateTimeOffset.UtcNow))
+            {
+                return;
+            }
+
+            SetStatus(Status with { IsChecking = true });
             await CheckAsync(token);
         }
+        finally
+        {
+            _checkLock.Release();
+        }
+    }
+
+    private bool IsPageLoadCheckDue(DateTimeOffset now)
+    {
+        var checkedAtUtc = Status.CheckedAtUtc;
+        return checkedAtUtc is null ||
+               now - checkedAtUtc.Value >= NormalizePageLoadMaxAge(_configuration.PageLoadUpdateCheckMaxAge);
     }
 
     private async Task CheckAsync(CancellationToken token)
@@ -221,6 +256,7 @@ public sealed class DragnetUpdateService : IDisposable
         }
 
         _runCancellation?.Dispose();
+        _checkLock.Dispose();
         if (_ownsHttpClient)
         {
             _httpClient.Dispose();
@@ -310,6 +346,9 @@ public sealed class DragnetUpdateService : IDisposable
 
     private static TimeSpan NormalizeInterval(TimeSpan interval) =>
         interval < TimeSpan.FromMinutes(5) ? TimeSpan.FromMinutes(5) : interval;
+
+    private static TimeSpan NormalizePageLoadMaxAge(TimeSpan maxAge) =>
+        maxAge < TimeSpan.FromMinutes(1) ? TimeSpan.FromMinutes(1) : maxAge;
 
     private static HttpClient CreateHttpClient()
     {
