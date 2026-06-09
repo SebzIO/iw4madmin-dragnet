@@ -473,6 +473,8 @@ static async Task TestWebfrontDashboardRendersAsync()
     };
     var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
     await eventStore.LoadAsync(CancellationToken.None);
+    var identityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "identity"));
+    var identity = identityService.LoadOrCreate("Local Network");
     var legacyEvent = CreateEnvelope(originId: "legacy-origin", eventType: DragnetEventType.BanCreated) with
     {
         CreatedAtUtc = DateTimeOffset.MinValue,
@@ -503,6 +505,7 @@ static async Task TestWebfrontDashboardRendersAsync()
         reviewService,
         trustService,
         updateService,
+        identity,
         managerFactory: () => null!);
     var interaction = await webfront.CreateNavigationInteractionAsync(CancellationToken.None);
 
@@ -527,6 +530,25 @@ static async Task TestWebfrontDashboardRendersAsync()
     Assert.Contains("Queued imports", html, "dashboard should distinguish queued imports");
     Assert.Contains("Degraded peers", html, "dashboard should expose transient peer health");
     Assert.Contains("Unknown", html, "dashboard should render unknown legacy timestamps and penalty ids without huge ages");
+
+    var localEvent = CreateEnvelope(originId: identity.OriginId, eventType: DragnetEventType.BanCreated) with
+    {
+        OriginName = "Historical Local Name"
+    };
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = localEvent,
+        ReviewState = DragnetReviewState.ApprovedBan
+    }, CancellationToken.None);
+    html = await interaction.Action(0, null, null, new Dictionary<string, string>
+    {
+        ["filter"] = DragnetEventFilter.Local.ToString()
+    }, CancellationToken.None);
+    Assert.Contains("Local outbound event", html, "local event detail should be identified as outbound");
+    Assert.Contains(">Local<", html, "local event origin and trust should be identified as local");
+    Assert.Contains("Outbound", html, "local events should not look like pending imports");
+    Assert.False(html.Contains("Historical Local Name</td>", StringComparison.OrdinalIgnoreCase),
+        "historical local origin names should not make local events look remote");
 }
 
 static Task TestUpdateVersionComparisonAsync()

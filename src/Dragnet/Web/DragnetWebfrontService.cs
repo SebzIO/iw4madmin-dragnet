@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Data.Models.Client;
 using Dragnet.Configuration;
+using Dragnet.Identity;
 using Dragnet.Models;
 using Dragnet.Services;
 using Dragnet.Storage;
@@ -26,6 +27,7 @@ public sealed class DragnetWebfrontService
     private readonly DragnetReviewService _reviewService;
     private readonly DragnetTrustService _trustService;
     private readonly DragnetUpdateService _updateService;
+    private readonly DragnetIdentityDocument _identity;
     private readonly Func<IManager> _managerFactory;
 
     public DragnetWebfrontService(
@@ -35,6 +37,7 @@ public sealed class DragnetWebfrontService
         DragnetReviewService reviewService,
         DragnetTrustService trustService,
         DragnetUpdateService updateService,
+        DragnetIdentityDocument identity,
         Func<IManager> managerFactory)
     {
         _configuration = configuration;
@@ -43,6 +46,7 @@ public sealed class DragnetWebfrontService
         _reviewService = reviewService;
         _trustService = trustService;
         _updateService = updateService;
+        _identity = identity;
         _managerFactory = managerFactory;
     }
 
@@ -229,7 +233,7 @@ public sealed class DragnetWebfrontService
             AppendEventLink(html, item.Event.EventId, item.Event.PlayerName, filter);
             html.AppendLine("</td>");
             html.Append("<td class=\"px-4 py-3 text-muted\">");
-            html.Append(Encode(item.Event.OriginName));
+            html.Append(Encode(IsLocalEvent(item.Event) ? "Local" : item.Event.OriginName));
             html.AppendLine("</td>");
             html.Append("<td class=\"px-4 py-3\">");
             AppendTrustStatus(html, item.Event);
@@ -241,7 +245,7 @@ public sealed class DragnetWebfrontService
             html.Append(Encode(item.ReviewState.ToString()));
             html.AppendLine("</td>");
             html.Append("<td class=\"px-4 py-3\">");
-            AppendImportStatus(html, item);
+            AppendImportStatus(html, item, IsLocalEvent(item.Event));
             html.AppendLine("</td>");
             html.Append("<td class=\"px-4 py-3 text-muted\">");
             html.Append(Encode(DescribeEventAge(item.Event, now)));
@@ -405,15 +409,28 @@ public sealed class DragnetWebfrontService
         html.AppendLine("<div class=\"text-right\">");
         AppendTrustStatus(html, envelope);
         html.Append("<div class=\"mt-2\">");
-        AppendTrustButtons(html, envelope);
-        AppendReviewButtons(html, item);
+        if (IsLocalEvent(envelope))
+        {
+            html.Append("<span class=\"text-muted\">Local outbound event</span>");
+        }
+        else
+        {
+            AppendTrustButtons(html, envelope);
+            AppendReviewButtons(html, item);
+        }
+
         html.AppendLine("</div></div></div>");
 
         html.AppendLine("<div class=\"grid grid-cols-1 lg:grid-cols-3 gap-0 border-b border-line\">");
         AppendDetailCell(html, "Type", $"{envelope.EventType} / {envelope.PenaltyKind}");
         AppendDetailCell(html, "Review state", item.ReviewState.ToString());
         AppendDetailCell(html, "Import", DescribeImport(item));
-        AppendDetailCell(html, "Origin", $"{envelope.OriginName} / {envelope.OriginServerName}");
+        AppendDetailCell(
+            html,
+            "Origin",
+            IsLocalEvent(envelope)
+                ? $"Local / {envelope.OriginServerName}"
+                : $"{envelope.OriginName} / {envelope.OriginServerName}");
         AppendDetailCell(html, "Player network", string.IsNullOrWhiteSpace(envelope.PlayerGame)
             ? envelope.PlayerNetworkId
             : $"{envelope.PlayerNetworkId} ({envelope.PlayerGame})");
@@ -531,6 +548,12 @@ public sealed class DragnetWebfrontService
 
     private void AppendReviewButtons(StringBuilder html, DragnetStoredEvent item)
     {
+        if (IsLocalEvent(item.Event))
+        {
+            html.Append("<span class=\"text-muted\">Local</span>");
+            return;
+        }
+
         var isTrusted = _trustService.Evaluate(item.Event).IsTrusted;
         if (item.ImportedAtUtc is null &&
             !string.IsNullOrWhiteSpace(item.ImportError) &&
@@ -586,6 +609,11 @@ public sealed class DragnetWebfrontService
 
     private void AppendTrustButtons(StringBuilder html, DragnetEventEnvelope envelope)
     {
+        if (IsLocalEvent(envelope))
+        {
+            return;
+        }
+
         var trust = _trustService.Evaluate(envelope);
         if (trust.IsTrusted)
         {
@@ -694,6 +722,12 @@ public sealed class DragnetWebfrontService
 
     private void AppendTrustStatus(StringBuilder html, DragnetEventEnvelope envelope)
     {
+        if (IsLocalEvent(envelope))
+        {
+            html.Append("<span class=\"text-primary\">Local</span>");
+            return;
+        }
+
         var trust = _trustService.Evaluate(envelope);
         if (!trust.IsTrusted)
         {
@@ -710,8 +744,17 @@ public sealed class DragnetWebfrontService
         html.Append("<span class=\"text-success\">Trusted</span>");
     }
 
-    private static void AppendImportStatus(StringBuilder html, DragnetStoredEvent item)
+    private static void AppendImportStatus(
+        StringBuilder html,
+        DragnetStoredEvent item,
+        bool isLocal)
     {
+        if (isLocal)
+        {
+            html.Append("<span class=\"text-primary\">Outbound</span>");
+            return;
+        }
+
         if (item.ImportedAtUtc is not null)
         {
             html.Append("<span class=\"text-success\">Imported</span>");
@@ -950,23 +993,28 @@ public sealed class DragnetWebfrontService
         return DragnetEventFilter.Pending;
     }
 
-    private static IEnumerable<DragnetStoredEvent> FilterEvents(
+    private IEnumerable<DragnetStoredEvent> FilterEvents(
         IReadOnlyList<DragnetStoredEvent> events,
-        DragnetEventFilter filter) => filter switch
+        DragnetEventFilter filter)
     {
-        DragnetEventFilter.Pending => events.Where(item =>
+        var remoteEvents = events.Where(item => !IsLocalEvent(item.Event));
+        return filter switch
+        {
+        DragnetEventFilter.Pending => remoteEvents.Where(item =>
             item.ReviewState is DragnetReviewState.PendingBan or DragnetReviewState.PendingLift),
-        DragnetEventFilter.ImportFailed => events.Where(item => !string.IsNullOrWhiteSpace(item.ImportError)),
-        DragnetEventFilter.Imported => events.Where(item => item.ImportedAtUtc is not null),
-        DragnetEventFilter.Reviewed => events.Where(item =>
+        DragnetEventFilter.ImportFailed => remoteEvents.Where(item => !string.IsNullOrWhiteSpace(item.ImportError)),
+        DragnetEventFilter.Imported => remoteEvents.Where(item => item.ImportedAtUtc is not null),
+        DragnetEventFilter.Reviewed => remoteEvents.Where(item =>
             item.ReviewState is not (DragnetReviewState.PendingBan or DragnetReviewState.PendingLift)),
-        DragnetEventFilter.Denied => events.Where(item =>
+        DragnetEventFilter.Denied => remoteEvents.Where(item =>
             item.ReviewState is DragnetReviewState.DeniedBan or DragnetReviewState.DeniedLift),
-        DragnetEventFilter.Ignored => events.Where(item =>
+        DragnetEventFilter.Ignored => remoteEvents.Where(item =>
             item.ReviewState is DragnetReviewState.IgnoredBan or DragnetReviewState.IgnoredLift),
+        DragnetEventFilter.Local => events.Where(item => IsLocalEvent(item.Event)),
         DragnetEventFilter.All => events,
         _ => events
-    };
+        };
+    }
 
     private static DragnetStoredEvent? ResolveSelectedEvent(
         IReadOnlyList<DragnetStoredEvent> events,
@@ -1032,9 +1080,13 @@ public sealed class DragnetWebfrontService
         DragnetEventFilter.Reviewed => "Reviewed",
         DragnetEventFilter.Denied => "Denied",
         DragnetEventFilter.Ignored => "Ignored",
-        DragnetEventFilter.All => "All",
+        DragnetEventFilter.Local => "Local",
+        DragnetEventFilter.All => "All events",
         _ => filter.ToString()
     };
+
+    private bool IsLocalEvent(DragnetEventEnvelope envelope) =>
+        string.Equals(envelope.OriginId, _identity.OriginId, StringComparison.OrdinalIgnoreCase);
 
     private static string DescribeImport(DragnetStoredEvent item)
     {
@@ -1123,5 +1175,6 @@ public enum DragnetEventFilter
     Reviewed,
     Denied,
     Ignored,
+    Local,
     All
 }
