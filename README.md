@@ -109,6 +109,17 @@ Example configuration:
 
 The dashboard checks the official GitHub releases API in the background and caches the result. If the API is unavailable or rate-limited, Dragnet falls back to the repository's public Atom release feed. `UpdateCheckEnabled` disables the outbound check, while `UpdateCheckInterval` controls its refresh interval.
 
+## Automatic message tokens
+
+Dragnet registers native IW4MAdmin message tokens for use in the existing `AutoMessages` rotation:
+
+- `{{DRAGNETSERVERS}}`: participating game servers advertised by live Dragnet nodes
+- `{{DRAGNETNODES}}`: participating IW4MAdmin/Dragnet nodes, including the local node
+- `{{DRAGNETBANS}}`: unique ban-created events known to the local Dragnet node
+- `{{DRAGNETSTATS}}`: a complete formatted statistics message
+
+Using these tokens does not create a separate broadcast timer. IW4MAdmin expands them when their normal automatic-message slot is reached.
+
 Peer discovery is gossip-based, not global zero-config discovery. At least one side needs a seed peer before two networks can find each other. You can seed a peer either by adding it to `BootstrapPeers` and restarting IW4MAdmin, or at runtime with:
 
 ```text

@@ -10,6 +10,8 @@ public sealed record DragnetPeerInfo
 
     public string? PublicEndpoint { get; init; }
 
+    public int ServerCount { get; init; }
+
     public DateTimeOffset SeenAtUtc { get; init; } = DateTimeOffset.UtcNow;
 }
 
@@ -52,6 +54,8 @@ public sealed record DragnetPeerRecord
     public DateTimeOffset? LastFailureAtUtc { get; set; }
 
     public string? LastFailureMessage { get; set; }
+
+    public int ServerCount { get; set; }
 
     public bool IsBootstrap { get; set; }
 }

@@ -108,6 +108,7 @@ public sealed class DragnetPeerStore
                 existing.OriginName = peerInfo.OriginName;
                 existing.Endpoint = peerInfo.PublicEndpoint.TrimEnd('/');
                 existing.LastSeenUtc = DateTimeOffset.UtcNow;
+                existing.ServerCount = peerInfo.ServerCount;
                 ClearFailureState(existing);
             }
             else
@@ -117,6 +118,7 @@ public sealed class DragnetPeerStore
                     OriginId = peerInfo.OriginId,
                     OriginName = peerInfo.OriginName,
                     Endpoint = peerInfo.PublicEndpoint.TrimEnd('/'),
+                    ServerCount = peerInfo.ServerCount,
                     LastSeenUtc = DateTimeOffset.UtcNow
                 };
             }
@@ -248,6 +250,7 @@ public sealed class DragnetPeerStore
                 FirstSeenUtc = firstSeenUtc,
                 LastSeenUtc = DateTimeOffset.UtcNow,
                 LastEventSentAtUtc = lastEventSentAtUtc,
+                ServerCount = receiver.ServerCount,
                 IsBootstrap = isBootstrap
             };
             ClearFailureState(healthy);

@@ -17,6 +17,7 @@ public sealed class DragnetTransportService : IDisposable
     private readonly DragnetIdentityService _identityService;
     private readonly DragnetReviewService _reviewService;
     private readonly DragnetTrustService _trustService;
+    private readonly Func<int> _localServerCount;
     private readonly ILogger<DragnetTransportService> _logger;
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
@@ -31,6 +32,7 @@ public sealed class DragnetTransportService : IDisposable
         DragnetIdentityService identityService,
         DragnetReviewService reviewService,
         DragnetTrustService trustService,
+        Func<int> localServerCount,
         ILogger<DragnetTransportService> logger)
         : this(
             configuration,
@@ -40,6 +42,7 @@ public sealed class DragnetTransportService : IDisposable
             identityService,
             reviewService,
             trustService,
+            localServerCount,
             logger,
             new HttpClient(),
             ownsHttpClient: true)
@@ -54,6 +57,7 @@ public sealed class DragnetTransportService : IDisposable
         DragnetIdentityService identityService,
         DragnetReviewService reviewService,
         DragnetTrustService trustService,
+        Func<int> localServerCount,
         ILogger<DragnetTransportService> logger,
         HttpClient httpClient,
         bool ownsHttpClient = false)
@@ -65,6 +69,7 @@ public sealed class DragnetTransportService : IDisposable
         _identityService = identityService;
         _reviewService = reviewService;
         _trustService = trustService;
+        _localServerCount = localServerCount;
         _logger = logger;
         _httpClient = httpClient;
         _ownsHttpClient = ownsHttpClient;
@@ -305,6 +310,8 @@ public sealed class DragnetTransportService : IDisposable
             throw new InvalidOperationException("Heartbeat sender identity is required.");
         }
 
+        ValidateServerCount(request.Sender.ServerCount);
+
         if (string.Equals(request.Sender.OriginId, _identity.OriginId, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("Heartbeat sender cannot be the local origin.");
@@ -334,6 +341,8 @@ public sealed class DragnetTransportService : IDisposable
                 throw new InvalidOperationException("Known peer identity is required.");
             }
 
+            ValidateServerCount(peer.ServerCount);
+
             if (!string.IsNullOrWhiteSpace(peer.PublicEndpoint) &&
                 !IsAllowedEndpoint(peer.PublicEndpoint))
             {
@@ -347,6 +356,7 @@ public sealed class DragnetTransportService : IDisposable
         OriginId = _identity.OriginId,
         OriginName = _identity.OriginName,
         PublicEndpoint = _configuration.PublicEndpoint,
+        ServerCount = _localServerCount(),
         SeenAtUtc = DateTimeOffset.UtcNow
     };
 
@@ -361,6 +371,7 @@ public sealed class DragnetTransportService : IDisposable
                 OriginId = peer.OriginId,
                 OriginName = peer.OriginName,
                 PublicEndpoint = peer.Endpoint,
+                ServerCount = peer.ServerCount,
                 SeenAtUtc = peer.LastSeenUtc
             })
             .ToList();
@@ -431,6 +442,14 @@ public sealed class DragnetTransportService : IDisposable
 
     private static bool IsFixedOriginPeer(DragnetPeerRecord peer) =>
         !Uri.TryCreate(peer.OriginId, UriKind.Absolute, out _);
+
+    private static void ValidateServerCount(int serverCount)
+    {
+        if (serverCount is < 0 or > 10_000)
+        {
+            throw new InvalidOperationException("Peer server count is outside the allowed range.");
+        }
+    }
 
     private static async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken token)
     {

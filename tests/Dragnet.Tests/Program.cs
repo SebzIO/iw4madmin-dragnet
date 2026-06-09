@@ -16,6 +16,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("trust service persists and evaluates auto-approval", TestTrustServicePersistsAsync),
     ("review service denies pending ban and blocks untrusted approval", TestReviewTransitionsAsync),
     ("peer store tracks bootstrap, errors, removal, and send cursor", TestPeerStoreAsync),
+    ("statistics aggregate participating servers and shared bans", TestStatisticsAsync),
     ("event store expires elapsed temp bans", TestEventStoreExpiresElapsedTempBansAsync),
     ("import service skips disabled and already imported events", TestImportServiceSkipsAsync),
     ("import service queues unknown players", TestImportServiceQueuesUnknownPlayersAsync),
@@ -198,7 +199,8 @@ static async Task TestPeerStoreAsync()
     {
         OriginId = "discovered-origin",
         OriginName = "Discovered",
-        PublicEndpoint = "https://discovered.example/dragnet"
+        PublicEndpoint = "https://discovered.example/dragnet",
+        ServerCount = 3
     }, CancellationToken.None);
     await store.AddManualPeerAsync("https://manual.example/dragnet", null, CancellationToken.None);
     await store.UpsertAsync(new DragnetPeerInfo
@@ -239,7 +241,8 @@ static async Task TestPeerStoreAsync()
     {
         OriginId = "canonical-origin",
         OriginName = "Canonical",
-        PublicEndpoint = "https://discovered.example/dragnet"
+        PublicEndpoint = "https://discovered.example/dragnet",
+        ServerCount = 4
     }, CancellationToken.None);
     var reconciledPeers = await store.ListAsync(CancellationToken.None);
     Assert.False(reconciledPeers.Any(peer => peer.OriginId == "discovered-origin"),
@@ -247,6 +250,7 @@ static async Task TestPeerStoreAsync()
     var canonical = reconciledPeers.Single(peer => peer.OriginId == "canonical-origin");
     Assert.Null(canonical.LastError, "successful heartbeat should clear visible errors");
     Assert.Equal(0, canonical.ConsecutiveFailures, "successful heartbeat should reset failure count");
+    Assert.Equal(4, canonical.ServerCount, "successful heartbeat should retain advertised server count");
 
     var sentEvent = CreateEnvelope(originId: "local", eventType: DragnetEventType.BanCreated) with
     {
@@ -260,6 +264,45 @@ static async Task TestPeerStoreAsync()
     Assert.True(await store.RemoveAsync("canonical-origin", CancellationToken.None), "discovered peer should be removable");
     Assert.False((await store.ListAsync(CancellationToken.None)).Any(peer => peer.OriginId == "canonical-origin"),
         "removed peer should not remain");
+}
+
+static async Task TestStatisticsAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration();
+    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
+    await eventStore.LoadAsync(CancellationToken.None);
+    var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
+    await peerStore.LoadAsync(configuration, CancellationToken.None);
+    await peerStore.UpsertAsync(new DragnetPeerInfo
+    {
+        OriginId = "remote",
+        OriginName = "Remote",
+        PublicEndpoint = "https://remote.example/dragnet",
+        ServerCount = 3
+    }, CancellationToken.None);
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = CreateEnvelope("local", DragnetEventType.BanCreated),
+        ReviewState = DragnetReviewState.ApprovedBan
+    }, CancellationToken.None);
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = CreateEnvelope("remote", DragnetEventType.BanCreated),
+        ReviewState = DragnetReviewState.PendingBan
+    }, CancellationToken.None);
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = CreateEnvelope("remote", DragnetEventType.BanLifted),
+        ReviewState = DragnetReviewState.PendingLift
+    }, CancellationToken.None);
+
+    var service = new DragnetStatisticsService(eventStore, peerStore, () => 5);
+    var statistics = await service.GetAsync(CancellationToken.None);
+
+    Assert.Equal(8, statistics.ParticipatingServerCount, "statistics should sum local and peer server counts");
+    Assert.Equal(2, statistics.ParticipatingNodeCount, "statistics should include local and peer nodes");
+    Assert.Equal(2, statistics.SharedBanCount, "statistics should count unique ban-created events");
 }
 
 static async Task TestEventStoreExpiresElapsedTempBansAsync()
@@ -408,6 +451,7 @@ static async Task TestHeartbeatResponseBatchAsync()
         identityService,
         reviewService,
         trustService,
+        () => 1,
         new TestLogger<DragnetTransportService>());
     var approvedOldest = CreateEnvelope(originId: "local", eventType: DragnetEventType.BanCreated) with
     {
@@ -684,6 +728,7 @@ static async Task TestHeartbeatValidationAsync()
         identityService,
         reviewService,
         trustService,
+        () => 1,
         new TestLogger<DragnetTransportService>());
 
     await Assert.ThrowsAsync<InvalidOperationException>(() => transport.HandleHeartbeatAsync(new DragnetHeartbeatRequest
@@ -760,6 +805,7 @@ static async Task TestOutboundHeartbeatErrorIncludesBodyAsync()
         identityService,
         reviewService,
         trustService,
+        () => 1,
         new TestLogger<DragnetTransportService>(),
         httpClient);
 
@@ -810,6 +856,7 @@ static async Task TestOutboundHeartbeatUsesNumericEnumWireFormatAsync()
         identityService,
         reviewService,
         trustService,
+        () => 1,
         new TestLogger<DragnetTransportService>(),
         httpClient);
 

@@ -8,6 +8,7 @@ using Dragnet.Web;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SharedLibraryCore;
+using SharedLibraryCore.Helpers;
 using SharedLibraryCore.Interfaces;
 using SharedLibraryCore.Interfaces.Events;
 
@@ -21,6 +22,7 @@ public sealed class Plugin : IPluginV2
     private readonly DragnetImportService _importService;
     private readonly DragnetPeerStore _peerStore;
     private readonly DragnetTransportService _transportService;
+    private readonly DragnetStatisticsService _statisticsService;
     private readonly DragnetUpdateService _updateService;
     private readonly DragnetWebfrontService _webfrontService;
     private readonly IInteractionRegistration _interactionRegistration;
@@ -41,6 +43,7 @@ public sealed class Plugin : IPluginV2
         DragnetEventStore eventStore,
         DragnetPeerStore peerStore,
         DragnetTransportService transportService,
+        DragnetStatisticsService statisticsService,
         DragnetUpdateService updateService,
         DragnetWebfrontService webfrontService,
         IInteractionRegistration interactionRegistration,
@@ -53,6 +56,7 @@ public sealed class Plugin : IPluginV2
         _eventStore = eventStore;
         _peerStore = peerStore;
         _transportService = transportService;
+        _statisticsService = statisticsService;
         _updateService = updateService;
         _webfrontService = webfrontService;
         _interactionRegistration = interactionRegistration;
@@ -101,8 +105,23 @@ public sealed class Plugin : IPluginV2
         serviceCollection.AddSingleton<DragnetTrustService>();
         serviceCollection.AddSingleton<Func<IManager>>(serviceProvider =>
             () => serviceProvider.GetRequiredService<IManager>());
+        serviceCollection.AddSingleton<Func<int>>(serviceProvider =>
+        {
+            var managerFactory = serviceProvider.GetRequiredService<Func<IManager>>();
+            return () => managerFactory().GetServers().Count;
+        });
         serviceCollection.AddSingleton<DragnetImportService>();
         serviceCollection.AddSingleton<DragnetReviewService>();
+        serviceCollection.AddSingleton(serviceProvider =>
+        {
+            var eventStore = serviceProvider.GetRequiredService<DragnetEventStore>();
+            var peerStore = serviceProvider.GetRequiredService<DragnetPeerStore>();
+            var localServerCount = serviceProvider.GetRequiredService<Func<int>>();
+            return new DragnetStatisticsService(
+                eventStore,
+                peerStore,
+                localServerCount);
+        });
         serviceCollection.AddSingleton<DragnetTransportService>();
         serviceCollection.AddSingleton<DragnetUpdateService>();
         serviceCollection.AddSingleton<DragnetWebfrontService>();
@@ -113,6 +132,7 @@ public sealed class Plugin : IPluginV2
     {
         await _eventStore.LoadAsync(token);
         await _peerStore.LoadAsync(_configuration, token);
+        RegisterMessageTokens(manager);
         _interactionRegistration.RegisterInteraction(
             DragnetWebfrontService.NavigationInteractionId,
             (_, _, interactionToken) => _webfrontService.CreateNavigationInteractionAsync(interactionToken));
@@ -132,6 +152,32 @@ public sealed class Plugin : IPluginV2
             "Dragnet loaded for IW4MAdmin {Version} with {ServerCount} server(s)",
             manager.Version,
             manager.GetServers().Count);
+    }
+
+    private void RegisterMessageTokens(IManager manager)
+    {
+        var tokens = manager.GetMessageTokens();
+        foreach (var existing in tokens
+                     .Where(token => token.Name.StartsWith("DRAGNET", StringComparison.OrdinalIgnoreCase))
+                     .ToList())
+        {
+            tokens.Remove(existing);
+        }
+
+        tokens.Add(new MessageToken("DRAGNETSERVERS", async _ =>
+            (await _statisticsService.GetAsync(CancellationToken.None)).ParticipatingServerCount.ToString()));
+        tokens.Add(new MessageToken("DRAGNETNODES", async _ =>
+            (await _statisticsService.GetAsync(CancellationToken.None)).ParticipatingNodeCount.ToString()));
+        tokens.Add(new MessageToken("DRAGNETBANS", async _ =>
+            (await _statisticsService.GetAsync(CancellationToken.None)).SharedBanCount.ToString()));
+        tokens.Add(new MessageToken("DRAGNETSTATS", async _ =>
+        {
+            var statistics = await _statisticsService.GetAsync(CancellationToken.None);
+            return "(Color::Accent)DRAGNET (Color::White)connects " +
+                   $"(Color::Accent){statistics.ParticipatingServerCount} (Color::White)servers across " +
+                   $"(Color::Accent){statistics.ParticipatingNodeCount} (Color::White)networks and has shared " +
+                   $"(Color::Accent){statistics.SharedBanCount} (Color::White)bans.";
+        }));
     }
 
     public void Dispose()
