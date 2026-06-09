@@ -868,12 +868,15 @@ public sealed class DragnetWebfrontService
         DragnetUpdateStatus update,
         DateTimeOffset now)
     {
-        html.AppendLine("<div class=\"border border-line bg-surface/50 px-4 py-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between\">");
-        html.AppendLine("<div class=\"flex flex-wrap items-center gap-x-5 gap-y-2\">");
-        html.Append("<div><span class=\"text-sm text-muted\">Deployed</span><div class=\"font-semibold\">Dragnet ");
+        html.AppendLine("<div class=\"border border-line bg-surface/50\">");
+        html.AppendLine("<div class=\"grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4\">");
+        html.AppendLine("<div class=\"px-4 py-3 border-b sm:border-r xl:border-b-0 border-line/60\">");
+        html.Append("<div class=\"text-xs text-muted\">Deployed version</div><div class=\"mt-1 font-semibold\">Dragnet ");
         html.Append(Encode(update.CurrentVersion));
         html.AppendLine("</div></div>");
-        html.Append("<div><span class=\"text-sm text-muted\">Release status</span><div class=\"font-medium\">");
+
+        html.AppendLine("<div class=\"px-4 py-3 border-b xl:border-r xl:border-b-0 border-line/60\">");
+        html.Append("<div class=\"text-xs text-muted\">Release status</div><div class=\"mt-1 font-medium\">");
         if (update.UpdateAvailable)
         {
             html.Append("<span class=\"text-warning\">Update available: ");
@@ -894,32 +897,46 @@ public sealed class DragnetWebfrontService
         }
         else
         {
-            html.Append("<span class=\"text-muted\">Unavailable</span>");
+            html.Append("<span class=\"text-warning\">Check failed</span>");
         }
 
         html.AppendLine("</div></div>");
-        html.Append("<div><span class=\"text-sm text-muted\">Last checked</span><div class=\"font-medium\">");
+
+        html.AppendLine("<div class=\"px-4 py-3 border-b sm:border-b-0 sm:border-r border-line/60\">");
+        html.Append("<div class=\"text-xs text-muted\">Last checked</div><div class=\"mt-1 font-medium\">");
         html.Append(update.CheckedAtUtc is null
             ? "Not yet"
             : Encode(DescribeAge(now - update.CheckedAtUtc.Value)));
-        html.AppendLine("</div></div></div>");
+        if (!string.IsNullOrWhiteSpace(update.CheckError))
+        {
+            html.Append("<div class=\"mt-1 text-xs text-muted break-words\">");
+            html.Append(Encode(Shorten(update.CheckError, 120)));
+            html.Append("</div>");
+        }
 
-        html.AppendLine("<div class=\"flex items-center gap-3\">");
+        html.AppendLine("</div></div>");
+        html.AppendLine("<div class=\"px-4 py-3 flex flex-col justify-center\">");
+        html.AppendLine("<div class=\"text-xs text-muted\">Release channel</div>");
         if (update.UpdateAvailable && !string.IsNullOrWhiteSpace(update.ReleaseUrl))
         {
-            html.Append("<a class=\"text-primary hover:underline\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"");
+            html.Append("<a class=\"mt-1 text-primary hover:underline break-words\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"");
             html.Append(Encode(update.ReleaseUrl));
             html.AppendLine("\">View release</a>");
         }
         else
         {
-            html.Append("<a class=\"text-primary hover:underline\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"");
+            html.Append("<a class=\"mt-1 text-primary hover:underline\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"");
             html.Append(Encode(DragnetBuildInfo.RepositoryUrl + "/releases"));
-            html.AppendLine("\">Releases</a>");
+            html.AppendLine("\">GitHub releases</a>");
         }
 
-        html.AppendLine("</div></div>");
+        html.AppendLine("</div></div></div>");
     }
+
+    private static string Shorten(string value, int maximumLength) =>
+        value.Length <= maximumLength
+            ? value
+            : value[..Math.Max(0, maximumLength - 3)] + "...";
 
     private static DragnetEventFilter ParseFilter(IDictionary<string, string>? meta)
     {
