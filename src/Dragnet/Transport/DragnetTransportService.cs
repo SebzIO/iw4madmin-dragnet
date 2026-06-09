@@ -271,7 +271,13 @@ public sealed class DragnetTransportService : IDisposable
                 var action = envelope.EventType is DragnetEventType.BanLifted
                     ? DragnetReviewAction.ApproveLift
                     : DragnetReviewAction.ApproveBan;
-                var result = await _reviewService.ApplyActionAsync(envelope.EventId, action, "Auto-approved trusted origin", token);
+                var result = await _reviewService.ApplyActionAsync(
+                    envelope.EventId,
+                    action,
+                    "Auto-approved trusted origin",
+                    "Dragnet auto-approval",
+                    null,
+                    token);
                 if (!result.Success)
                 {
                     _logger.LogWarning(

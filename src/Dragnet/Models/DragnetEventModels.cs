@@ -100,11 +100,34 @@ public sealed record DragnetStoredEvent
 
     public string? LocalDecisionReason { get; set; }
 
+    public DateTimeOffset? ReviewedAtUtc { get; set; }
+
+    public int? ReviewedByClientId { get; set; }
+
+    public string? ReviewedByName { get; set; }
+
+    public List<DragnetReviewAuditEntry> AuditTrail { get; set; } = [];
+
     public int? ImportedPenaltyId { get; set; }
 
     public DateTimeOffset? ImportedAtUtc { get; set; }
 
     public string? ImportError { get; set; }
+}
+
+public sealed record DragnetReviewAuditEntry
+{
+    public required DateTimeOffset ReviewedAtUtc { get; init; }
+
+    public int? ReviewedByClientId { get; init; }
+
+    public required string ReviewedByName { get; init; }
+
+    public required DragnetReviewState PreviousState { get; init; }
+
+    public required DragnetReviewState NewState { get; init; }
+
+    public string? Reason { get; init; }
 }
 
 public static class DragnetJson

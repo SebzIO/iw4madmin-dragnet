@@ -218,6 +218,12 @@ public sealed class DragnetCommand : Command
         gameEvent.Origin.Tell($"Origin: {dragnetEvent.OriginName} / {dragnetEvent.OriginServerName}");
         gameEvent.Origin.Tell($"Penalty: {dragnetEvent.PenaltyKind}, IW4MAdmin #{dragnetEvent.Iw4mAdminPenaltyId}");
         gameEvent.Origin.Tell($"Reason: {dragnetEvent.Reason}");
+        if (item.ReviewedAtUtc is not null)
+        {
+            gameEvent.Origin.Tell(
+                $"Reviewed: {item.ReviewState} by {item.ReviewedByName ?? "Unknown"} at {item.ReviewedAtUtc:yyyy-MM-dd HH:mm} UTC");
+        }
+
         if (!string.IsNullOrWhiteSpace(dragnetEvent.EvidenceUrl))
         {
             gameEvent.Origin.Tell($"Evidence: {dragnetEvent.EvidenceUrl}");
@@ -238,7 +244,13 @@ public sealed class DragnetCommand : Command
 
         var action = ToAction(expectedState, targetState);
         var reason = args.Length > 2 ? string.Join(' ', args.Skip(2)) : null;
-        var result = await _reviewService.ApplyActionAsync(args[1], action, reason, CancellationToken.None);
+        var result = await _reviewService.ApplyActionAsync(
+            args[1],
+            action,
+            reason,
+            GetReviewerName(gameEvent),
+            gameEvent.Origin.ClientId,
+            CancellationToken.None);
         gameEvent.Origin.Tell(result.Message);
     }
 
@@ -323,6 +335,12 @@ public sealed class DragnetCommand : Command
     {
         gameEvent.Origin.Tell("Dragnet commands: pending, lifts, peers, peeradd <https-url> [originId], info <id>, approve <id>, deny <id> [reason], ignore <id>, trust <id>, trustauto <id>, untrust <id>, liftapprove <id>, liftdeny <id> [reason], identity");
     }
+
+    private static string GetReviewerName(GameEvent gameEvent) =>
+        gameEvent.Origin.CleanedName ??
+        gameEvent.Origin.CurrentAlias?.Name ??
+        gameEvent.Origin.Name ??
+        $"Client #{gameEvent.Origin.ClientId}";
 
     private static string[] SplitArgs(string? data)
     {

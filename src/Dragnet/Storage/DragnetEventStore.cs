@@ -123,6 +123,8 @@ public sealed class DragnetEventStore
         string eventId,
         DragnetReviewState reviewState,
         string? reason,
+        string reviewedByName,
+        int? reviewedByClientId,
         CancellationToken token)
     {
         await _lock.WaitAsync(token);
@@ -133,8 +135,23 @@ public sealed class DragnetEventStore
                 return;
             }
 
+            var reviewedAtUtc = DateTimeOffset.UtcNow;
+            var previousState = storedEvent.ReviewState;
             storedEvent.ReviewState = reviewState;
             storedEvent.LocalDecisionReason = reason;
+            storedEvent.ReviewedAtUtc = reviewedAtUtc;
+            storedEvent.ReviewedByName = reviewedByName;
+            storedEvent.ReviewedByClientId = reviewedByClientId;
+            storedEvent.AuditTrail ??= [];
+            storedEvent.AuditTrail.Add(new DragnetReviewAuditEntry
+            {
+                ReviewedAtUtc = reviewedAtUtc,
+                ReviewedByName = reviewedByName,
+                ReviewedByClientId = reviewedByClientId,
+                PreviousState = previousState,
+                NewState = reviewState,
+                Reason = reason
+            });
             await SaveUnlockedAsync(token);
         }
         finally

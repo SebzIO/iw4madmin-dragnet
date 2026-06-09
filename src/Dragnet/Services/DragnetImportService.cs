@@ -5,6 +5,7 @@ using Dragnet.Storage;
 using Microsoft.Extensions.Logging;
 using SharedLibraryCore;
 using SharedLibraryCore.Database.Models;
+using SharedLibraryCore.Events.Management;
 using SharedLibraryCore.Interfaces;
 
 namespace Dragnet.Services;
@@ -84,6 +85,29 @@ public sealed class DragnetImportService
             await _store.SetImportResultAsync(storedEvent.Event.EventId, false, null, ex.Message, token);
             _logger.LogWarning(ex, "Failed to import Dragnet event {EventId}", storedEvent.Event.EventId);
             return DragnetImportResult.Failed(ex.Message);
+        }
+    }
+
+    public async Task RetryQueuedForClientAsync(ClientStateEvent clientStateEvent, CancellationToken token)
+    {
+        var client = clientStateEvent.Client;
+        var queuedEvents = (await _store.ListAsync(token))
+            .Where(item => item.ReviewState is DragnetReviewState.ApprovedBan or DragnetReviewState.ApprovedLift)
+            .Where(item => item.ImportedAtUtc is null)
+            .Where(item => item.ImportError?.StartsWith("Queued:", StringComparison.OrdinalIgnoreCase) == true)
+            .Where(item => MatchesClient(item.Event, client))
+            .ToList();
+
+        foreach (var queuedEvent in queuedEvents)
+        {
+            var result = await ImportApprovedAsync(queuedEvent, token);
+            if (result.Imported)
+            {
+                _logger.LogInformation(
+                    "Imported queued Dragnet event {EventId} after client {ClientId} became known",
+                    queuedEvent.Event.EventId,
+                    client.ClientId);
+            }
         }
     }
 
@@ -195,6 +219,19 @@ public sealed class DragnetImportService
         return null;
     }
 
+    private static bool MatchesClient(DragnetEventEnvelope envelope, EFClient client)
+    {
+        if (!long.TryParse(envelope.PlayerNetworkId, out var networkId) ||
+            client.NetworkId != networkId)
+        {
+            return false;
+        }
+
+        return string.IsNullOrWhiteSpace(envelope.PlayerGame) ||
+               !Enum.TryParse<Reference.Game>(envelope.PlayerGame, true, out var game) ||
+               client.GameName == game;
+    }
+
     private EFClient? CreateConsoleClient()
     {
         var server = _managerFactory().GetServers().FirstOrDefault();
@@ -213,5 +250,5 @@ public sealed record DragnetImportResult(bool Success, bool Imported, string Mes
 
     public static DragnetImportResult Failed(string message) => new(false, false, message);
 
-    public static DragnetImportResult Queued(string message) => new(false, false, message);
+    public static DragnetImportResult Queued(string message) => new(true, false, message);
 }

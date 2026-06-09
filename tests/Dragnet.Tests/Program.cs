@@ -97,7 +97,10 @@ static async Task TestReviewTransitionsAsync()
         managerFactory: () => null!,
         logger: new TestLogger<DragnetImportService>());
     var reviewService = new DragnetReviewService(store, importService, trustService);
-    var pendingBan = CreateEnvelope(originId: "origin-2", eventType: DragnetEventType.BanCreated);
+    var pendingBan = CreateEnvelope(originId: "origin-2", eventType: DragnetEventType.BanCreated) with
+    {
+        PlayerNetworkId = "not-a-network-id"
+    };
 
     await store.UpsertAsync(new DragnetStoredEvent
     {
@@ -105,17 +108,57 @@ static async Task TestReviewTransitionsAsync()
         ReviewState = DragnetReviewState.PendingBan
     }, CancellationToken.None);
 
-    var approval = await reviewService.ApplyActionAsync(pendingBan.EventId, DragnetReviewAction.ApproveBan, null, CancellationToken.None);
+    var approval = await reviewService.ApplyActionAsync(
+        pendingBan.EventId,
+        DragnetReviewAction.ApproveBan,
+        null,
+        "Reviewer",
+        42,
+        CancellationToken.None);
     Assert.False(approval.Success, "untrusted approval should fail");
     Assert.Contains("not trusted", approval.Message, "failure should explain trust gate");
 
-    var denial = await reviewService.ApplyActionAsync(pendingBan.EventId, DragnetReviewAction.DenyBan, "local note", CancellationToken.None);
+    await trustService.TrustAsync(pendingBan.OriginId, pendingBan.OriginName, false, false, CancellationToken.None);
+    approval = await reviewService.ApplyActionAsync(
+        pendingBan.EventId,
+        DragnetReviewAction.ApproveBan,
+        null,
+        "Reviewer",
+        42,
+        CancellationToken.None);
+    Assert.True(approval.Success, "trusted approval should succeed even when import queues");
+    Assert.Contains("Queued", approval.Message, "approval should explain queued import state");
+    var stored = await store.GetAsync(pendingBan.EventId, CancellationToken.None);
+    Assert.NotNull(stored, "approved queued event should remain stored");
+    Assert.Equal(DragnetReviewState.ApprovedBan, stored!.ReviewState, "queued import should still record approval");
+    Assert.Contains("Queued", stored.ImportError ?? "", "queued import should persist import error");
+    Assert.Equal("Reviewer", stored.ReviewedByName, "reviewer name should be recorded");
+    Assert.Equal(42, stored.ReviewedByClientId, "reviewer client id should be recorded");
+    Assert.Equal(1, stored.AuditTrail.Count, "review action should append one audit entry");
+    Assert.Equal(DragnetReviewState.PendingBan, stored.AuditTrail[0].PreviousState, "audit should record previous state");
+    Assert.Equal(DragnetReviewState.ApprovedBan, stored.AuditTrail[0].NewState, "audit should record new state");
+
+    var secondPendingBan = CreateEnvelope(originId: "origin-3", eventType: DragnetEventType.BanCreated);
+    await store.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = secondPendingBan,
+        ReviewState = DragnetReviewState.PendingBan
+    }, CancellationToken.None);
+
+    var denial = await reviewService.ApplyActionAsync(
+        secondPendingBan.EventId,
+        DragnetReviewAction.DenyBan,
+        "local note",
+        "Second Reviewer",
+        84,
+        CancellationToken.None);
     Assert.True(denial.Success, "deny should succeed without trust");
 
-    var stored = await store.GetAsync(pendingBan.EventId, CancellationToken.None);
+    stored = await store.GetAsync(secondPendingBan.EventId, CancellationToken.None);
     Assert.NotNull(stored, "stored event should exist");
     Assert.Equal(DragnetReviewState.DeniedBan, stored!.ReviewState, "event should be denied");
     Assert.Equal("local note", stored.LocalDecisionReason, "decision note should be stored");
+    Assert.Equal("Second Reviewer", stored.ReviewedByName, "denial reviewer should be recorded");
 }
 
 static async Task TestPeerStoreAsync()
@@ -294,7 +337,7 @@ static async Task TestImportServiceQueuesUnknownPlayersAsync()
 
     var result = await importService.ImportApprovedAsync(storedEvent, CancellationToken.None);
 
-    Assert.False(result.Success, "unknown player import should queue instead of succeeding");
+    Assert.True(result.Success, "unknown player import should queue successfully");
     Assert.False(result.Imported, "unknown player import should not mark imported");
     Assert.Contains("Queued", result.Message, "unknown player import should explain queue state");
 

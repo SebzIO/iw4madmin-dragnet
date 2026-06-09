@@ -22,8 +22,9 @@ This repository is in the MVP testing stage. The current implementation:
 - supports webfront peer health, stale-peer visibility, error clearing, and discovered-peer removal
 - supports webfront-first approve, deny, ignore, retry-import, and trust decisions
 - supports webfront event filters and event detail inspection
+- records reviewer identity, decision time, state transition, and reason in a persistent audit trail
 - imports approved remote bans and lifts into IW4MAdmin
-- queues unknown-player import failures for later retry from the webfront
+- queues unknown-player imports and retries them automatically when the player becomes known locally
 - registers the `!dragnet` / `!dn` command for local review state management
 - supports command-based peer seeding with `!dragnet peeradd`
 - omits IP addresses from the event model

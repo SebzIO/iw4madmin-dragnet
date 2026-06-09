@@ -18,6 +18,7 @@ public sealed class Plugin : IPluginV2
     private readonly ILogger<Plugin> _logger;
     private readonly DragnetLocalEventService _localEventService;
     private readonly DragnetEventStore _eventStore;
+    private readonly DragnetImportService _importService;
     private readonly DragnetPeerStore _peerStore;
     private readonly DragnetTransportService _transportService;
     private readonly DragnetWebfrontService _webfrontService;
@@ -35,6 +36,7 @@ public sealed class Plugin : IPluginV2
         ILogger<Plugin> logger,
         DragnetConfiguration configuration,
         DragnetLocalEventService localEventService,
+        DragnetImportService importService,
         DragnetEventStore eventStore,
         DragnetPeerStore peerStore,
         DragnetTransportService transportService,
@@ -45,6 +47,7 @@ public sealed class Plugin : IPluginV2
         _logger = logger;
         _configuration = configuration;
         _localEventService = localEventService;
+        _importService = importService;
         _eventStore = eventStore;
         _peerStore = peerStore;
         _transportService = transportService;
@@ -55,6 +58,8 @@ public sealed class Plugin : IPluginV2
         IManagementEventSubscriptions.Load += OnLoad;
         IManagementEventSubscriptions.ClientPenaltyAdministered += _localEventService.CapturePenaltyAsync;
         IManagementEventSubscriptions.ClientPenaltyRevoked += _localEventService.CapturePenaltyRevokeAsync;
+        IManagementEventSubscriptions.ClientStateInitialized += _importService.RetryQueuedForClientAsync;
+        IManagementEventSubscriptions.ClientStateAuthorized += _importService.RetryQueuedForClientAsync;
 
         _logger.LogInformation(
             "Dragnet {Version} initialized as {OriginName} ({OriginId})",
@@ -129,6 +134,8 @@ public sealed class Plugin : IPluginV2
         IManagementEventSubscriptions.Load -= OnLoad;
         IManagementEventSubscriptions.ClientPenaltyAdministered -= _localEventService.CapturePenaltyAsync;
         IManagementEventSubscriptions.ClientPenaltyRevoked -= _localEventService.CapturePenaltyRevokeAsync;
+        IManagementEventSubscriptions.ClientStateInitialized -= _importService.RetryQueuedForClientAsync;
+        IManagementEventSubscriptions.ClientStateAuthorized -= _importService.RetryQueuedForClientAsync;
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.NavigationInteractionId);
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.ReviewInteractionId);
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.TrustInteractionId);

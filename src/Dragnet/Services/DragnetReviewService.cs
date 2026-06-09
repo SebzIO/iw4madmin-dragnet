@@ -35,6 +35,8 @@ public sealed class DragnetReviewService
         string eventId,
         DragnetReviewAction action,
         string? reason,
+        string reviewedByName,
+        int? reviewedByClientId,
         CancellationToken token)
     {
         var item = await FindByPrefixAsync(eventId, token);
@@ -66,11 +68,21 @@ public sealed class DragnetReviewService
                 $"Dragnet import failed: {importResult.Message}");
         }
 
-        await _store.SetReviewStateAsync(item.Match.Event.EventId, targetState, reason, token);
+        await _store.SetReviewStateAsync(
+            item.Match.Event.EventId,
+            targetState,
+            reason,
+            reviewedByName,
+            reviewedByClientId,
+            token);
         var message = $"Dragnet event {ShortId(item.Match.Event.EventId)} marked {targetState}.";
         if (importResult is { Imported: true })
         {
             message += " Imported into IW4MAdmin.";
+        }
+        else if (importResult is { Imported: false })
+        {
+            message += $" {importResult.Message}";
         }
 
         return DragnetReviewResult.Succeeded(message);
