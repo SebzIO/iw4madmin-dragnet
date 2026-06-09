@@ -79,9 +79,11 @@ public sealed class DragnetController : ControllerBase
             Enabled = _configuration.Enabled,
             Version = DragnetBuildInfo.Version,
             LatestVersion = update.LatestVersion,
+            LatestReleaseUrl = update.ReleaseUrl,
             UpdateAvailable = update.UpdateAvailable,
             UpdateCheckEnabled = update.CheckEnabled,
             UpdateCheckedAtUtc = update.CheckedAtUtc,
+            UpdateCheckError = update.CheckError,
             PublicEndpoint = _configuration.PublicEndpoint,
             PeerCount = peers.Count,
             HealthyPeerCount = peers.Count(peer =>
@@ -128,11 +130,15 @@ public sealed record DragnetStatusResponse
 
     public string? LatestVersion { get; init; }
 
+    public string? LatestReleaseUrl { get; init; }
+
     public required bool UpdateAvailable { get; init; }
 
     public required bool UpdateCheckEnabled { get; init; }
 
     public DateTimeOffset? UpdateCheckedAtUtc { get; init; }
+
+    public string? UpdateCheckError { get; init; }
 
     public string? PublicEndpoint { get; init; }
 
