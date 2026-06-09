@@ -39,6 +39,8 @@ public sealed class DragnetPeerStore
 
                     _peers[peer.OriginId] = peer;
                 }
+
+                RemoveDuplicateProvisionalEndpoints();
             }
 
             foreach (var peer in configuration.BootstrapPeers.Where(peer => peer.Enabled && !string.IsNullOrWhiteSpace(peer.Endpoint)))
@@ -103,10 +105,34 @@ public sealed class DragnetPeerStore
         await _lock.WaitAsync(token);
         try
         {
+            var normalizedEndpoint = peerInfo.PublicEndpoint.TrimEnd('/');
+            var endpointMatch = _peers.Values.FirstOrDefault(peer =>
+                peer.Endpoint.TrimEnd('/').Equals(normalizedEndpoint, StringComparison.OrdinalIgnoreCase));
+
+            if (endpointMatch is not null &&
+                !endpointMatch.OriginId.Equals(peerInfo.OriginId, StringComparison.OrdinalIgnoreCase))
+            {
+                if (IsProvisionalOriginId(peerInfo.OriginId) &&
+                    !IsProvisionalOriginId(endpointMatch.OriginId))
+                {
+                    endpointMatch.LastSeenUtc = DateTimeOffset.UtcNow;
+                    endpointMatch.ServerCount = Math.Max(endpointMatch.ServerCount, peerInfo.ServerCount);
+                    ClearFailureState(endpointMatch);
+                    await SaveUnlockedAsync(token);
+                    return;
+                }
+
+                if (!IsProvisionalOriginId(peerInfo.OriginId) &&
+                    IsProvisionalOriginId(endpointMatch.OriginId))
+                {
+                    _peers.Remove(endpointMatch.OriginId);
+                }
+            }
+
             if (_peers.TryGetValue(peerInfo.OriginId, out var existing))
             {
                 existing.OriginName = peerInfo.OriginName;
-                existing.Endpoint = peerInfo.PublicEndpoint.TrimEnd('/');
+                existing.Endpoint = normalizedEndpoint;
                 existing.LastSeenUtc = DateTimeOffset.UtcNow;
                 existing.ServerCount = peerInfo.ServerCount;
                 ClearFailureState(existing);
@@ -117,7 +143,7 @@ public sealed class DragnetPeerStore
                 {
                     OriginId = peerInfo.OriginId,
                     OriginName = peerInfo.OriginName,
-                    Endpoint = peerInfo.PublicEndpoint.TrimEnd('/'),
+                    Endpoint = normalizedEndpoint,
                     ServerCount = peerInfo.ServerCount,
                     LastSeenUtc = DateTimeOffset.UtcNow
                 };
@@ -347,6 +373,45 @@ public sealed class DragnetPeerStore
     {
         return !string.IsNullOrWhiteSpace(publicEndpoint) &&
                value.TrimEnd('/').Equals(publicEndpoint.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsProvisionalOriginId(string originId) =>
+        Uri.TryCreate(originId, UriKind.Absolute, out _);
+
+    private void RemoveDuplicateProvisionalEndpoints()
+    {
+        var duplicateGroups = _peers.Values
+            .GroupBy(peer => peer.Endpoint.TrimEnd('/'), StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1)
+            .ToList();
+
+        foreach (var group in duplicateGroups)
+        {
+            var canonical = group
+                .Where(peer => !IsProvisionalOriginId(peer.OriginId))
+                .OrderByDescending(peer => peer.IsBootstrap)
+                .ThenByDescending(peer => peer.LastSeenUtc)
+                .FirstOrDefault();
+            if (canonical is null)
+            {
+                continue;
+            }
+
+            foreach (var provisional in group.Where(peer =>
+                         peer.OriginId != canonical.OriginId &&
+                         IsProvisionalOriginId(peer.OriginId)))
+            {
+                canonical.IsBootstrap |= provisional.IsBootstrap;
+                canonical.ServerCount = Math.Max(canonical.ServerCount, provisional.ServerCount);
+                if (canonical.LastEventSentAtUtc is null ||
+                    provisional.LastEventSentAtUtc > canonical.LastEventSentAtUtc)
+                {
+                    canonical.LastEventSentAtUtc = provisional.LastEventSentAtUtc;
+                }
+
+                _peers.Remove(provisional.OriginId);
+            }
+        }
     }
 
     private static void ClearFailureState(DragnetPeerRecord peer)

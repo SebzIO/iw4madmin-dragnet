@@ -203,6 +203,17 @@ static async Task TestPeerStoreAsync()
         PublicEndpoint = "https://discovered.example/dragnet",
         ServerCount = 3
     }, CancellationToken.None);
+    await store.UpsertAsync(new DragnetPeerInfo
+    {
+        OriginId = "https://discovered.example/dragnet",
+        OriginName = "https://discovered.example/dragnet",
+        PublicEndpoint = "https://discovered.example/dragnet"
+    }, CancellationToken.None);
+    Assert.Equal(
+        1,
+        (await store.ListAsync(CancellationToken.None)).Count(peer =>
+            peer.Endpoint == "https://discovered.example/dragnet"),
+        "provisional gossip identity should not duplicate a canonical endpoint");
     await store.AddManualPeerAsync("https://manual.example/dragnet", null, CancellationToken.None);
     await store.UpsertAsync(new DragnetPeerInfo
     {
@@ -282,6 +293,10 @@ static async Task TestStatisticsAsync()
         PublicEndpoint = "https://remote.example/dragnet",
         ServerCount = 3
     }, CancellationToken.None);
+    await peerStore.AddManualPeerAsync(
+        "https://remote.example/dragnet",
+        "https://remote.example/dragnet",
+        CancellationToken.None);
     await eventStore.UpsertAsync(new DragnetStoredEvent
     {
         Event = CreateEnvelope("local", DragnetEventType.BanCreated),
@@ -301,7 +316,7 @@ static async Task TestStatisticsAsync()
     var service = new DragnetStatisticsService(eventStore, peerStore, () => 5);
     var statistics = await service.GetAsync(CancellationToken.None);
 
-    Assert.Equal(8, statistics.ParticipatingServerCount, "statistics should sum local and peer server counts");
+    Assert.Equal(8, statistics.ParticipatingServerCount, "statistics should deduplicate server counts by endpoint");
     Assert.Equal(2, statistics.ParticipatingNodeCount, "statistics should include local and peer nodes");
     Assert.Equal(2, statistics.SharedBanCount, "statistics should count unique ban-created events");
 }

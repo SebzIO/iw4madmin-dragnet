@@ -23,14 +23,18 @@ public sealed class DragnetStatisticsService
     {
         var events = await _eventStore.ListAsync(token);
         var peers = await _peerStore.ListAsync(token);
+        var peerNodes = peers
+            .GroupBy(peer => peer.Endpoint.TrimEnd('/'), StringComparer.OrdinalIgnoreCase)
+            .ToList();
         var localServerCount = _localServerCount();
         var participatingServerCount = Math.Max(0, localServerCount) +
-                                       peers.Sum(peer => Math.Clamp(peer.ServerCount, 1, 10_000));
+                                       peerNodes.Sum(node =>
+                                           node.Max(peer => Math.Clamp(peer.ServerCount, 1, 10_000)));
         var sharedBanCount = events.Count(item => item.Event.EventType is DragnetEventType.BanCreated);
 
         return new DragnetStatistics(
             ParticipatingServerCount: participatingServerCount,
-            ParticipatingNodeCount: peers.Count + 1,
+            ParticipatingNodeCount: peerNodes.Count + 1,
             SharedBanCount: sharedBanCount);
     }
 }
