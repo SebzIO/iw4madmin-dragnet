@@ -29,6 +29,7 @@ public sealed class DragnetWebfrontService
     private readonly DragnetTrustService _trustService;
     private readonly DragnetUpdateService _updateService;
     private readonly DragnetOnboardingService _onboardingService;
+    private readonly DragnetDirectoryService _directoryService;
     private readonly DragnetIdentityDocument _identity;
     private readonly IConfigurationHandlerV2<DragnetConfiguration> _configurationHandler;
     private readonly Func<IManager> _managerFactory;
@@ -41,6 +42,7 @@ public sealed class DragnetWebfrontService
         DragnetTrustService trustService,
         DragnetUpdateService updateService,
         DragnetOnboardingService onboardingService,
+        DragnetDirectoryService directoryService,
         DragnetIdentityDocument identity,
         IConfigurationHandlerV2<DragnetConfiguration> configurationHandler,
         Func<IManager> managerFactory)
@@ -52,6 +54,7 @@ public sealed class DragnetWebfrontService
         _trustService = trustService;
         _updateService = updateService;
         _onboardingService = onboardingService;
+        _directoryService = directoryService;
         _identity = identity;
         _configurationHandler = configurationHandler;
         _managerFactory = managerFactory;
@@ -152,6 +155,7 @@ public sealed class DragnetWebfrontService
     {
         await _updateService.RefreshForPageLoadAsync(token);
         var onboarding = await _onboardingService.GetStatusAsync(token);
+        var directory = await _directoryService.ListAsync(token);
         var events = await _eventStore.ListAsync(token);
         var peers = await _peerStore.ListAsync(token);
         var filter = ParseFilter(meta);
@@ -182,6 +186,7 @@ public sealed class DragnetWebfrontService
         html.AppendLine("<div class=\"space-y-6\">");
         AppendOperationalHeader(html, updateStatus, now);
         AppendOnboardingPanel(html, onboarding);
+        AppendDirectoryPanel(html, directory, now);
         html.AppendLine("<div class=\"grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-4\">");
         AppendMetric(html, "Pending bans", pendingBans.ToString());
         AppendMetric(html, "Pending lifts", pendingLifts.ToString());
@@ -441,16 +446,39 @@ public sealed class DragnetWebfrontService
         publicEndpoint = publicEndpoint.Trim().TrimEnd('/');
         meta.TryGetValue("BootstrapEndpoint", out var bootstrapEndpoint);
         bootstrapEndpoint = bootstrapEndpoint?.Trim().TrimEnd('/');
+        meta.TryGetValue("DirectoryListingEnabled", out var directoryListingValue);
+        meta.TryGetValue("DirectoryRegion", out var directoryRegion);
+        meta.TryGetValue("DirectoryWebsite", out var directoryWebsite);
+        directoryRegion = directoryRegion?.Trim();
+        directoryWebsite = directoryWebsite?.Trim().TrimEnd('/');
 
         if (string.IsNullOrWhiteSpace(originName))
         {
             return "Network name is required.";
         }
 
+        if (originName.Length > 120)
+        {
+            return "Network name must be 120 characters or fewer.";
+        }
+
         if (!Uri.TryCreate(publicEndpoint, UriKind.Absolute, out var publicUri) ||
             publicUri.Scheme != Uri.UriSchemeHttps)
         {
             return "Public endpoint must be an absolute HTTPS URL.";
+        }
+
+        var directoryListingEnabled = IsEnabledValue(directoryListingValue);
+        if (directoryRegion?.Length > 80)
+        {
+            return "Directory region must be 80 characters or fewer.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(directoryWebsite) &&
+            (!Uri.TryCreate(directoryWebsite, UriKind.Absolute, out var directoryWebsiteUri) ||
+             directoryWebsiteUri.Scheme != Uri.UriSchemeHttps))
+        {
+            return "Directory website must be an absolute HTTPS URL.";
         }
 
         if (!string.IsNullOrWhiteSpace(bootstrapEndpoint))
@@ -481,6 +509,9 @@ public sealed class DragnetWebfrontService
 
         _configuration.OriginName = originName;
         _configuration.PublicEndpoint = publicEndpoint;
+        _configuration.DirectoryListingEnabled = directoryListingEnabled;
+        _configuration.DirectoryRegion = string.IsNullOrWhiteSpace(directoryRegion) ? null : directoryRegion;
+        _configuration.DirectoryWebsite = string.IsNullOrWhiteSpace(directoryWebsite) ? null : directoryWebsite;
         await _configurationHandler.Set(_configuration);
         _onboardingService.Invalidate();
         return "Dragnet configuration saved. Restart IW4MAdmin to apply the network identity and endpoint everywhere.";
@@ -1077,7 +1108,7 @@ public sealed class DragnetWebfrontService
     {
         var seed = _configuration.BootstrapPeers
             .FirstOrDefault(peer => peer.Enabled && !string.IsNullOrWhiteSpace(peer.Endpoint))
-            ?.Endpoint ?? "";
+            ?.Endpoint ?? DragnetConfiguration.OfficialBootstrapEndpoint;
         return JsonSerializer.Serialize(new List<Dictionary<string, object?>>
         {
             new()
@@ -1097,12 +1128,91 @@ public sealed class DragnetWebfrontService
             new()
             {
                 ["Name"] = "BootstrapEndpoint",
-                ["Label"] = "Bootstrap peer (optional)",
+                ["Label"] = "Bootstrap peer",
                 ["Value"] = seed,
-                ["Placeholder"] = "https://peer.example.com/dragnet"
+                ["Placeholder"] = DragnetConfiguration.OfficialBootstrapEndpoint
+            },
+            new()
+            {
+                ["Name"] = "DirectoryListingEnabled",
+                ["Label"] = "Publish in community directory (yes/no)",
+                ["Value"] = _configuration.DirectoryListingEnabled ? "yes" : "no",
+                ["Placeholder"] = "no"
+            },
+            new()
+            {
+                ["Name"] = "DirectoryRegion",
+                ["Label"] = "Directory region (optional)",
+                ["Value"] = _configuration.DirectoryRegion ?? "",
+                ["Placeholder"] = "Europe"
+            },
+            new()
+            {
+                ["Name"] = "DirectoryWebsite",
+                ["Label"] = "Community website (optional HTTPS)",
+                ["Value"] = _configuration.DirectoryWebsite ?? "",
+                ["Placeholder"] = "https://community.example.com"
             }
         });
     }
+
+    private static void AppendDirectoryPanel(
+        StringBuilder html,
+        IReadOnlyList<DragnetDirectoryEntry> entries,
+        DateTimeOffset now)
+    {
+        html.AppendLine("<div class=\"border border-line bg-surface/50 overflow-hidden\">");
+        html.AppendLine("<div class=\"px-4 py-3 border-b border-line flex flex-col md:flex-row md:items-center md:justify-between gap-2\">");
+        html.AppendLine("<div><h3 class=\"font-semibold\">Community directory</h3>");
+        html.AppendLine("<div class=\"text-sm text-muted\">Public, opt-in network listings. Directory presence does not grant trust.</div></div>");
+        html.Append("<a class=\"text-sm text-primary hover:underline\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"/dragnet/directory\">");
+        html.Append(Encode($"{entries.Count} live listing{(entries.Count == 1 ? "" : "s")}"));
+        html.AppendLine("</a></div>");
+        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3\">Network</th><th class=\"px-4 py-3\">Region</th><th class=\"px-4 py-3\">Servers</th><th class=\"px-4 py-3\">Version</th><th class=\"px-4 py-3\">Seen</th></tr></thead><tbody>");
+        if (entries.Count == 0)
+        {
+            html.AppendLine("<tr><td colspan=\"5\" class=\"px-4 py-5 text-center text-muted\">No live networks have opted into directory publication.</td></tr>");
+        }
+        else
+        {
+            foreach (var entry in entries)
+            {
+                html.AppendLine("<tr class=\"border-b border-line/60\">");
+                html.Append("<td class=\"px-4 py-3 font-medium\">");
+                if (!string.IsNullOrWhiteSpace(entry.Website))
+                {
+                    html.Append("<a class=\"text-primary hover:underline\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"");
+                    html.Append(Encode(entry.Website));
+                    html.Append("\">");
+                    html.Append(Encode(entry.OriginName));
+                    html.Append("</a>");
+                }
+                else
+                {
+                    html.Append(Encode(entry.OriginName));
+                }
+
+                html.Append("</td><td class=\"px-4 py-3 text-muted\">");
+                html.Append(Encode(entry.Region ?? "Not specified"));
+                html.Append("</td><td class=\"px-4 py-3\">");
+                html.Append(Encode(entry.ServerCount.ToString()));
+                html.Append("</td><td class=\"px-4 py-3 text-muted\">");
+                html.Append(Encode(entry.Version ?? "Unknown"));
+                html.Append("</td><td class=\"px-4 py-3 text-muted\">");
+                html.Append(Encode(DescribeAge(now - entry.LastSeenUtc)));
+                html.AppendLine("</td></tr>");
+            }
+        }
+
+        html.AppendLine("</tbody></table></div></div>");
+    }
+
+    private static bool IsEnabledValue(string? value) =>
+        value is not null &&
+        (value.Equals("yes", StringComparison.OrdinalIgnoreCase) ||
+         value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+         value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+         value.Equals("on", StringComparison.OrdinalIgnoreCase));
 
     private static void AppendOperationalHeader(
         StringBuilder html,

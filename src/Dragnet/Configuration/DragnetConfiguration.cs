@@ -4,11 +4,19 @@ namespace Dragnet.Configuration;
 
 public sealed class DragnetConfiguration
 {
+    public const string OfficialBootstrapEndpoint = "https://mw2.sebz.xyz/dragnet";
+
     public bool Enabled { get; set; } = true;
 
     public string OriginName { get; set; } = "Unnamed Dragnet Origin";
 
     public string? PublicEndpoint { get; set; }
+
+    public bool DirectoryListingEnabled { get; set; }
+
+    public string? DirectoryRegion { get; set; }
+
+    public string? DirectoryWebsite { get; set; }
 
     public string DataDirectory { get; set; } = "Configuration/Dragnet";
 
@@ -53,6 +61,18 @@ public sealed class DragnetConfiguration
     public List<DragnetPeerConfiguration> BootstrapPeers { get; set; } = [];
 
     public List<DragnetTrustConfiguration> TrustedOrigins { get; set; } = [];
+
+    public static DragnetConfiguration CreateDefault() => new()
+    {
+        BootstrapPeers =
+        [
+            new DragnetPeerConfiguration
+            {
+                Endpoint = OfficialBootstrapEndpoint,
+                Enabled = true
+            }
+        ]
+    };
 }
 
 public sealed class DragnetPeerConfiguration

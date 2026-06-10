@@ -348,7 +348,11 @@ public sealed class DragnetTransportService : IDisposable
             {
                 throw new InvalidOperationException("Known peer endpoint must be absolute HTTPS.");
             }
+
+            ValidateDirectoryMetadata(peer);
         }
+
+        ValidateDirectoryMetadata(request.Sender);
     }
 
     private DragnetPeerInfo CreateLocalPeerInfo() => new()
@@ -357,6 +361,10 @@ public sealed class DragnetTransportService : IDisposable
         OriginName = _identity.OriginName,
         PublicEndpoint = _configuration.PublicEndpoint,
         ServerCount = _localServerCount(),
+        DirectoryListed = _configuration.DirectoryListingEnabled,
+        Region = NormalizeMetadata(_configuration.DirectoryRegion),
+        Website = NormalizeMetadata(_configuration.DirectoryWebsite),
+        Version = DragnetBuildInfo.Version,
         SeenAtUtc = DateTimeOffset.UtcNow
     };
 
@@ -372,6 +380,10 @@ public sealed class DragnetTransportService : IDisposable
                 OriginName = peer.OriginName,
                 PublicEndpoint = peer.Endpoint,
                 ServerCount = peer.ServerCount,
+                DirectoryListed = peer.DirectoryListed,
+                Region = peer.Region,
+                Website = peer.Website,
+                Version = peer.Version,
                 SeenAtUtc = peer.LastSeenUtc
             })
             .ToList();
@@ -418,6 +430,26 @@ public sealed class DragnetTransportService : IDisposable
 
         return !_configuration.RequireHttps || uri.Scheme == Uri.UriSchemeHttps;
     }
+
+    private static void ValidateDirectoryMetadata(DragnetPeerInfo peer)
+    {
+        if (peer.OriginName.Length > 120 ||
+            peer.Region?.Length > 80 ||
+            peer.Version?.Length > 40)
+        {
+            throw new InvalidOperationException("Heartbeat directory metadata exceeds allowed lengths.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(peer.Website) &&
+            (!Uri.TryCreate(peer.Website, UriKind.Absolute, out var website) ||
+             website.Scheme != Uri.UriSchemeHttps))
+        {
+            throw new InvalidOperationException("Heartbeat directory website must be an absolute HTTPS URL.");
+        }
+    }
+
+    private static string? NormalizeMetadata(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private bool IsLocalPeer(DragnetPeerInfo peer)
     {

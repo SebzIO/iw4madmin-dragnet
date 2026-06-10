@@ -37,7 +37,7 @@ Dragnet for IW4MAdmin
 
 1. Copy Plugins/Dragnet.dll into your IW4MAdmin Plugins directory.
 2. Start IW4MAdmin once so DragnetSettings is created, or copy Configuration/DragnetSettings.example.json to your IW4MAdmin Configuration directory and rename it to DragnetSettings.json.
-3. Configure OriginName, PublicEndpoint, BootstrapPeers, and permission settings.
+3. Configure OriginName, PublicEndpoint, optional directory listing metadata, BootstrapPeers, and permission settings.
 4. Restart IW4MAdmin.
 5. If IW4MAdmin is behind a reverse proxy, enable WebSocket support for the IW4MAdmin webfront host.
 

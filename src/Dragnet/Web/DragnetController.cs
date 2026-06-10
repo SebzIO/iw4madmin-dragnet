@@ -19,6 +19,7 @@ public sealed class DragnetController : ControllerBase
     private readonly DragnetPeerStore _peerStore;
     private readonly DragnetTransportService _transportService;
     private readonly DragnetUpdateService _updateService;
+    private readonly DragnetDirectoryService _directoryService;
     private readonly DragnetIdentityDocument _identity;
     private readonly Func<int> _localServerCount;
 
@@ -28,6 +29,7 @@ public sealed class DragnetController : ControllerBase
         DragnetPeerStore peerStore,
         DragnetTransportService transportService,
         DragnetUpdateService updateService,
+        DragnetDirectoryService directoryService,
         DragnetIdentityDocument identity,
         Func<int> localServerCount)
     {
@@ -36,6 +38,7 @@ public sealed class DragnetController : ControllerBase
         _peerStore = peerStore;
         _transportService = transportService;
         _updateService = updateService;
+        _directoryService = directoryService;
         _identity = identity;
         _localServerCount = localServerCount;
     }
@@ -51,6 +54,12 @@ public sealed class DragnetController : ControllerBase
         OriginName = _identity.OriginName,
         ServerCount = Math.Max(0, _localServerCount())
     });
+
+    [AllowAnonymous]
+    [HttpGet("/dragnet/directory")]
+    [ProducesResponseType<IReadOnlyList<DragnetDirectoryEntry>>(StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<DragnetDirectoryEntry>>> Directory(CancellationToken token) =>
+        Ok(await _directoryService.ListAsync(token));
 
     [AllowAnonymous]
     [IgnoreAntiforgeryToken]

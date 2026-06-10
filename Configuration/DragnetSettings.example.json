@@ -2,6 +2,9 @@
   "enabled": true,
   "originName": "Sebz.XYZ",
   "publicEndpoint": "https://example.com/dragnet",
+  "directoryListingEnabled": false,
+  "directoryRegion": "North America",
+  "directoryWebsite": "https://example.com",
   "dataDirectory": "Configuration/Dragnet",
   "requireHttps": true,
   "trustForwardedHttpsHeader": true,
@@ -23,7 +26,7 @@
   "commandPermission": "Administrator",
   "bootstrapPeers": [
     {
-      "endpoint": "https://peer.example.com/dragnet",
+      "endpoint": "https://mw2.sebz.xyz/dragnet",
       "expectedOriginId": null,
       "enabled": true
     }

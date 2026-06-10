@@ -12,6 +12,14 @@ public sealed record DragnetPeerInfo
 
     public int ServerCount { get; init; }
 
+    public bool DirectoryListed { get; init; }
+
+    public string? Region { get; init; }
+
+    public string? Website { get; init; }
+
+    public string? Version { get; init; }
+
     public DateTimeOffset SeenAtUtc { get; init; } = DateTimeOffset.UtcNow;
 }
 
@@ -56,6 +64,14 @@ public sealed record DragnetPeerRecord
     public string? LastFailureMessage { get; set; }
 
     public int ServerCount { get; set; }
+
+    public bool DirectoryListed { get; set; }
+
+    public string? Region { get; set; }
+
+    public string? Website { get; set; }
+
+    public string? Version { get; set; }
 
     public bool IsBootstrap { get; set; }
 }

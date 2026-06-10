@@ -79,7 +79,7 @@ public sealed class Plugin : IPluginV2
     {
         serviceCollection.AddConfiguration<DragnetConfiguration>(
             "DragnetSettings",
-            new DragnetConfiguration());
+            DragnetConfiguration.CreateDefault());
         serviceCollection.AddSingleton(serviceProvider =>
         {
             var configuration = serviceProvider.GetRequiredService<DragnetConfiguration>();
@@ -125,6 +125,7 @@ public sealed class Plugin : IPluginV2
         serviceCollection.AddSingleton<DragnetTransportService>();
         serviceCollection.AddSingleton<DragnetUpdateService>();
         serviceCollection.AddSingleton<DragnetOnboardingService>();
+        serviceCollection.AddSingleton<DragnetDirectoryService>();
         serviceCollection.AddSingleton<DragnetWebfrontService>();
         serviceCollection.AddSingleton<IManagerCommand, DragnetCommand>();
     }

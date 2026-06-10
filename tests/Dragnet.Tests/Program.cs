@@ -18,6 +18,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("peer store tracks bootstrap, errors, removal, and send cursor", TestPeerStoreAsync),
     ("statistics aggregate participating servers and shared bans", TestStatisticsAsync),
     ("onboarding verifies public health and readiness", TestOnboardingReadinessAsync),
+    ("directory lists only opted-in healthy networks", TestDirectoryListingsAsync),
     ("event store expires elapsed temp bans", TestEventStoreExpiresElapsedTempBansAsync),
     ("import service skips disabled and already imported events", TestImportServiceSkipsAsync),
     ("import service queues unknown players", TestImportServiceQueuesUnknownPlayersAsync),
@@ -357,6 +358,65 @@ static async Task TestOnboardingReadinessAsync()
     Assert.False(status.PeerConnected, "no peer should not pass connectivity check");
 }
 
+static async Task TestDirectoryListingsAsync()
+{
+    await using var testDir = new TestDirectory();
+    var defaults = DragnetConfiguration.CreateDefault();
+    Assert.Equal(
+        DragnetConfiguration.OfficialBootstrapEndpoint,
+        defaults.BootstrapPeers.Single().Endpoint,
+        "new installations should receive the official bootstrap endpoint");
+
+    var configuration = new DragnetConfiguration
+    {
+        OriginName = "Local Network",
+        PublicEndpoint = "https://local.example/dragnet",
+        DirectoryListingEnabled = true,
+        DirectoryRegion = "North America",
+        DirectoryWebsite = "https://local.example"
+    };
+    var identityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "identity"));
+    var identity = identityService.LoadOrCreate(configuration.OriginName);
+    var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
+    await peerStore.LoadAsync(configuration, CancellationToken.None);
+    await peerStore.UpsertAsync(new DragnetPeerInfo
+    {
+        OriginId = "listed-peer",
+        OriginName = "Listed Peer",
+        PublicEndpoint = "https://listed.example/dragnet",
+        DirectoryListed = true,
+        Region = "Europe",
+        Website = "https://listed.example",
+        Version = "0.1.0-alpha.14",
+        ServerCount = 3
+    }, CancellationToken.None);
+    await peerStore.UpsertAsync(new DragnetPeerInfo
+    {
+        OriginId = "private-peer",
+        OriginName = "Private Peer",
+        PublicEndpoint = "https://private.example/dragnet",
+        DirectoryListed = false,
+        ServerCount = 2
+    }, CancellationToken.None);
+
+    var service = new DragnetDirectoryService(configuration, identity, peerStore, () => 4);
+    var entries = await service.ListAsync(CancellationToken.None);
+
+    Assert.Equal(2, entries.Count, "directory should contain local and opted-in remote networks only");
+    var local = entries.Single(entry => entry.OriginId == identity.OriginId);
+    Assert.Equal(4, local.ServerCount, "local listing should advertise monitored server count");
+    Assert.Equal("North America", local.Region, "local listing should include configured region");
+    var remote = entries.Single(entry => entry.OriginId == "listed-peer");
+    Assert.Equal("Europe", remote.Region, "gossiped directory metadata should be retained");
+    Assert.False(entries.Any(entry => entry.OriginId == "private-peer"),
+        "non-opted-in peers must not be exposed by the directory");
+
+    await peerStore.MarkErrorAsync("listed-peer", "offline", CancellationToken.None);
+    entries = await service.ListAsync(CancellationToken.None);
+    Assert.False(entries.Any(entry => entry.OriginId == "listed-peer"),
+        "errored peers should be omitted until a healthy heartbeat clears the error");
+}
+
 static async Task TestEventStoreExpiresElapsedTempBansAsync()
 {
     await using var testDir = new TestDirectory();
@@ -604,6 +664,11 @@ static async Task TestWebfrontDashboardRendersAsync()
         updateService,
         healthClient);
     var configurationHandler = new RecordingConfigurationHandler<DragnetConfiguration>();
+    var directoryService = new DragnetDirectoryService(
+        configuration,
+        identity,
+        peerStore,
+        () => 1);
     var webfront = new DragnetWebfrontService(
         configuration,
         eventStore,
@@ -612,6 +677,7 @@ static async Task TestWebfrontDashboardRendersAsync()
         trustService,
         updateService,
         onboardingService,
+        directoryService,
         identity,
         configurationHandler,
         managerFactory: () => null!);
@@ -635,6 +701,7 @@ static async Task TestWebfrontDashboardRendersAsync()
     Assert.Contains("Peer transport", html, "dashboard should include peer section");
     Assert.Contains("Dragnet events", html, "dashboard should include event section");
     Assert.Contains("Deployment readiness", html, "dashboard should include onboarding diagnostics");
+    Assert.Contains("Community directory", html, "dashboard should include the opt-in directory");
     Assert.Contains("Configure", html, "dashboard should expose the setup action");
     Assert.Contains($"Dragnet {DragnetBuildInfo.Version}", html, "dashboard should show deployed Dragnet version");
     Assert.Contains("Queued imports", html, "dashboard should distinguish queued imports");

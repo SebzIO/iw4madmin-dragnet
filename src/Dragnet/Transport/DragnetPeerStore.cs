@@ -117,6 +117,7 @@ public sealed class DragnetPeerStore
                 {
                     endpointMatch.LastSeenUtc = DateTimeOffset.UtcNow;
                     endpointMatch.ServerCount = Math.Max(endpointMatch.ServerCount, peerInfo.ServerCount);
+                    ApplyDirectoryMetadata(endpointMatch, peerInfo);
                     ClearFailureState(endpointMatch);
                     await SaveUnlockedAsync(token);
                     return;
@@ -135,6 +136,7 @@ public sealed class DragnetPeerStore
                 existing.Endpoint = normalizedEndpoint;
                 existing.LastSeenUtc = DateTimeOffset.UtcNow;
                 existing.ServerCount = peerInfo.ServerCount;
+                ApplyDirectoryMetadata(existing, peerInfo);
                 ClearFailureState(existing);
             }
             else
@@ -145,6 +147,10 @@ public sealed class DragnetPeerStore
                     OriginName = peerInfo.OriginName,
                     Endpoint = normalizedEndpoint,
                     ServerCount = peerInfo.ServerCount,
+                    DirectoryListed = peerInfo.DirectoryListed,
+                    Region = peerInfo.Region,
+                    Website = peerInfo.Website,
+                    Version = peerInfo.Version,
                     LastSeenUtc = DateTimeOffset.UtcNow
                 };
             }
@@ -277,6 +283,10 @@ public sealed class DragnetPeerStore
                 LastSeenUtc = DateTimeOffset.UtcNow,
                 LastEventSentAtUtc = lastEventSentAtUtc,
                 ServerCount = receiver.ServerCount,
+                DirectoryListed = receiver.DirectoryListed,
+                Region = receiver.Region,
+                Website = receiver.Website,
+                Version = receiver.Version,
                 IsBootstrap = isBootstrap
             };
             ClearFailureState(healthy);
@@ -403,6 +413,13 @@ public sealed class DragnetPeerStore
             {
                 canonical.IsBootstrap |= provisional.IsBootstrap;
                 canonical.ServerCount = Math.Max(canonical.ServerCount, provisional.ServerCount);
+                if (provisional.LastSeenUtc > canonical.LastSeenUtc)
+                {
+                    canonical.DirectoryListed = provisional.DirectoryListed;
+                    canonical.Region = provisional.Region;
+                    canonical.Website = provisional.Website;
+                    canonical.Version = provisional.Version;
+                }
                 if (canonical.LastEventSentAtUtc is null ||
                     provisional.LastEventSentAtUtc > canonical.LastEventSentAtUtc)
                 {
@@ -420,5 +437,13 @@ public sealed class DragnetPeerStore
         peer.ConsecutiveFailures = 0;
         peer.LastFailureAtUtc = null;
         peer.LastFailureMessage = null;
+    }
+
+    private static void ApplyDirectoryMetadata(DragnetPeerRecord record, DragnetPeerInfo peerInfo)
+    {
+        record.DirectoryListed = peerInfo.DirectoryListed;
+        record.Region = peerInfo.Region;
+        record.Website = peerInfo.Website;
+        record.Version = peerInfo.Version;
     }
 }

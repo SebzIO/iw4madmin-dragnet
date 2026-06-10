@@ -18,6 +18,8 @@ This repository is in the MVP testing stage. The current implementation:
 - tracks per-peer gossip cursors to avoid resending already delivered approved events
 - validates inbound heartbeat sender, peer, and event batch limits
 - exposes `POST /dragnet/heartbeat` for peer heartbeat/gossip
+- seeds new installations through the official Dragnet bootstrap endpoint
+- exposes an opt-in, read-only `GET /dragnet/directory` community directory
 - adds an administrator-only Dragnet webfront interaction page
 - supports webfront peer health, stale-peer visibility, error clearing, and discovered-peer removal
 - supports webfront-first approve, deny, ignore, retry-import, and trust decisions
@@ -51,6 +53,7 @@ After startup, open **Admin > Dragnet** and use **Configure** in the deployment-
 - a recognizable network/community name
 - the externally reachable HTTPS Dragnet endpoint
 - an optional bootstrap peer
+- optional public directory publication, region, and community website
 
 The readiness panel checks identity configuration, endpoint syntax, HTTPS, public `/dragnet/health` reachability, peer connectivity, and release status. Saving setup changes requires an IW4MAdmin restart so identity and transport state remain consistent.
 
@@ -82,6 +85,9 @@ Example configuration:
   "Enabled": true,
   "OriginName": "My IW4MAdmin Network",
   "PublicEndpoint": "https://example.com/dragnet",
+  "DirectoryListingEnabled": false,
+  "DirectoryRegion": "North America",
+  "DirectoryWebsite": "https://example.com",
   "DataDirectory": "Configuration/Dragnet",
   "RequireHttps": true,
   "TrustForwardedHttpsHeader": true,
@@ -103,7 +109,7 @@ Example configuration:
   "CommandPermission": "Administrator",
   "BootstrapPeers": [
     {
-      "Endpoint": "https://peer.example.com/dragnet",
+      "Endpoint": "https://mw2.sebz.xyz/dragnet",
       "ExpectedOriginId": null,
       "Enabled": true
     }
@@ -115,6 +121,10 @@ Example configuration:
 `PublicEndpoint` should be the externally reachable Dragnet base URL for this IW4MAdmin instance. Peers call `POST {PublicEndpoint}/heartbeat`.
 
 `GET {PublicEndpoint}/health` is an anonymous, read-only installation check containing the Dragnet version, origin fingerprint, display name, and monitored server count. It does not expose players, bans, trust configuration, keys, or peer details.
+
+`GET {PublicEndpoint}/directory` is an anonymous, read-only list of live networks that explicitly set `DirectoryListingEnabled` to `true`. Listings contain the network name, Dragnet endpoint, optional region and website, monitored server count, plugin version, origin fingerprint, and last-seen time. They do not expose players, bans, trust configuration, private keys, or local review decisions.
+
+Directory publication is informational only. Appearing in the directory never trusts an origin, approves a ban, imports a penalty, or changes local review policy.
 
 `PeerFailureThreshold` controls how many consecutive heartbeat failures are required before a peer is shown as errored. A successful heartbeat clears the failure count and visible error automatically.
 
@@ -131,7 +141,7 @@ Dragnet registers native IW4MAdmin message tokens for use in the existing `AutoM
 
 Using these tokens does not create a separate broadcast timer. IW4MAdmin expands them when their normal automatic-message slot is reached.
 
-Peer discovery is gossip-based, not global zero-config discovery. At least one side needs a seed peer before two networks can find each other. You can seed a peer either by adding it to `BootstrapPeers` and restarting IW4MAdmin, or at runtime with:
+Peer discovery is gossip-based. New configurations include `https://mw2.sebz.xyz/dragnet` as the official bootstrap endpoint so a new node can join the live peer graph after its public endpoint is working. Existing configurations are not silently rewritten. Operators can replace or supplement the seed in `BootstrapPeers`, or add one at runtime with:
 
 ```text
 !dragnet peeradd https://peer.example.com/dragnet
@@ -144,6 +154,8 @@ If you already know the peer's origin fingerprint, pin it:
 ```
 
 After the first successful heartbeat, each peer advertises the other peers it knows and the graph can expand without every server manually listing every other server.
+
+The official bootstrap is a discovery convenience, not a trust authority. Every remote origin remains untrusted until a local operator explicitly trusts it.
 
 ## Reverse Proxy
 
