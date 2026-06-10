@@ -7,6 +7,7 @@ using Dragnet.Transport;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using System.Text.Json;
 
 namespace Dragnet.Web;
 
@@ -21,6 +22,7 @@ public sealed class DragnetController : ControllerBase
     private readonly DragnetUpdateService _updateService;
     private readonly DragnetDirectoryService _directoryService;
     private readonly DragnetIdentityDocument _identity;
+    private readonly DragnetIdentityService _identityService;
     private readonly Func<int> _localServerCount;
 
     public DragnetController(
@@ -31,6 +33,7 @@ public sealed class DragnetController : ControllerBase
         DragnetUpdateService updateService,
         DragnetDirectoryService directoryService,
         DragnetIdentityDocument identity,
+        DragnetIdentityService identityService,
         Func<int> localServerCount)
     {
         _configuration = configuration;
@@ -40,26 +43,69 @@ public sealed class DragnetController : ControllerBase
         _updateService = updateService;
         _directoryService = directoryService;
         _identity = identity;
+        _identityService = identityService;
         _localServerCount = localServerCount;
     }
 
     [AllowAnonymous]
     [HttpGet("/dragnet/health")]
     [ProducesResponseType<DragnetHealthResponse>(StatusCodes.Status200OK)]
-    public ActionResult<DragnetHealthResponse> Health() => Ok(new DragnetHealthResponse
+    public ActionResult<DragnetHealthResponse> Health()
     {
-        Status = _configuration.Enabled ? "ready" : "disabled",
-        Version = DragnetBuildInfo.Version,
-        OriginId = _identity.OriginId,
-        OriginName = _identity.OriginName,
-        ServerCount = Math.Max(0, _localServerCount())
-    });
+        var unsigned = new DragnetHealthResponse
+        {
+            Status = _configuration.Enabled ? "ready" : "disabled",
+            Version = DragnetBuildInfo.Version,
+            OriginId = _identity.OriginId,
+            OriginName = _identity.OriginName,
+            ServerCount = Math.Max(0, _localServerCount()),
+            PublicEndpoint = _configuration.PublicEndpoint,
+            PublicKeyPem = _identity.PublicKeyPem,
+            CheckedAtUtc = DateTimeOffset.UtcNow
+        };
+        return Ok(unsigned with
+        {
+            Signature = _identityService.Sign(_identity, unsigned.GetSigningPayload())
+        });
+    }
 
     [AllowAnonymous]
     [HttpGet("/dragnet/directory")]
     [ProducesResponseType<IReadOnlyList<DragnetDirectoryEntry>>(StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<DragnetDirectoryEntry>>> Directory(CancellationToken token) =>
         Ok(await _directoryService.ListAsync(token));
+
+    [AllowAnonymous]
+    [HttpGet("/dragnet/setup-guide")]
+    [ProducesResponseType<DragnetSetupGuideResponse>(StatusCodes.Status200OK)]
+    public ActionResult<DragnetSetupGuideResponse> SetupGuide()
+    {
+        var endpoint = _configuration.PublicEndpoint?.TrimEnd('/');
+        return Ok(new DragnetSetupGuideResponse
+        {
+            NetworkName = _configuration.OriginName,
+            PublicEndpoint = endpoint,
+            HealthUrl = endpoint is null ? null : $"{endpoint}/health",
+            HeartbeatUrl = endpoint is null ? null : $"{endpoint}/heartbeat",
+            DirectoryUrl = endpoint is null ? null : $"{endpoint}/directory",
+            OfficialBootstrapEndpoint = DragnetConfiguration.OfficialBootstrapEndpoint,
+            DirectoryListingEnabled = _configuration.DirectoryListingEnabled,
+            RequiredProxyFeatures =
+            [
+                "Valid HTTPS certificate for the public endpoint",
+                "Forward X-Forwarded-Proto as https",
+                "Allow POST requests to /dragnet/heartbeat",
+                "Enable WebSocket upgrade support for the IW4MAdmin webfront"
+            ],
+            VerificationSteps =
+            [
+                "Confirm the health URL returns this origin fingerprint.",
+                "Confirm a bootstrap peer can POST a signed heartbeat to the heartbeat URL.",
+                "Wait for a direct signed heartbeat before expecting a verified directory badge.",
+                "Trust remote origins separately; directory verification never grants trust."
+            ]
+        });
+    }
 
     [AllowAnonymous]
     [IgnoreAntiforgeryToken]
@@ -157,6 +203,26 @@ public sealed record DragnetHealthResponse
     public required string OriginId { get; init; }
     public required string OriginName { get; init; }
     public required int ServerCount { get; init; }
+    public string? PublicEndpoint { get; init; }
+    public required string PublicKeyPem { get; init; }
+    public required DateTimeOffset CheckedAtUtc { get; init; }
+    public string? Signature { get; init; }
+
+    public string GetSigningPayload() =>
+        JsonSerializer.Serialize(this with { Signature = null }, DragnetJson.Options);
+}
+
+public sealed record DragnetSetupGuideResponse
+{
+    public required string NetworkName { get; init; }
+    public string? PublicEndpoint { get; init; }
+    public string? HealthUrl { get; init; }
+    public string? HeartbeatUrl { get; init; }
+    public string? DirectoryUrl { get; init; }
+    public required string OfficialBootstrapEndpoint { get; init; }
+    public required bool DirectoryListingEnabled { get; init; }
+    public IReadOnlyList<string> RequiredProxyFeatures { get; init; } = [];
+    public IReadOnlyList<string> VerificationSteps { get; init; } = [];
 }
 
 public sealed record DragnetStatusResponse

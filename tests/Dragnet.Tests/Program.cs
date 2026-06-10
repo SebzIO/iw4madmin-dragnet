@@ -19,6 +19,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("statistics aggregate participating servers and shared bans", TestStatisticsAsync),
     ("onboarding verifies public health and readiness", TestOnboardingReadinessAsync),
     ("directory lists only opted-in healthy networks", TestDirectoryListingsAsync),
+    ("heartbeat peer proofs reject tampering", TestHeartbeatPeerProofValidationAsync),
     ("event store expires elapsed temp bans", TestEventStoreExpiresElapsedTempBansAsync),
     ("import service skips disabled and already imported events", TestImportServiceSkipsAsync),
     ("import service queues unknown players", TestImportServiceQueuesUnknownPlayersAsync),
@@ -342,10 +343,11 @@ static async Task TestOnboardingReadinessAsync()
         new HttpClient(new StaticResponseHandler(System.Net.HttpStatusCode.OK, "{}")));
     using var healthClient = new HttpClient(new StaticResponseHandler(
         System.Net.HttpStatusCode.OK,
-        $$"""{"originId":"{{identity.OriginId}}"}"""));
+        CreateSignedHealthResponse(identityService, identity, configuration.PublicEndpoint!)));
     var onboarding = new DragnetOnboardingService(
         configuration,
         identity,
+        identityService,
         peerStore,
         updateService,
         healthClient);
@@ -354,6 +356,9 @@ static async Task TestOnboardingReadinessAsync()
     Assert.True(status.IdentityConfigured, "named identity should pass onboarding");
     Assert.True(status.EndpointConfigured, "absolute endpoint should pass configuration check");
     Assert.True(status.EndpointUsesHttps, "https endpoint should pass transport check");
+    Assert.True(status.EndpointReachable, "successful health route should pass reachability check");
+    Assert.True(status.EndpointIdentityMatched, "matching fingerprint should pass identity check");
+    Assert.True(status.EndpointSignatureVerified, "signed health response should pass proof check");
     Assert.True(status.EndpointVerified, "matching public health identity should verify endpoint");
     Assert.False(status.PeerConnected, "no peer should not pass connectivity check");
 }
@@ -379,17 +384,14 @@ static async Task TestDirectoryListingsAsync()
     var identity = identityService.LoadOrCreate(configuration.OriginName);
     var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
     await peerStore.LoadAsync(configuration, CancellationToken.None);
-    await peerStore.UpsertAsync(new DragnetPeerInfo
-    {
-        OriginId = "listed-peer",
-        OriginName = "Listed Peer",
-        PublicEndpoint = "https://listed.example/dragnet",
-        DirectoryListed = true,
-        Region = "Europe",
-        Website = "https://listed.example",
-        Version = "0.1.0-alpha.14",
-        ServerCount = 3
-    }, CancellationToken.None);
+    var remoteIdentityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "remote-identity"));
+    var remoteIdentity = remoteIdentityService.LoadOrCreate("Listed Peer");
+    var listedPeer = CreateSignedPeerInfo(
+        remoteIdentityService,
+        remoteIdentity,
+        "https://listed.example/dragnet",
+        directoryListed: true);
+    await peerStore.UpsertAsync(listedPeer, CancellationToken.None, identityVerified: true);
     await peerStore.UpsertAsync(new DragnetPeerInfo
     {
         OriginId = "private-peer",
@@ -406,15 +408,105 @@ static async Task TestDirectoryListingsAsync()
     var local = entries.Single(entry => entry.OriginId == identity.OriginId);
     Assert.Equal(4, local.ServerCount, "local listing should advertise monitored server count");
     Assert.Equal("North America", local.Region, "local listing should include configured region");
-    var remote = entries.Single(entry => entry.OriginId == "listed-peer");
+    var remote = entries.Single(entry => entry.OriginId == remoteIdentity.OriginId);
     Assert.Equal("Europe", remote.Region, "gossiped directory metadata should be retained");
+    Assert.False(remote.Verified, "signed gossip alone should not verify endpoint ownership");
     Assert.False(entries.Any(entry => entry.OriginId == "private-peer"),
         "non-opted-in peers must not be exposed by the directory");
 
-    await peerStore.MarkErrorAsync("listed-peer", "offline", CancellationToken.None);
+    await peerStore.MarkHeartbeatSucceededAsync(
+        remoteIdentity.OriginId,
+        listedPeer,
+        CancellationToken.None,
+        identityVerified: true);
     entries = await service.ListAsync(CancellationToken.None);
-    Assert.False(entries.Any(entry => entry.OriginId == "listed-peer"),
+    remote = entries.Single(entry => entry.OriginId == remoteIdentity.OriginId);
+    Assert.True(remote.Verified, "direct signed heartbeat should verify endpoint ownership");
+    Assert.Equal("Direct signed heartbeat", remote.VerificationMethod,
+        "verified listing should explain the verification method");
+    await peerStore.UpsertAsync(listedPeer with
+    {
+        OriginName = "Unsigned Downgrade",
+        PublicKeyPem = null,
+        Signature = null
+    }, CancellationToken.None);
+    remote = (await service.ListAsync(CancellationToken.None))
+        .Single(entry => entry.OriginId == remoteIdentity.OriginId);
+    Assert.Equal("Listed Peer", remote.OriginName,
+        "unsigned gossip must not overwrite previously verified metadata");
+
+    await peerStore.MarkErrorAsync(remoteIdentity.OriginId, "offline", CancellationToken.None);
+    entries = await service.ListAsync(CancellationToken.None);
+    Assert.False(entries.Any(entry => entry.OriginId == remoteIdentity.OriginId),
         "errored peers should be omitted until a healthy heartbeat clears the error");
+}
+
+static async Task TestHeartbeatPeerProofValidationAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        PublicEndpoint = "https://local.example/dragnet"
+    };
+    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
+    await eventStore.LoadAsync(CancellationToken.None);
+    var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
+    await peerStore.LoadAsync(configuration, CancellationToken.None);
+    var identityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "identity"));
+    var identity = identityService.LoadOrCreate("Local");
+    var remoteIdentityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "remote"));
+    var remoteIdentity = remoteIdentityService.LoadOrCreate("Remote");
+    var trustService = new DragnetTrustService(configuration, new RecordingConfigurationHandler<DragnetConfiguration>());
+    var importService = new DragnetImportService(
+        configuration,
+        eventStore,
+        managerFactory: () => null!,
+        logger: new TestLogger<DragnetImportService>());
+    var reviewService = new DragnetReviewService(eventStore, importService, trustService);
+    var transport = new DragnetTransportService(
+        configuration,
+        eventStore,
+        peerStore,
+        identity,
+        identityService,
+        reviewService,
+        trustService,
+        () => 1,
+        new TestLogger<DragnetTransportService>());
+    var signed = CreateSignedPeerInfo(
+        remoteIdentityService,
+        remoteIdentity,
+        "https://remote.example/dragnet",
+        directoryListed: true);
+
+    await transport.HandleHeartbeatAsync(new DragnetHeartbeatRequest
+    {
+        Sender = signed
+    }, CancellationToken.None);
+    var stored = (await peerStore.ListAsync(CancellationToken.None)).Single();
+    Assert.True(stored.IdentityVerified, "valid peer proof should be retained as verified identity");
+    Assert.Null(stored.EndpointVerifiedAtUtc, "inbound heartbeat alone should not verify advertised endpoint ownership");
+
+    var tampered = signed with { OriginName = "Tampered Name" };
+    await Assert.ThrowsAsync<InvalidOperationException>(
+        () => transport.HandleHeartbeatAsync(new DragnetHeartbeatRequest
+        {
+            Sender = tampered
+        }, CancellationToken.None),
+        "tampered signed metadata should be rejected");
+
+    var stale = CreateSignedPeerInfo(
+        remoteIdentityService,
+        remoteIdentity,
+        "https://remote.example/dragnet",
+        directoryListed: true,
+        seenAtUtc: DateTimeOffset.UtcNow.Subtract(configuration.PeerStaleAfter).AddMinutes(-1));
+    await Assert.ThrowsAsync<InvalidOperationException>(
+        () => transport.HandleHeartbeatAsync(new DragnetHeartbeatRequest
+        {
+            Sender = stale
+        }, CancellationToken.None),
+        "stale direct identity proofs should be rejected");
 }
 
 static async Task TestEventStoreExpiresElapsedTempBansAsync()
@@ -656,10 +748,11 @@ static async Task TestWebfrontDashboardRendersAsync()
         new HttpClient(new StaticResponseHandler(System.Net.HttpStatusCode.OK, "{}")));
     using var healthClient = new HttpClient(new StaticResponseHandler(
         System.Net.HttpStatusCode.OK,
-        $$"""{"originId":"{{identity.OriginId}}"}"""));
+        CreateSignedHealthResponse(identityService, identity, configuration.PublicEndpoint!)));
     var onboardingService = new DragnetOnboardingService(
         configuration,
         identity,
+        identityService,
         peerStore,
         updateService,
         healthClient);
@@ -701,6 +794,9 @@ static async Task TestWebfrontDashboardRendersAsync()
     Assert.Contains("Peer transport", html, "dashboard should include peer section");
     Assert.Contains("Dragnet events", html, "dashboard should include event section");
     Assert.Contains("Deployment readiness", html, "dashboard should include onboarding diagnostics");
+    Assert.Contains("Signed proof", html, "dashboard should expose identity proof diagnostics");
+    Assert.Contains("Deployment guide", html, "dashboard should include endpoint-specific deployment guidance");
+    Assert.Contains("/dragnet/setup-guide", html, "dashboard should link to the shareable setup guide");
     Assert.Contains("Community directory", html, "dashboard should include the opt-in directory");
     Assert.Contains("Configure", html, "dashboard should expose the setup action");
     Assert.Contains($"Dragnet {DragnetBuildInfo.Version}", html, "dashboard should show deployed Dragnet version");
@@ -1044,6 +1140,55 @@ static DragnetHeartbeatRequest CreateHeartbeatRequest(string originId) => new()
         PublicEndpoint = $"https://{originId}.example/dragnet"
     }
 };
+
+static DragnetPeerInfo CreateSignedPeerInfo(
+    DragnetIdentityService identityService,
+    DragnetIdentityDocument identity,
+    string publicEndpoint,
+    bool directoryListed,
+    DateTimeOffset? seenAtUtc = null)
+{
+    var unsigned = new DragnetPeerInfo
+    {
+        OriginId = identity.OriginId,
+        OriginName = identity.OriginName,
+        PublicEndpoint = publicEndpoint,
+        ServerCount = 3,
+        DirectoryListed = directoryListed,
+        Region = "Europe",
+        Website = "https://listed.example",
+        Version = DragnetBuildInfo.Version,
+        PublicKeyPem = identity.PublicKeyPem,
+        SeenAtUtc = seenAtUtc ?? DateTimeOffset.UtcNow
+    };
+    return unsigned with
+    {
+        Signature = identityService.Sign(identity, unsigned.GetSigningPayload())
+    };
+}
+
+static string CreateSignedHealthResponse(
+    DragnetIdentityService identityService,
+    DragnetIdentityDocument identity,
+    string publicEndpoint)
+{
+    var unsigned = new DragnetHealthResponse
+    {
+        Status = "ready",
+        Version = DragnetBuildInfo.Version,
+        OriginId = identity.OriginId,
+        OriginName = identity.OriginName,
+        ServerCount = 1,
+        PublicEndpoint = publicEndpoint,
+        PublicKeyPem = identity.PublicKeyPem,
+        CheckedAtUtc = DateTimeOffset.UtcNow
+    };
+    var signed = unsigned with
+    {
+        Signature = identityService.Sign(identity, unsigned.GetSigningPayload())
+    };
+    return System.Text.Json.JsonSerializer.Serialize(signed, DragnetJson.Options);
+}
 
 static DragnetEventEnvelope CreateEnvelope(
     string originId,

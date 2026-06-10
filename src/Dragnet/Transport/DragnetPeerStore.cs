@@ -95,7 +95,11 @@ public sealed class DragnetPeerStore
         }
     }
 
-    public async Task UpsertAsync(DragnetPeerInfo peerInfo, CancellationToken token)
+    public async Task UpsertAsync(
+        DragnetPeerInfo peerInfo,
+        CancellationToken token,
+        bool identityVerified = false,
+        bool clearFailureState = false)
     {
         if (string.IsNullOrWhiteSpace(peerInfo.PublicEndpoint))
         {
@@ -106,6 +110,7 @@ public sealed class DragnetPeerStore
         try
         {
             var normalizedEndpoint = peerInfo.PublicEndpoint.TrimEnd('/');
+            var observedAtUtc = identityVerified ? peerInfo.SeenAtUtc : DateTimeOffset.UtcNow;
             var endpointMatch = _peers.Values.FirstOrDefault(peer =>
                 peer.Endpoint.TrimEnd('/').Equals(normalizedEndpoint, StringComparison.OrdinalIgnoreCase));
 
@@ -115,10 +120,19 @@ public sealed class DragnetPeerStore
                 if (IsProvisionalOriginId(peerInfo.OriginId) &&
                     !IsProvisionalOriginId(endpointMatch.OriginId))
                 {
-                    endpointMatch.LastSeenUtc = DateTimeOffset.UtcNow;
+                    if (endpointMatch.IdentityVerified && !identityVerified)
+                    {
+                        return;
+                    }
+
+                    endpointMatch.LastSeenUtc = observedAtUtc;
                     endpointMatch.ServerCount = Math.Max(endpointMatch.ServerCount, peerInfo.ServerCount);
                     ApplyDirectoryMetadata(endpointMatch, peerInfo);
-                    ClearFailureState(endpointMatch);
+                    ApplyIdentityProof(endpointMatch, peerInfo, identityVerified);
+                    if (clearFailureState)
+                    {
+                        ClearFailureState(endpointMatch);
+                    }
                     await SaveUnlockedAsync(token);
                     return;
                 }
@@ -132,12 +146,21 @@ public sealed class DragnetPeerStore
 
             if (_peers.TryGetValue(peerInfo.OriginId, out var existing))
             {
+                if (existing.IdentityVerified && !identityVerified)
+                {
+                    return;
+                }
+
                 existing.OriginName = peerInfo.OriginName;
                 existing.Endpoint = normalizedEndpoint;
-                existing.LastSeenUtc = DateTimeOffset.UtcNow;
+                existing.LastSeenUtc = observedAtUtc;
                 existing.ServerCount = peerInfo.ServerCount;
                 ApplyDirectoryMetadata(existing, peerInfo);
-                ClearFailureState(existing);
+                ApplyIdentityProof(existing, peerInfo, identityVerified);
+                if (clearFailureState)
+                {
+                    ClearFailureState(existing);
+                }
             }
             else
             {
@@ -151,7 +174,10 @@ public sealed class DragnetPeerStore
                     Region = peerInfo.Region,
                     Website = peerInfo.Website,
                     Version = peerInfo.Version,
-                    LastSeenUtc = DateTimeOffset.UtcNow
+                    PublicKeyPem = peerInfo.PublicKeyPem,
+                    Signature = peerInfo.Signature,
+                    IdentityVerified = identityVerified,
+                    LastSeenUtc = observedAtUtc
                 };
             }
 
@@ -233,7 +259,8 @@ public sealed class DragnetPeerStore
     public async Task MarkHeartbeatSucceededAsync(
         string attemptedOriginId,
         DragnetPeerInfo receiver,
-        CancellationToken token)
+        CancellationToken token,
+        bool identityVerified = false)
     {
         if (string.IsNullOrWhiteSpace(receiver.PublicEndpoint))
         {
@@ -268,6 +295,16 @@ public sealed class DragnetPeerStore
                 .Select(peer => peer.LastEventSentAtUtc)
                 .Max();
             var isBootstrap = relatedRecords.Any(peer => peer.IsBootstrap);
+            var previouslyVerified = relatedRecords.Any(peer => peer.IdentityVerified);
+            var previousEndpointVerifiedAtUtc = relatedRecords
+                .Where(peer => peer.EndpointVerifiedAtUtc is not null)
+                .Select(peer => peer.EndpointVerifiedAtUtc)
+                .Max();
+            var previousProof = relatedRecords
+                .Where(peer => peer.IdentityVerified)
+                .OrderByDescending(peer => peer.EndpointVerifiedAtUtc)
+                .FirstOrDefault();
+            var preserveVerifiedMetadata = previouslyVerified && !identityVerified && previousProof is not null;
 
             foreach (var related in relatedRecords)
             {
@@ -277,16 +314,24 @@ public sealed class DragnetPeerStore
             var healthy = new DragnetPeerRecord
             {
                 OriginId = receiver.OriginId,
-                OriginName = receiver.OriginName,
-                Endpoint = receiver.PublicEndpoint.TrimEnd('/'),
+                OriginName = preserveVerifiedMetadata ? previousProof!.OriginName : receiver.OriginName,
+                Endpoint = preserveVerifiedMetadata
+                    ? previousProof!.Endpoint
+                    : receiver.PublicEndpoint.TrimEnd('/'),
                 FirstSeenUtc = firstSeenUtc,
                 LastSeenUtc = DateTimeOffset.UtcNow,
                 LastEventSentAtUtc = lastEventSentAtUtc,
-                ServerCount = receiver.ServerCount,
-                DirectoryListed = receiver.DirectoryListed,
-                Region = receiver.Region,
-                Website = receiver.Website,
-                Version = receiver.Version,
+                ServerCount = preserveVerifiedMetadata ? previousProof!.ServerCount : receiver.ServerCount,
+                DirectoryListed = preserveVerifiedMetadata ? previousProof!.DirectoryListed : receiver.DirectoryListed,
+                Region = preserveVerifiedMetadata ? previousProof!.Region : receiver.Region,
+                Website = preserveVerifiedMetadata ? previousProof!.Website : receiver.Website,
+                Version = preserveVerifiedMetadata ? previousProof!.Version : receiver.Version,
+                PublicKeyPem = identityVerified ? receiver.PublicKeyPem : previousProof?.PublicKeyPem,
+                Signature = identityVerified ? receiver.Signature : previousProof?.Signature,
+                IdentityVerified = identityVerified || previouslyVerified,
+                EndpointVerifiedAtUtc = identityVerified
+                    ? DateTimeOffset.UtcNow
+                    : previousEndpointVerifiedAtUtc,
                 IsBootstrap = isBootstrap
             };
             ClearFailureState(healthy);
@@ -419,6 +464,10 @@ public sealed class DragnetPeerStore
                     canonical.Region = provisional.Region;
                     canonical.Website = provisional.Website;
                     canonical.Version = provisional.Version;
+                    canonical.PublicKeyPem = provisional.PublicKeyPem;
+                    canonical.Signature = provisional.Signature;
+                    canonical.IdentityVerified = provisional.IdentityVerified;
+                    canonical.EndpointVerifiedAtUtc = provisional.EndpointVerifiedAtUtc;
                 }
                 if (canonical.LastEventSentAtUtc is null ||
                     provisional.LastEventSentAtUtc > canonical.LastEventSentAtUtc)
@@ -445,5 +494,25 @@ public sealed class DragnetPeerStore
         record.Region = peerInfo.Region;
         record.Website = peerInfo.Website;
         record.Version = peerInfo.Version;
+    }
+
+    private static void ApplyIdentityProof(
+        DragnetPeerRecord record,
+        DragnetPeerInfo peerInfo,
+        bool identityVerified)
+    {
+        if (identityVerified)
+        {
+            record.PublicKeyPem = peerInfo.PublicKeyPem;
+            record.Signature = peerInfo.Signature;
+            record.IdentityVerified = true;
+            return;
+        }
+
+        if (!record.IdentityVerified)
+        {
+            record.PublicKeyPem = peerInfo.PublicKeyPem;
+            record.Signature = peerInfo.Signature;
+        }
     }
 }

@@ -40,7 +40,10 @@ public sealed class DragnetDirectoryService
                 Website = NormalizeHttpsUrl(_configuration.DirectoryWebsite),
                 ServerCount = Math.Max(0, _localServerCount()),
                 Version = DragnetBuildInfo.Version,
-                LastSeenUtc = now
+                LastSeenUtc = now,
+                Verified = true,
+                VerifiedAtUtc = now,
+                VerificationMethod = "Local signed endpoint"
             });
         }
 
@@ -60,7 +63,14 @@ public sealed class DragnetDirectoryService
                 Website = NormalizeHttpsUrl(peer.Website),
                 ServerCount = Math.Max(0, peer.ServerCount),
                 Version = Normalize(peer.Version),
-                LastSeenUtc = peer.LastSeenUtc
+                LastSeenUtc = peer.LastSeenUtc,
+                Verified = IsEndpointVerified(peer, now),
+                VerifiedAtUtc = peer.EndpointVerifiedAtUtc,
+                VerificationMethod = IsEndpointVerified(peer, now)
+                    ? "Direct signed heartbeat"
+                    : peer.IdentityVerified
+                        ? "Signed identity; endpoint verification is pending or stale"
+                        : "Legacy or unsigned peer"
             }));
 
         return entries
@@ -79,6 +89,11 @@ public sealed class DragnetDirectoryService
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private bool IsEndpointVerified(DragnetPeerRecord peer, DateTimeOffset now) =>
+        peer.IdentityVerified &&
+        peer.EndpointVerifiedAtUtc is { } verifiedAt &&
+        now - verifiedAt <= _configuration.PeerStaleAfter;
 }
 
 public sealed record DragnetDirectoryEntry
@@ -91,4 +106,7 @@ public sealed record DragnetDirectoryEntry
     public required int ServerCount { get; init; }
     public string? Version { get; init; }
     public required DateTimeOffset LastSeenUtc { get; init; }
+    public required bool Verified { get; init; }
+    public DateTimeOffset? VerifiedAtUtc { get; init; }
+    public required string VerificationMethod { get; init; }
 }

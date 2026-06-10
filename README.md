@@ -20,6 +20,9 @@ This repository is in the MVP testing stage. The current implementation:
 - exposes `POST /dragnet/heartbeat` for peer heartbeat/gossip
 - seeds new installations through the official Dragnet bootstrap endpoint
 - exposes an opt-in, read-only `GET /dragnet/directory` community directory
+- signs peer identity advertisements and public health responses
+- verifies directory endpoints after direct signed heartbeat contact
+- exposes a shareable, endpoint-specific `GET /dragnet/setup-guide`
 - adds an administrator-only Dragnet webfront interaction page
 - supports webfront peer health, stale-peer visibility, error clearing, and discovered-peer removal
 - supports webfront-first approve, deny, ignore, retry-import, and trust decisions
@@ -55,7 +58,7 @@ After startup, open **Admin > Dragnet** and use **Configure** in the deployment-
 - an optional bootstrap peer
 - optional public directory publication, region, and community website
 
-The readiness panel checks identity configuration, endpoint syntax, HTTPS, public `/dragnet/health` reachability, peer connectivity, and release status. Saving setup changes requires an IW4MAdmin restart so identity and transport state remain consistent.
+The readiness panel separately checks identity configuration, endpoint syntax, HTTPS, public route reachability, origin fingerprint matching, signed health proof, peer connectivity, and release status. Saving setup changes requires an IW4MAdmin restart so identity and transport state remain consistent.
 
 To create the same zip package used by GitHub releases:
 
@@ -120,11 +123,15 @@ Example configuration:
 
 `PublicEndpoint` should be the externally reachable Dragnet base URL for this IW4MAdmin instance. Peers call `POST {PublicEndpoint}/heartbeat`.
 
-`GET {PublicEndpoint}/health` is an anonymous, read-only installation check containing the Dragnet version, origin fingerprint, display name, and monitored server count. It does not expose players, bans, trust configuration, keys, or peer details.
+`GET {PublicEndpoint}/health` is an anonymous, read-only installation check containing the Dragnet version, origin fingerprint, display name, monitored server count, public key, timestamp, and identity signature. The public key and signature prove that the response belongs to the advertised fingerprint; no private key is exposed.
 
-`GET {PublicEndpoint}/directory` is an anonymous, read-only list of live networks that explicitly set `DirectoryListingEnabled` to `true`. Listings contain the network name, Dragnet endpoint, optional region and website, monitored server count, plugin version, origin fingerprint, and last-seen time. They do not expose players, bans, trust configuration, private keys, or local review decisions.
+`GET {PublicEndpoint}/directory` is an anonymous, read-only list of live networks that explicitly set `DirectoryListingEnabled` to `true`. Listings contain the network name, Dragnet endpoint, optional region and website, monitored server count, plugin version, origin fingerprint, last-seen time, and verification status. They do not expose players, bans, trust configuration, private keys, or local review decisions.
 
 Directory publication is informational only. Appearing in the directory never trusts an origin, approves a ban, imports a penalty, or changes local review policy.
+
+A remote listing becomes verified only after the local node directly contacts its advertised endpoint and receives a fresh, valid signature for the same origin fingerprint and endpoint metadata. Signed gossip can establish identity authenticity, but it cannot by itself verify endpoint ownership. Unsigned older Dragnet versions remain transport-compatible and appear as legacy/unverified until upgraded.
+
+`GET {PublicEndpoint}/setup-guide` provides a shareable JSON deployment checklist tailored to the configured endpoint. It contains public routes, the official bootstrap endpoint, and reverse-proxy requirements; it contains no credentials, private keys, bans, players, or trust settings.
 
 `PeerFailureThreshold` controls how many consecutive heartbeat failures are required before a peer is shown as errored. A successful heartbeat clears the failure count and visible error automatically.
 

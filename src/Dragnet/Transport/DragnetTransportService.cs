@@ -115,10 +115,11 @@ public sealed class DragnetTransportService : IDisposable
         CancellationToken token)
     {
         ValidateHeartbeatRequest(request);
+        var senderIdentityVerified = VerifyPeerIdentity(request.Sender, requireFresh: true);
 
         if (!IsLocalPeer(request.Sender))
         {
-            await _peerStore.UpsertAsync(request.Sender, token);
+            await _peerStore.UpsertAsync(request.Sender, token, senderIdentityVerified);
         }
 
         await ImportEventsAsync(request.Events, token);
@@ -127,7 +128,7 @@ public sealed class DragnetTransportService : IDisposable
         {
             if (!IsLocalPeer(peer))
             {
-                await _peerStore.UpsertAsync(peer, token);
+                await _peerStore.UpsertAsync(peer, token, VerifyPeerIdentity(peer, requireFresh: false));
             }
         }
 
@@ -215,12 +216,20 @@ public sealed class DragnetTransportService : IDisposable
                 {
                     if (!IsLocalPeer(knownPeer))
                     {
-                        await _peerStore.UpsertAsync(knownPeer, token);
+                        await _peerStore.UpsertAsync(
+                            knownPeer,
+                            token,
+                            VerifyPeerIdentity(knownPeer, requireFresh: false));
                     }
                 }
 
+                var receiverIdentityVerified = VerifyPeerIdentity(heartbeat.Receiver, requireFresh: true);
                 await ImportEventsAsync(heartbeat.Events, token);
-                await _peerStore.MarkHeartbeatSucceededAsync(peer.OriginId, heartbeat.Receiver, token);
+                await _peerStore.MarkHeartbeatSucceededAsync(
+                    peer.OriginId,
+                    heartbeat.Receiver,
+                    token,
+                    receiverIdentityVerified);
                 await _peerStore.MarkEventBatchSentAsync(heartbeat.Receiver.OriginId, eventBatch, token);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -355,18 +364,26 @@ public sealed class DragnetTransportService : IDisposable
         ValidateDirectoryMetadata(request.Sender);
     }
 
-    private DragnetPeerInfo CreateLocalPeerInfo() => new()
+    private DragnetPeerInfo CreateLocalPeerInfo()
     {
-        OriginId = _identity.OriginId,
-        OriginName = _identity.OriginName,
-        PublicEndpoint = _configuration.PublicEndpoint,
-        ServerCount = _localServerCount(),
-        DirectoryListed = _configuration.DirectoryListingEnabled,
-        Region = NormalizeMetadata(_configuration.DirectoryRegion),
-        Website = NormalizeMetadata(_configuration.DirectoryWebsite),
-        Version = DragnetBuildInfo.Version,
-        SeenAtUtc = DateTimeOffset.UtcNow
-    };
+        var unsigned = new DragnetPeerInfo
+        {
+            OriginId = _identity.OriginId,
+            OriginName = _identity.OriginName,
+            PublicEndpoint = _configuration.PublicEndpoint,
+            ServerCount = _localServerCount(),
+            DirectoryListed = _configuration.DirectoryListingEnabled,
+            Region = NormalizeMetadata(_configuration.DirectoryRegion),
+            Website = NormalizeMetadata(_configuration.DirectoryWebsite),
+            Version = DragnetBuildInfo.Version,
+            PublicKeyPem = _identity.PublicKeyPem,
+            SeenAtUtc = DateTimeOffset.UtcNow
+        };
+        return unsigned with
+        {
+            Signature = _identityService.Sign(_identity, unsigned.GetSigningPayload())
+        };
+    }
 
     private async Task<IReadOnlyList<DragnetPeerInfo>> CreateKnownPeerInfoAsync(CancellationToken token)
     {
@@ -384,6 +401,8 @@ public sealed class DragnetTransportService : IDisposable
                 Region = peer.Region,
                 Website = peer.Website,
                 Version = peer.Version,
+                PublicKeyPem = peer.PublicKeyPem,
+                Signature = peer.Signature,
                 SeenAtUtc = peer.LastSeenUtc
             })
             .ToList();
@@ -419,6 +438,39 @@ public sealed class DragnetTransportService : IDisposable
         {
             return false;
         }
+    }
+
+    private bool VerifyPeerIdentity(DragnetPeerInfo peer, bool requireFresh)
+    {
+        if (string.IsNullOrWhiteSpace(peer.PublicKeyPem) ||
+            string.IsNullOrWhiteSpace(peer.Signature))
+        {
+            return false;
+        }
+
+        try
+        {
+            if (_identityService.Verify(
+                    peer.OriginId,
+                    peer.PublicKeyPem,
+                    peer.GetSigningPayload(),
+                    peer.Signature))
+            {
+                var now = DateTimeOffset.UtcNow;
+                if (peer.SeenAtUtc > now.AddMinutes(5) ||
+                    requireFresh && now - peer.SeenAtUtc > _configuration.PeerStaleAfter)
+                {
+                    throw new InvalidOperationException($"Peer identity proof is stale for {peer.OriginName}.");
+                }
+
+                return true;
+            }
+        }
+        catch (Exception ex) when (ex is FormatException or ArgumentException or System.Security.Cryptography.CryptographicException)
+        {
+        }
+
+        throw new InvalidOperationException($"Peer identity proof is invalid for {peer.OriginName}.");
     }
 
     private bool IsAllowedEndpoint(string endpoint)

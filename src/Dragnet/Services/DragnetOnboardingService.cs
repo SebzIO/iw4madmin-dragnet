@@ -1,7 +1,9 @@
 using System.Text.Json;
 using Dragnet.Configuration;
 using Dragnet.Identity;
+using Dragnet.Models;
 using Dragnet.Transport;
+using Dragnet.Web;
 
 namespace Dragnet.Services;
 
@@ -9,6 +11,7 @@ public sealed class DragnetOnboardingService
 {
     private readonly DragnetConfiguration _configuration;
     private readonly DragnetIdentityDocument _identity;
+    private readonly DragnetIdentityService _identityService;
     private readonly DragnetPeerStore _peerStore;
     private readonly DragnetUpdateService _updateService;
     private readonly HttpClient _httpClient;
@@ -19,9 +22,10 @@ public sealed class DragnetOnboardingService
     public DragnetOnboardingService(
         DragnetConfiguration configuration,
         DragnetIdentityDocument identity,
+        DragnetIdentityService identityService,
         DragnetPeerStore peerStore,
         DragnetUpdateService updateService)
-        : this(configuration, identity, peerStore, updateService, new HttpClient
+        : this(configuration, identity, identityService, peerStore, updateService, new HttpClient
         {
             Timeout = TimeSpan.FromSeconds(4)
         })
@@ -31,12 +35,14 @@ public sealed class DragnetOnboardingService
     public DragnetOnboardingService(
         DragnetConfiguration configuration,
         DragnetIdentityDocument identity,
+        DragnetIdentityService identityService,
         DragnetPeerStore peerStore,
         DragnetUpdateService updateService,
         HttpClient httpClient)
     {
         _configuration = configuration;
         _identity = identity;
+        _identityService = identityService;
         _peerStore = peerStore;
         _updateService = updateService;
         _httpClient = httpClient;
@@ -61,6 +67,9 @@ public sealed class DragnetOnboardingService
             var endpoint = NormalizeEndpoint(_configuration.PublicEndpoint);
             var endpointUri = endpoint is null ? null : new Uri(endpoint);
             var endpointVerified = false;
+            var endpointReachable = false;
+            var endpointIdentityMatched = false;
+            var endpointSignatureVerified = false;
             string? endpointError = null;
 
             if (endpointUri is not null)
@@ -75,13 +84,28 @@ public sealed class DragnetOnboardingService
                     }
                     else
                     {
-                        using var document = JsonDocument.Parse(body);
-                        endpointVerified =
-                            document.RootElement.TryGetProperty("originId", out var originId) &&
-                            string.Equals(originId.GetString(), _identity.OriginId, StringComparison.OrdinalIgnoreCase);
-                        if (!endpointVerified)
+                        endpointReachable = true;
+                        var health = JsonSerializer.Deserialize<DragnetHealthResponse>(body, DragnetJson.Options);
+                        endpointIdentityMatched =
+                            health is not null &&
+                            string.Equals(health.OriginId, _identity.OriginId, StringComparison.OrdinalIgnoreCase);
+                        endpointSignatureVerified =
+                            health is not null &&
+                            endpointIdentityMatched &&
+                            !string.IsNullOrWhiteSpace(health.Signature) &&
+                            _identityService.Verify(
+                                health.OriginId,
+                                health.PublicKeyPem,
+                                health.GetSigningPayload(),
+                                health.Signature);
+                        endpointVerified = endpointIdentityMatched && endpointSignatureVerified;
+                        if (!endpointIdentityMatched)
                         {
                             endpointError = "Health response did not match this Dragnet identity.";
+                        }
+                        else if (!endpointSignatureVerified)
+                        {
+                            endpointError = "Health response matched this identity but did not contain a valid signed proof.";
                         }
                     }
                 }
@@ -99,6 +123,9 @@ public sealed class DragnetOnboardingService
                                         StringComparison.OrdinalIgnoreCase),
                 EndpointConfigured: endpointUri is not null,
                 EndpointUsesHttps: endpointUri?.Scheme == Uri.UriSchemeHttps,
+                EndpointReachable: endpointReachable,
+                EndpointIdentityMatched: endpointIdentityMatched,
+                EndpointSignatureVerified: endpointSignatureVerified,
                 EndpointVerified: endpointVerified,
                 EndpointError: endpointError,
                 PeerConnected: peers.Any(peer =>
@@ -138,6 +165,9 @@ public sealed record DragnetOnboardingStatus(
     bool IdentityConfigured,
     bool EndpointConfigured,
     bool EndpointUsesHttps,
+    bool EndpointReachable,
+    bool EndpointIdentityMatched,
+    bool EndpointSignatureVerified,
     bool EndpointVerified,
     string? EndpointError,
     bool PeerConnected,
@@ -151,10 +181,12 @@ public sealed record DragnetOnboardingStatus(
             IdentityConfigured,
             EndpointConfigured,
             EndpointUsesHttps,
-            EndpointVerified,
+            EndpointReachable,
+            EndpointIdentityMatched,
+            EndpointSignatureVerified,
             PeerConnected,
             UpdateCurrent
         }.Count(value => value);
 
-    public const int TotalChecks = 6;
+    public const int TotalChecks = 8;
 }

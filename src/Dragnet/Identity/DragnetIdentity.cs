@@ -89,6 +89,22 @@ public sealed class DragnetIdentityService
             RSASignaturePadding.Pkcs1);
     }
 
+    public bool Verify(string originId, string publicKeyPem, string payload, string signature)
+    {
+        if (!string.Equals(originId, CreateOriginId(publicKeyPem), StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        using var rsa = RSA.Create();
+        rsa.ImportFromPem(publicKeyPem);
+        return rsa.VerifyData(
+            Encoding.UTF8.GetBytes(payload),
+            Convert.FromBase64String(signature),
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+    }
+
     public static string CreateOriginId(string publicKeyPem)
     {
         using var sha = SHA256.Create();

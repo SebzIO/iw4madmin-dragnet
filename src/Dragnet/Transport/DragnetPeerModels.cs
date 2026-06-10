@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Dragnet.Models;
 
 namespace Dragnet.Transport;
@@ -20,7 +21,14 @@ public sealed record DragnetPeerInfo
 
     public string? Version { get; init; }
 
+    public string? PublicKeyPem { get; init; }
+
+    public string? Signature { get; init; }
+
     public DateTimeOffset SeenAtUtc { get; init; } = DateTimeOffset.UtcNow;
+
+    public string GetSigningPayload() =>
+        JsonSerializer.Serialize(this with { Signature = null }, DragnetJson.Options);
 }
 
 public sealed record DragnetHeartbeatRequest
@@ -72,6 +80,14 @@ public sealed record DragnetPeerRecord
     public string? Website { get; set; }
 
     public string? Version { get; set; }
+
+    public string? PublicKeyPem { get; set; }
+
+    public string? Signature { get; set; }
+
+    public bool IdentityVerified { get; set; }
+
+    public DateTimeOffset? EndpointVerifiedAtUtc { get; set; }
 
     public bool IsBootstrap { get; set; }
 }

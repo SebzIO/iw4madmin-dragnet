@@ -186,6 +186,7 @@ public sealed class DragnetWebfrontService
         html.AppendLine("<div class=\"space-y-6\">");
         AppendOperationalHeader(html, updateStatus, now);
         AppendOnboardingPanel(html, onboarding);
+        AppendDeploymentGuide(html);
         AppendDirectoryPanel(html, directory, now);
         html.AppendLine("<div class=\"grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-4\">");
         AppendMetric(html, "Pending bans", pendingBans.ToString());
@@ -1058,10 +1059,18 @@ public sealed class DragnetWebfrontService
             status.EndpointConfigured ? _configuration.PublicEndpoint! : "Configure the external /dragnet URL");
         AppendOnboardingCheck(html, "HTTPS", status.EndpointUsesHttps,
             status.EndpointUsesHttps ? "Endpoint uses HTTPS" : "A valid TLS endpoint is required");
-        AppendOnboardingCheck(html, "External health", status.EndpointVerified,
-            status.EndpointVerified
-                ? "Health endpoint matches this identity"
+        AppendOnboardingCheck(html, "Endpoint route", status.EndpointReachable,
+            status.EndpointReachable
+                ? "Public health route responds successfully"
                 : Shorten(status.EndpointError ?? "Endpoint has not been verified", 100));
+        AppendOnboardingCheck(html, "Identity match", status.EndpointIdentityMatched,
+            status.EndpointIdentityMatched
+                ? "Public endpoint reports this origin fingerprint"
+                : "Public endpoint identity does not match this installation");
+        AppendOnboardingCheck(html, "Signed proof", status.EndpointSignatureVerified,
+            status.EndpointSignatureVerified
+                ? "Public endpoint returned a valid identity signature"
+                : "Install the current release and restart to publish signed health proof");
         AppendOnboardingCheck(html, "Peer connectivity", status.PeerConnected,
             status.PeerConnected
                 ? "At least one live peer is connected"
@@ -1069,6 +1078,46 @@ public sealed class DragnetWebfrontService
         AppendOnboardingCheck(html, "Plugin version", status.UpdateCurrent,
             status.UpdateCurrent ? "Current release detected" : "Review release status above");
         html.AppendLine("</div></div>");
+    }
+
+    private void AppendDeploymentGuide(StringBuilder html)
+    {
+        var endpoint = _configuration.PublicEndpoint?.TrimEnd('/');
+        html.AppendLine("<div class=\"border border-line bg-surface/50 overflow-hidden\">");
+        html.AppendLine("<div class=\"px-4 py-3 border-b border-line flex flex-col md:flex-row md:items-center md:justify-between gap-2\">");
+        html.AppendLine("<div><h3 class=\"font-semibold\">Deployment guide</h3>");
+        html.AppendLine("<div class=\"text-sm text-muted\">Endpoint-specific routes and reverse-proxy requirements.</div></div>");
+        html.AppendLine("<a class=\"text-sm text-primary hover:underline\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"/dragnet/setup-guide\">Open shareable guide</a>");
+        html.AppendLine("</div>");
+        html.AppendLine("<div class=\"grid grid-cols-1 lg:grid-cols-2\">");
+        html.AppendLine("<div class=\"p-4 border-b lg:border-r border-line/60 space-y-2 text-sm\">");
+        AppendGuideValue(html, "Health", endpoint is null ? "Not configured" : $"{endpoint}/health");
+        AppendGuideValue(html, "Heartbeat", endpoint is null ? "Not configured" : $"{endpoint}/heartbeat");
+        AppendGuideValue(html, "Directory", endpoint is null ? "Not configured" : $"{endpoint}/directory");
+        AppendGuideValue(html, "Bootstrap", DragnetConfiguration.OfficialBootstrapEndpoint);
+        html.AppendLine("</div>");
+        html.AppendLine("<div class=\"p-4 text-sm space-y-2\">");
+        AppendGuideCheck(html, "TLS certificate valid");
+        AppendGuideCheck(html, "POST /dragnet/heartbeat forwarded");
+        AppendGuideCheck(html, "X-Forwarded-Proto set to https");
+        AppendGuideCheck(html, "WebSocket upgrades enabled");
+        html.AppendLine("</div></div></div>");
+    }
+
+    private static void AppendGuideValue(StringBuilder html, string label, string value)
+    {
+        html.Append("<div><span class=\"text-muted\">");
+        html.Append(Encode(label));
+        html.Append(":</span> <span class=\"font-mono text-xs break-all\">");
+        html.Append(Encode(value));
+        html.AppendLine("</span></div>");
+    }
+
+    private static void AppendGuideCheck(StringBuilder html, string label)
+    {
+        html.Append("<div class=\"flex items-center gap-2\"><i class=\"ph ph-check-square text-muted\"></i><span>");
+        html.Append(Encode(label));
+        html.AppendLine("</span></div>");
     }
 
     private static void AppendOnboardingCheck(
@@ -1168,10 +1217,10 @@ public sealed class DragnetWebfrontService
         html.Append("<a class=\"text-sm text-primary hover:underline\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"/dragnet/directory\">");
         html.Append(Encode($"{entries.Count} live listing{(entries.Count == 1 ? "" : "s")}"));
         html.AppendLine("</a></div>");
-        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3\">Network</th><th class=\"px-4 py-3\">Region</th><th class=\"px-4 py-3\">Servers</th><th class=\"px-4 py-3\">Version</th><th class=\"px-4 py-3\">Seen</th></tr></thead><tbody>");
+        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3\">Network</th><th class=\"px-4 py-3\">Verification</th><th class=\"px-4 py-3\">Region</th><th class=\"px-4 py-3\">Servers</th><th class=\"px-4 py-3\">Version</th><th class=\"px-4 py-3\">Seen</th></tr></thead><tbody>");
         if (entries.Count == 0)
         {
-            html.AppendLine("<tr><td colspan=\"5\" class=\"px-4 py-5 text-center text-muted\">No live networks have opted into directory publication.</td></tr>");
+            html.AppendLine("<tr><td colspan=\"6\" class=\"px-4 py-5 text-center text-muted\">No live networks have opted into directory publication.</td></tr>");
         }
         else
         {
@@ -1192,7 +1241,13 @@ public sealed class DragnetWebfrontService
                     html.Append(Encode(entry.OriginName));
                 }
 
-                html.Append("</td><td class=\"px-4 py-3 text-muted\">");
+                html.Append("</td><td class=\"px-4 py-3\">");
+                html.Append(entry.Verified
+                    ? "<span class=\"text-success\"><i class=\"ph ph-seal-check mr-1\"></i>Verified</span>"
+                    : "<span class=\"text-warning\"><i class=\"ph ph-warning-circle mr-1\"></i>Unverified</span>");
+                html.Append("<div class=\"text-xs text-muted\">");
+                html.Append(Encode(entry.VerificationMethod));
+                html.Append("</div></td><td class=\"px-4 py-3 text-muted\">");
                 html.Append(Encode(entry.Region ?? "Not specified"));
                 html.Append("</td><td class=\"px-4 py-3\">");
                 html.Append(Encode(entry.ServerCount.ToString()));
