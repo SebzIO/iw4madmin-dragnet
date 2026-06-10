@@ -17,6 +17,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("review service denies pending ban and blocks untrusted approval", TestReviewTransitionsAsync),
     ("peer store tracks bootstrap, errors, removal, and send cursor", TestPeerStoreAsync),
     ("statistics aggregate participating servers and shared bans", TestStatisticsAsync),
+    ("onboarding verifies public health and readiness", TestOnboardingReadinessAsync),
     ("event store expires elapsed temp bans", TestEventStoreExpiresElapsedTempBansAsync),
     ("import service skips disabled and already imported events", TestImportServiceSkipsAsync),
     ("import service queues unknown players", TestImportServiceQueuesUnknownPlayersAsync),
@@ -321,6 +322,41 @@ static async Task TestStatisticsAsync()
     Assert.Equal(2, statistics.SharedBanCount, "statistics should count unique ban-created events");
 }
 
+static async Task TestOnboardingReadinessAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        OriginName = "Test Network",
+        PublicEndpoint = "https://local.example/dragnet",
+        UpdateCheckEnabled = false
+    };
+    var identityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "identity"));
+    var identity = identityService.LoadOrCreate(configuration.OriginName);
+    var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
+    await peerStore.LoadAsync(configuration, CancellationToken.None);
+    using var updateService = new DragnetUpdateService(
+        configuration,
+        new TestLogger<DragnetUpdateService>(),
+        new HttpClient(new StaticResponseHandler(System.Net.HttpStatusCode.OK, "{}")));
+    using var healthClient = new HttpClient(new StaticResponseHandler(
+        System.Net.HttpStatusCode.OK,
+        $$"""{"originId":"{{identity.OriginId}}"}"""));
+    var onboarding = new DragnetOnboardingService(
+        configuration,
+        identity,
+        peerStore,
+        updateService,
+        healthClient);
+
+    var status = await onboarding.GetStatusAsync(CancellationToken.None);
+    Assert.True(status.IdentityConfigured, "named identity should pass onboarding");
+    Assert.True(status.EndpointConfigured, "absolute endpoint should pass configuration check");
+    Assert.True(status.EndpointUsesHttps, "https endpoint should pass transport check");
+    Assert.True(status.EndpointVerified, "matching public health identity should verify endpoint");
+    Assert.False(status.PeerConnected, "no peer should not pass connectivity check");
+}
+
 static async Task TestEventStoreExpiresElapsedTempBansAsync()
 {
     await using var testDir = new TestDirectory();
@@ -558,6 +594,16 @@ static async Task TestWebfrontDashboardRendersAsync()
         configuration,
         new TestLogger<DragnetUpdateService>(),
         new HttpClient(new StaticResponseHandler(System.Net.HttpStatusCode.OK, "{}")));
+    using var healthClient = new HttpClient(new StaticResponseHandler(
+        System.Net.HttpStatusCode.OK,
+        $$"""{"originId":"{{identity.OriginId}}"}"""));
+    var onboardingService = new DragnetOnboardingService(
+        configuration,
+        identity,
+        peerStore,
+        updateService,
+        healthClient);
+    var configurationHandler = new RecordingConfigurationHandler<DragnetConfiguration>();
     var webfront = new DragnetWebfrontService(
         configuration,
         eventStore,
@@ -565,7 +611,9 @@ static async Task TestWebfrontDashboardRendersAsync()
         reviewService,
         trustService,
         updateService,
+        onboardingService,
         identity,
+        configurationHandler,
         managerFactory: () => null!);
     var interaction = await webfront.CreateNavigationInteractionAsync(CancellationToken.None);
 
@@ -586,6 +634,8 @@ static async Task TestWebfrontDashboardRendersAsync()
     }, CancellationToken.None);
     Assert.Contains("Peer transport", html, "dashboard should include peer section");
     Assert.Contains("Dragnet events", html, "dashboard should include event section");
+    Assert.Contains("Deployment readiness", html, "dashboard should include onboarding diagnostics");
+    Assert.Contains("Configure", html, "dashboard should expose the setup action");
     Assert.Contains($"Dragnet {DragnetBuildInfo.Version}", html, "dashboard should show deployed Dragnet version");
     Assert.Contains("Queued imports", html, "dashboard should distinguish queued imports");
     Assert.Contains("Degraded peers", html, "dashboard should expose transient peer health");

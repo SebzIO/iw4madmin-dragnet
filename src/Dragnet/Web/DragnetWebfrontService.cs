@@ -20,6 +20,7 @@ public sealed class DragnetWebfrontService
     public const string ReviewInteractionId = "Dragnet::Review";
     public const string TrustInteractionId = "Dragnet::Trust";
     public const string PeerInteractionId = "Dragnet::Peer";
+    public const string SetupInteractionId = "Dragnet::Setup";
 
     private readonly DragnetConfiguration _configuration;
     private readonly DragnetEventStore _eventStore;
@@ -27,7 +28,9 @@ public sealed class DragnetWebfrontService
     private readonly DragnetReviewService _reviewService;
     private readonly DragnetTrustService _trustService;
     private readonly DragnetUpdateService _updateService;
+    private readonly DragnetOnboardingService _onboardingService;
     private readonly DragnetIdentityDocument _identity;
+    private readonly IConfigurationHandlerV2<DragnetConfiguration> _configurationHandler;
     private readonly Func<IManager> _managerFactory;
 
     public DragnetWebfrontService(
@@ -37,7 +40,9 @@ public sealed class DragnetWebfrontService
         DragnetReviewService reviewService,
         DragnetTrustService trustService,
         DragnetUpdateService updateService,
+        DragnetOnboardingService onboardingService,
         DragnetIdentityDocument identity,
+        IConfigurationHandlerV2<DragnetConfiguration> configurationHandler,
         Func<IManager> managerFactory)
     {
         _configuration = configuration;
@@ -46,7 +51,9 @@ public sealed class DragnetWebfrontService
         _reviewService = reviewService;
         _trustService = trustService;
         _updateService = updateService;
+        _onboardingService = onboardingService;
         _identity = identity;
+        _configurationHandler = configurationHandler;
         _managerFactory = managerFactory;
     }
 
@@ -121,11 +128,30 @@ public sealed class DragnetWebfrontService
         return Task.FromResult(interaction);
     }
 
+    public Task<IInteractionData> CreateSetupInteractionAsync(CancellationToken token)
+    {
+        IInteractionData interaction = new InteractionData
+        {
+            Name = "Configure Dragnet",
+            Description = "Configure Dragnet",
+            DisplayMeta = "ph-gear",
+            InteractionId = SetupInteractionId,
+            MinimumPermission = _configuration.PeerManagementPermission,
+            InteractionType = InteractionType.RawContent,
+            Source = "Dragnet",
+            Action = async (originId, _, _, meta, actionToken) =>
+                await ProcessSetupActionAsync(originId, meta, actionToken)
+        };
+
+        return Task.FromResult(interaction);
+    }
+
     private async Task<string> RenderDashboardAsync(
         IDictionary<string, string>? meta,
         CancellationToken token)
     {
         await _updateService.RefreshForPageLoadAsync(token);
+        var onboarding = await _onboardingService.GetStatusAsync(token);
         var events = await _eventStore.ListAsync(token);
         var peers = await _peerStore.ListAsync(token);
         var filter = ParseFilter(meta);
@@ -155,6 +181,7 @@ public sealed class DragnetWebfrontService
         var html = new StringBuilder();
         html.AppendLine("<div class=\"space-y-6\">");
         AppendOperationalHeader(html, updateStatus, now);
+        AppendOnboardingPanel(html, onboarding);
         html.AppendLine("<div class=\"grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-4\">");
         AppendMetric(html, "Pending bans", pendingBans.ToString());
         AppendMetric(html, "Pending lifts", pendingLifts.ToString());
@@ -389,6 +416,74 @@ public sealed class DragnetWebfrontService
             default:
                 return "Invalid Dragnet peer action.";
         }
+    }
+
+    private async Task<string> ProcessSetupActionAsync(
+        int originId,
+        IDictionary<string, string>? meta,
+        CancellationToken token)
+    {
+        var manager = _managerFactory();
+        var origin = originId > 0 ? await manager.GetClientService().Get(originId) : null;
+        if (!HasPermission(origin, _configuration.PeerManagementPermission))
+        {
+            return "You are not authorized to configure Dragnet.";
+        }
+
+        if (meta is null ||
+            !meta.TryGetValue("OriginName", out var originName) ||
+            !meta.TryGetValue("PublicEndpoint", out var publicEndpoint))
+        {
+            return "Network name and public endpoint are required.";
+        }
+
+        originName = originName.Trim();
+        publicEndpoint = publicEndpoint.Trim().TrimEnd('/');
+        meta.TryGetValue("BootstrapEndpoint", out var bootstrapEndpoint);
+        bootstrapEndpoint = bootstrapEndpoint?.Trim().TrimEnd('/');
+
+        if (string.IsNullOrWhiteSpace(originName))
+        {
+            return "Network name is required.";
+        }
+
+        if (!Uri.TryCreate(publicEndpoint, UriKind.Absolute, out var publicUri) ||
+            publicUri.Scheme != Uri.UriSchemeHttps)
+        {
+            return "Public endpoint must be an absolute HTTPS URL.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(bootstrapEndpoint))
+        {
+            if (!Uri.TryCreate(bootstrapEndpoint, UriKind.Absolute, out var bootstrapUri) ||
+                bootstrapUri.Scheme != Uri.UriSchemeHttps)
+            {
+                return "Bootstrap endpoint must be an absolute HTTPS URL.";
+            }
+
+            if (bootstrapEndpoint.Equals(publicEndpoint, StringComparison.OrdinalIgnoreCase))
+            {
+                return "Bootstrap endpoint cannot be this Dragnet node's public endpoint.";
+            }
+
+            if (!_configuration.BootstrapPeers.Any(peer =>
+                    peer.Endpoint.TrimEnd('/').Equals(bootstrapEndpoint, StringComparison.OrdinalIgnoreCase)))
+            {
+                _configuration.BootstrapPeers.Add(new DragnetPeerConfiguration
+                {
+                    Endpoint = bootstrapEndpoint,
+                    Enabled = true
+                });
+            }
+
+            await _peerStore.AddManualPeerAsync(bootstrapEndpoint, null, token);
+        }
+
+        _configuration.OriginName = originName;
+        _configuration.PublicEndpoint = publicEndpoint;
+        await _configurationHandler.Set(_configuration);
+        _onboardingService.Invalidate();
+        return "Dragnet configuration saved. Restart IW4MAdmin to apply the network identity and endpoint everywhere.";
     }
 
     private void AppendEventDetail(
@@ -905,6 +1000,108 @@ public sealed class DragnetWebfrontService
         html.Append("<div class=\"mt-2 text-3xl font-semibold\">");
         html.Append(Encode(value));
         html.AppendLine("</div></div>");
+    }
+
+    private void AppendOnboardingPanel(
+        StringBuilder html,
+        DragnetOnboardingStatus status)
+    {
+        html.AppendLine("<div class=\"border border-line bg-surface/50 overflow-hidden\">");
+        html.AppendLine("<div class=\"px-4 py-3 border-b border-line flex flex-col md:flex-row md:items-center md:justify-between gap-3\">");
+        html.AppendLine("<div>");
+        html.AppendLine("<h3 class=\"font-semibold\">Deployment readiness</h3>");
+        html.Append("<div class=\"text-sm text-muted\">");
+        html.Append(Encode($"{status.CompletedChecks}/{DragnetOnboardingStatus.TotalChecks} checks passing"));
+        if (status.RestartRequired)
+        {
+            html.Append(" <span class=\"text-warning\">Restart required</span>");
+        }
+
+        html.AppendLine("</div></div>");
+        AppendSetupButton(html);
+        html.AppendLine("</div>");
+        html.AppendLine("<div class=\"grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3\">");
+        AppendOnboardingCheck(html, "Network identity", status.IdentityConfigured,
+            status.IdentityConfigured ? _configuration.OriginName : "Choose a recognizable community name");
+        AppendOnboardingCheck(html, "Public endpoint", status.EndpointConfigured,
+            status.EndpointConfigured ? _configuration.PublicEndpoint! : "Configure the external /dragnet URL");
+        AppendOnboardingCheck(html, "HTTPS", status.EndpointUsesHttps,
+            status.EndpointUsesHttps ? "Endpoint uses HTTPS" : "A valid TLS endpoint is required");
+        AppendOnboardingCheck(html, "External health", status.EndpointVerified,
+            status.EndpointVerified
+                ? "Health endpoint matches this identity"
+                : Shorten(status.EndpointError ?? "Endpoint has not been verified", 100));
+        AppendOnboardingCheck(html, "Peer connectivity", status.PeerConnected,
+            status.PeerConnected
+                ? "At least one live peer is connected"
+                : status.SeedConfigured ? "Seed configured; waiting for heartbeat" : "Add a bootstrap peer");
+        AppendOnboardingCheck(html, "Plugin version", status.UpdateCurrent,
+            status.UpdateCurrent ? "Current release detected" : "Review release status above");
+        html.AppendLine("</div></div>");
+    }
+
+    private static void AppendOnboardingCheck(
+        StringBuilder html,
+        string label,
+        bool passed,
+        string detail)
+    {
+        html.AppendLine("<div class=\"px-4 py-3 border-b border-r border-line/60\">");
+        html.Append("<div class=\"flex items-center gap-2 font-medium\"><i class=\"ph ");
+        html.Append(passed ? "ph-check-circle text-success" : "ph-warning-circle text-warning");
+        html.Append("\"></i>");
+        html.Append(Encode(label));
+        html.AppendLine("</div>");
+        html.Append("<div class=\"mt-1 text-xs text-muted break-words\">");
+        html.Append(Encode(detail));
+        html.AppendLine("</div></div>");
+    }
+
+    private void AppendSetupButton(StringBuilder html)
+    {
+        var meta = new Dictionary<string, string>
+        {
+            ["InteractionId"] = SetupInteractionId,
+            ["ActionButtonLabel"] = "Save configuration",
+            ["Name"] = "Configure Dragnet",
+            ["ShouldRefresh"] = "true",
+            ["Inputs"] = BuildSetupInputs()
+        };
+        var encodedMeta = Uri.EscapeDataString(JsonSerializer.Serialize(meta));
+        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer\" data-action=\"DynamicAction\" data-action-meta=\"");
+        html.Append(Encode(encodedMeta));
+        html.Append("\"><span class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ph-gear mr-1\"></i>Configure</span></button>");
+    }
+
+    private string BuildSetupInputs()
+    {
+        var seed = _configuration.BootstrapPeers
+            .FirstOrDefault(peer => peer.Enabled && !string.IsNullOrWhiteSpace(peer.Endpoint))
+            ?.Endpoint ?? "";
+        return JsonSerializer.Serialize(new List<Dictionary<string, object?>>
+        {
+            new()
+            {
+                ["Name"] = "OriginName",
+                ["Label"] = "Network name",
+                ["Value"] = _configuration.OriginName,
+                ["Placeholder"] = "My IW4MAdmin Network"
+            },
+            new()
+            {
+                ["Name"] = "PublicEndpoint",
+                ["Label"] = "Public Dragnet endpoint",
+                ["Value"] = _configuration.PublicEndpoint ?? "",
+                ["Placeholder"] = "https://admin.example.com/dragnet"
+            },
+            new()
+            {
+                ["Name"] = "BootstrapEndpoint",
+                ["Label"] = "Bootstrap peer (optional)",
+                ["Value"] = seed,
+                ["Placeholder"] = "https://peer.example.com/dragnet"
+            }
+        });
     }
 
     private static void AppendOperationalHeader(

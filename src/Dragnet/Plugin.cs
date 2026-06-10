@@ -124,6 +124,7 @@ public sealed class Plugin : IPluginV2
         });
         serviceCollection.AddSingleton<DragnetTransportService>();
         serviceCollection.AddSingleton<DragnetUpdateService>();
+        serviceCollection.AddSingleton<DragnetOnboardingService>();
         serviceCollection.AddSingleton<DragnetWebfrontService>();
         serviceCollection.AddSingleton<IManagerCommand, DragnetCommand>();
     }
@@ -145,6 +146,9 @@ public sealed class Plugin : IPluginV2
         _interactionRegistration.RegisterInteraction(
             DragnetWebfrontService.PeerInteractionId,
             (_, _, interactionToken) => _webfrontService.CreatePeerInteractionAsync(interactionToken));
+        _interactionRegistration.RegisterInteraction(
+            DragnetWebfrontService.SetupInteractionId,
+            (_, _, interactionToken) => _webfrontService.CreateSetupInteractionAsync(interactionToken));
         _transportService.Start();
         _updateService.Start();
 
@@ -191,6 +195,7 @@ public sealed class Plugin : IPluginV2
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.ReviewInteractionId);
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.TrustInteractionId);
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.PeerInteractionId);
+        _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.SetupInteractionId);
         _transportService.StopAsync().GetAwaiter().GetResult();
         _logger.LogInformation("Dragnet unloaded");
     }

@@ -46,6 +46,14 @@ src/Dragnet/bin/Release/net10.0/Dragnet.dll
 
 Copy `Dragnet.dll` into the IW4MAdmin `Plugins` directory, then restart IW4MAdmin.
 
+After startup, open **Admin > Dragnet** and use **Configure** in the deployment-readiness panel. The guided setup persists:
+
+- a recognizable network/community name
+- the externally reachable HTTPS Dragnet endpoint
+- an optional bootstrap peer
+
+The readiness panel checks identity configuration, endpoint syntax, HTTPS, public `/dragnet/health` reachability, peer connectivity, and release status. Saving setup changes requires an IW4MAdmin restart so identity and transport state remain consistent.
+
 To create the same zip package used by GitHub releases:
 
 ```bash
@@ -105,6 +113,8 @@ Example configuration:
 ```
 
 `PublicEndpoint` should be the externally reachable Dragnet base URL for this IW4MAdmin instance. Peers call `POST {PublicEndpoint}/heartbeat`.
+
+`GET {PublicEndpoint}/health` is an anonymous, read-only installation check containing the Dragnet version, origin fingerprint, display name, and monitored server count. It does not expose players, bans, trust configuration, keys, or peer details.
 
 `PeerFailureThreshold` controls how many consecutive heartbeat failures are required before a peer is shown as errored. A successful heartbeat clears the failure count and visible error automatically.
 

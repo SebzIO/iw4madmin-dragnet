@@ -1,4 +1,5 @@
 using Dragnet.Configuration;
+using Dragnet.Identity;
 using Dragnet.Models;
 using Dragnet.Services;
 using Dragnet.Storage;
@@ -18,20 +19,38 @@ public sealed class DragnetController : ControllerBase
     private readonly DragnetPeerStore _peerStore;
     private readonly DragnetTransportService _transportService;
     private readonly DragnetUpdateService _updateService;
+    private readonly DragnetIdentityDocument _identity;
+    private readonly Func<int> _localServerCount;
 
     public DragnetController(
         DragnetConfiguration configuration,
         DragnetEventStore eventStore,
         DragnetPeerStore peerStore,
         DragnetTransportService transportService,
-        DragnetUpdateService updateService)
+        DragnetUpdateService updateService,
+        DragnetIdentityDocument identity,
+        Func<int> localServerCount)
     {
         _configuration = configuration;
         _eventStore = eventStore;
         _peerStore = peerStore;
         _transportService = transportService;
         _updateService = updateService;
+        _identity = identity;
+        _localServerCount = localServerCount;
     }
+
+    [AllowAnonymous]
+    [HttpGet("/dragnet/health")]
+    [ProducesResponseType<DragnetHealthResponse>(StatusCodes.Status200OK)]
+    public ActionResult<DragnetHealthResponse> Health() => Ok(new DragnetHealthResponse
+    {
+        Status = _configuration.Enabled ? "ready" : "disabled",
+        Version = DragnetBuildInfo.Version,
+        OriginId = _identity.OriginId,
+        OriginName = _identity.OriginName,
+        ServerCount = Math.Max(0, _localServerCount())
+    });
 
     [AllowAnonymous]
     [IgnoreAntiforgeryToken]
@@ -120,6 +139,15 @@ public sealed class DragnetController : ControllerBase
                Request.Headers.TryGetValue("X-Forwarded-Proto", out var forwardedProto) &&
                forwardedProto.Any(value => string.Equals(value, "https", StringComparison.OrdinalIgnoreCase));
     }
+}
+
+public sealed record DragnetHealthResponse
+{
+    public required string Status { get; init; }
+    public required string Version { get; init; }
+    public required string OriginId { get; init; }
+    public required string OriginName { get; init; }
+    public required int ServerCount { get; init; }
 }
 
 public sealed record DragnetStatusResponse
