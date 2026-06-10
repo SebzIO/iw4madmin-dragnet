@@ -23,6 +23,8 @@ This repository is in the MVP testing stage. The current implementation:
 - signs peer identity advertisements and public health responses
 - verifies directory endpoints after direct signed heartbeat contact
 - exposes a shareable, endpoint-specific `GET /dragnet/setup-guide`
+- rotates gossiped peers fairly across heartbeat batches
+- persists per-peer advertisement timestamps across restarts
 - adds an administrator-only Dragnet webfront interaction page
 - supports webfront peer health, stale-peer visibility, error clearing, and discovered-peer removal
 - supports webfront-first approve, deny, ignore, retry-import, and trust decisions
@@ -134,6 +136,8 @@ A remote listing becomes verified only after the local node directly contacts it
 `GET {PublicEndpoint}/setup-guide` provides a shareable JSON deployment checklist tailored to the configured endpoint. It contains public routes, the official bootstrap endpoint, and reverse-proxy requirements; it contains no credentials, private keys, bans, players, or trust settings.
 
 `PeerFailureThreshold` controls how many consecutive heartbeat failures are required before a peer is shown as errored. A successful heartbeat clears the failure count and visible error automatically.
+
+`MaxKnownPeersPerHeartbeat` limits the number of peer advertisements carried in one heartbeat, not the total number of peers Dragnet can store or contact. Eligible peers are rotated using their persisted `LastAdvertisedAtUtc` timestamp. Never-advertised peers go first, then the least recently advertised peers; verified and fully healthy peers break otherwise equal ties. Stale peers, visibly errored peers, and the heartbeat counterpart are omitted. This keeps heartbeat payloads bounded while ensuring networks beyond the configured limit still receive discovery exposure.
 
 The dashboard checks the official GitHub releases API in the background and caches the result. Opening the Dragnet dashboard refreshes release information when the cached check is older than `PageLoadUpdateCheckMaxAge` (five minutes by default). Concurrent page loads share the same check. If the API is unavailable or rate-limited, Dragnet falls back to the repository's public Atom release feed. `UpdateCheckEnabled` disables outbound checks, while `UpdateCheckInterval` controls the background refresh interval.
 

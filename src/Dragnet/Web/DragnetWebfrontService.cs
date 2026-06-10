@@ -178,6 +178,14 @@ public sealed class DragnetWebfrontService
             string.IsNullOrWhiteSpace(peer.LastError) &&
             !IsStalePeer(peer, now) &&
             peer.ConsecutiveFailures > 0);
+        var eligibleGossipPeers = peers.Count(peer =>
+            string.IsNullOrWhiteSpace(peer.LastError) &&
+            !IsStalePeer(peer, now));
+        var recentlyAdvertisedPeers = peers.Count(peer =>
+            peer.LastAdvertisedAtUtc is { } advertisedAt &&
+            now - advertisedAt <= _configuration.PeerStaleAfter);
+        var verifiedPeers = peers.Count(peer => peer.IdentityVerified);
+        var legacyPeers = peers.Count(peer => !peer.IdentityVerified);
         var updateStatus = _updateService.Status;
         var filteredEvents = FilterEvents(events, filter).Take(50).ToList();
         var selectedEvent = ResolveSelectedEvent(events, selectedEventId) ?? filteredEvents.FirstOrDefault();
@@ -199,6 +207,10 @@ public sealed class DragnetWebfrontService
         AppendMetric(html, "Degraded peers", degradedPeers.ToString());
         AppendMetric(html, "Stale peers", stalePeers.ToString());
         AppendMetric(html, "Errored peers", erroredPeers.ToString());
+        AppendMetric(html, "Gossip eligible", eligibleGossipPeers.ToString());
+        AppendMetric(html, "Advertised recently", recentlyAdvertisedPeers.ToString());
+        AppendMetric(html, "Verified identities", verifiedPeers.ToString());
+        AppendMetric(html, "Legacy identities", legacyPeers.ToString());
         html.AppendLine("</div>");
 
         html.AppendLine("<div class=\"rounded-lg border border-line bg-surface/50 overflow-hidden\">");
@@ -208,11 +220,11 @@ public sealed class DragnetWebfrontService
         html.Append(Encode(_configuration.PublicEndpoint ?? "not configured"));
         html.AppendLine("</span>");
         html.AppendLine("</div>");
-        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Endpoint</th><th class=\"px-4 py-3\">Source</th><th class=\"px-4 py-3\">Last seen</th><th class=\"px-4 py-3\">Last sent</th><th class=\"px-4 py-3\">Status</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
+        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Endpoint</th><th class=\"px-4 py-3\">Source</th><th class=\"px-4 py-3\">Last seen</th><th class=\"px-4 py-3\">Last advertised</th><th class=\"px-4 py-3\">Last sent</th><th class=\"px-4 py-3\">Status</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
 
         if (peers.Count == 0)
         {
-            html.AppendLine("<tr><td colspan=\"7\" class=\"px-4 py-6 text-center text-muted\">No peers discovered.</td></tr>");
+            html.AppendLine("<tr><td colspan=\"8\" class=\"px-4 py-6 text-center text-muted\">No peers discovered.</td></tr>");
         }
         else
         {
@@ -230,6 +242,11 @@ public sealed class DragnetWebfrontService
                 html.AppendLine("</td>");
                 html.Append("<td class=\"px-4 py-3 text-muted\">");
                 html.Append(Encode(DescribeAge(now - peer.LastSeenUtc)));
+                html.AppendLine("</td>");
+                html.Append("<td class=\"px-4 py-3 text-muted\">");
+                html.Append(peer.LastAdvertisedAtUtc is null
+                    ? "Never"
+                    : Encode(DescribeAge(now - peer.LastAdvertisedAtUtc.Value)));
                 html.AppendLine("</td>");
                 html.Append("<td class=\"px-4 py-3 text-muted\">");
                 html.Append(peer.LastEventSentAtUtc is null || peer.LastEventSentAtUtc.Value <= DateTimeOffset.UnixEpoch

@@ -170,6 +170,14 @@ public sealed class DragnetController : ControllerBase
                 now - peer.LastSeenUtc <= _configuration.PeerStaleAfter),
             StalePeerCount = peers.Count(peer => now - peer.LastSeenUtc > _configuration.PeerStaleAfter),
             ErroredPeerCount = peers.Count(peer => !string.IsNullOrWhiteSpace(peer.LastError)),
+            GossipEligiblePeerCount = peers.Count(peer =>
+                string.IsNullOrWhiteSpace(peer.LastError) &&
+                now - peer.LastSeenUtc <= _configuration.PeerStaleAfter),
+            RecentlyAdvertisedPeerCount = peers.Count(peer =>
+                peer.LastAdvertisedAtUtc is { } advertisedAt &&
+                now - advertisedAt <= _configuration.PeerStaleAfter),
+            VerifiedIdentityPeerCount = peers.Count(peer => peer.IdentityVerified),
+            LegacyIdentityPeerCount = peers.Count(peer => !peer.IdentityVerified),
             PendingBanCount = events.Count(item => item.ReviewState is DragnetReviewState.PendingBan),
             PendingLiftCount = events.Count(item => item.ReviewState is DragnetReviewState.PendingLift),
             ApprovedBanCount = events.Count(item => item.ReviewState is DragnetReviewState.ApprovedBan),
@@ -254,6 +262,14 @@ public sealed record DragnetStatusResponse
     public required int StalePeerCount { get; init; }
 
     public required int ErroredPeerCount { get; init; }
+
+    public required int GossipEligiblePeerCount { get; init; }
+
+    public required int RecentlyAdvertisedPeerCount { get; init; }
+
+    public required int VerifiedIdentityPeerCount { get; init; }
+
+    public required int LegacyIdentityPeerCount { get; init; }
 
     public required int PendingBanCount { get; init; }
 

@@ -95,6 +95,58 @@ public sealed class DragnetPeerStore
         }
     }
 
+    public async Task<IReadOnlyList<DragnetPeerRecord>> SelectForGossipAsync(
+        int maximumPeers,
+        TimeSpan staleAfter,
+        string? excludedOriginId,
+        string? excludedEndpoint,
+        CancellationToken token)
+    {
+        if (maximumPeers <= 0)
+        {
+            return [];
+        }
+
+        await _lock.WaitAsync(token);
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var normalizedExcludedEndpoint = excludedEndpoint?.TrimEnd('/');
+            var selected = _peers.Values
+                .Where(peer =>
+                    string.IsNullOrWhiteSpace(peer.LastError) &&
+                    now - peer.LastSeenUtc <= staleAfter &&
+                    !string.Equals(peer.OriginId, excludedOriginId, StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(
+                        peer.Endpoint.TrimEnd('/'),
+                        normalizedExcludedEndpoint,
+                        StringComparison.OrdinalIgnoreCase))
+                .OrderBy(peer => peer.LastAdvertisedAtUtc is not null)
+                .ThenBy(peer => peer.LastAdvertisedAtUtc)
+                .ThenByDescending(peer => peer.IdentityVerified)
+                .ThenBy(peer => peer.ConsecutiveFailures)
+                .ThenByDescending(peer => peer.LastSeenUtc)
+                .Take(maximumPeers)
+                .ToList();
+
+            foreach (var peer in selected)
+            {
+                peer.LastAdvertisedAtUtc = now;
+            }
+
+            if (selected.Count > 0)
+            {
+                await SaveUnlockedAsync(token);
+            }
+
+            return selected;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
     public async Task UpsertAsync(
         DragnetPeerInfo peerInfo,
         CancellationToken token,
@@ -305,6 +357,10 @@ public sealed class DragnetPeerStore
                 .OrderByDescending(peer => peer.EndpointVerifiedAtUtc)
                 .FirstOrDefault();
             var preserveVerifiedMetadata = previouslyVerified && !identityVerified && previousProof is not null;
+            var lastAdvertisedAtUtc = relatedRecords
+                .Where(peer => peer.LastAdvertisedAtUtc is not null)
+                .Select(peer => peer.LastAdvertisedAtUtc)
+                .Max();
 
             foreach (var related in relatedRecords)
             {
@@ -332,6 +388,7 @@ public sealed class DragnetPeerStore
                 EndpointVerifiedAtUtc = identityVerified
                     ? DateTimeOffset.UtcNow
                     : previousEndpointVerifiedAtUtc,
+                LastAdvertisedAtUtc = lastAdvertisedAtUtc,
                 IsBootstrap = isBootstrap
             };
             ClearFailureState(healthy);
@@ -468,6 +525,11 @@ public sealed class DragnetPeerStore
                     canonical.Signature = provisional.Signature;
                     canonical.IdentityVerified = provisional.IdentityVerified;
                     canonical.EndpointVerifiedAtUtc = provisional.EndpointVerifiedAtUtc;
+                }
+                if (canonical.LastAdvertisedAtUtc is null ||
+                    provisional.LastAdvertisedAtUtc > canonical.LastAdvertisedAtUtc)
+                {
+                    canonical.LastAdvertisedAtUtc = provisional.LastAdvertisedAtUtc;
                 }
                 if (canonical.LastEventSentAtUtc is null ||
                     provisional.LastEventSentAtUtc > canonical.LastEventSentAtUtc)

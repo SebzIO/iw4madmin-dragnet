@@ -16,6 +16,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("trust service persists and evaluates auto-approval", TestTrustServicePersistsAsync),
     ("review service denies pending ban and blocks untrusted approval", TestReviewTransitionsAsync),
     ("peer store tracks bootstrap, errors, removal, and send cursor", TestPeerStoreAsync),
+    ("peer gossip selection rotates fairly and persists", TestPeerGossipRotationAsync),
     ("statistics aggregate participating servers and shared bans", TestStatisticsAsync),
     ("onboarding verifies public health and readiness", TestOnboardingReadinessAsync),
     ("directory lists only opted-in healthy networks", TestDirectoryListingsAsync),
@@ -322,6 +323,71 @@ static async Task TestStatisticsAsync()
     Assert.Equal(8, statistics.ParticipatingServerCount, "statistics should deduplicate server counts by endpoint");
     Assert.Equal(2, statistics.ParticipatingNodeCount, "statistics should include local and peer nodes");
     Assert.Equal(2, statistics.SharedBanCount, "statistics should count unique ban-created events");
+}
+
+static async Task TestPeerGossipRotationAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        PeerStaleAfter = TimeSpan.FromMinutes(10)
+    };
+    var store = new DragnetPeerStore(testDir.Path);
+    await store.LoadAsync(configuration, CancellationToken.None);
+
+    for (var index = 1; index <= 6; index++)
+    {
+        await store.UpsertAsync(new DragnetPeerInfo
+        {
+            OriginId = $"peer-{index}",
+            OriginName = $"Peer {index}",
+            PublicEndpoint = $"https://peer-{index}.example/dragnet",
+            SeenAtUtc = index == 6
+                ? DateTimeOffset.UtcNow.AddMinutes(-20)
+                : DateTimeOffset.UtcNow
+        }, CancellationToken.None, identityVerified: index is 1 or 6);
+    }
+
+    await store.MarkErrorAsync("peer-5", "offline", CancellationToken.None);
+
+    var first = await store.SelectForGossipAsync(
+        2,
+        configuration.PeerStaleAfter,
+        null,
+        null,
+        CancellationToken.None);
+    Assert.Equal(2, first.Count, "first gossip batch should honor maximum");
+    Assert.True(first.Any(peer => peer.OriginId == "peer-1"),
+        "verified peer should win the tie among never-advertised eligible peers");
+    Assert.False(first.Any(peer => peer.OriginId is "peer-5" or "peer-6"),
+        "errored and stale peers should be excluded");
+
+    var second = await store.SelectForGossipAsync(
+        2,
+        configuration.PeerStaleAfter,
+        null,
+        null,
+        CancellationToken.None);
+    Assert.True(second.Any(peer => peer.OriginId is "peer-3" or "peer-4"),
+        "never-advertised eligible peers should rotate into the next batch");
+    Assert.False(first.Select(peer => peer.OriginId).Intersect(second.Select(peer => peer.OriginId)).Any(),
+        "eligible peers should not repeat before never-advertised peers receive exposure");
+
+    var excluded = await store.SelectForGossipAsync(
+        4,
+        configuration.PeerStaleAfter,
+        "peer-1",
+        "https://peer-1.example/dragnet",
+        CancellationToken.None);
+    Assert.False(excluded.Any(peer => peer.OriginId == "peer-1"),
+        "heartbeat counterpart should not be advertised back to itself");
+
+    await store.LoadAsync(configuration, CancellationToken.None);
+    var persisted = await store.ListAsync(CancellationToken.None);
+    Assert.True(persisted
+            .Where(peer => peer.OriginId is "peer-1" or "peer-2" or "peer-3" or "peer-4")
+            .All(peer => peer.LastAdvertisedAtUtc is not null),
+        "advertisement timestamps should survive restart");
 }
 
 static async Task TestOnboardingReadinessAsync()
@@ -802,6 +868,9 @@ static async Task TestWebfrontDashboardRendersAsync()
     Assert.Contains($"Dragnet {DragnetBuildInfo.Version}", html, "dashboard should show deployed Dragnet version");
     Assert.Contains("Queued imports", html, "dashboard should distinguish queued imports");
     Assert.Contains("Degraded peers", html, "dashboard should expose transient peer health");
+    Assert.Contains("Gossip eligible", html, "dashboard should show gossip eligibility");
+    Assert.Contains("Advertised recently", html, "dashboard should show recent gossip coverage");
+    Assert.Contains("Last advertised", html, "peer table should show the persisted gossip cursor");
     Assert.Contains("Unknown", html, "dashboard should render unknown legacy timestamps and penalty ids without huge ages");
     Assert.Contains(
         "data-enhance-nav=\"false\"",

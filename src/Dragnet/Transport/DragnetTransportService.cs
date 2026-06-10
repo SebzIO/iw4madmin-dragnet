@@ -138,7 +138,10 @@ public sealed class DragnetTransportService : IDisposable
         return new DragnetHeartbeatResponse
         {
             Receiver = CreateLocalPeerInfo(),
-            KnownPeers = await CreateKnownPeerInfoAsync(token),
+            KnownPeers = await CreateKnownPeerInfoAsync(
+                request.Sender.OriginId,
+                request.Sender.PublicEndpoint,
+                token),
             Events = eventBatch
         };
     }
@@ -177,7 +180,10 @@ public sealed class DragnetTransportService : IDisposable
                 var request = new DragnetHeartbeatRequest
                 {
                     Sender = CreateLocalPeerInfo(),
-                    KnownPeers = await CreateKnownPeerInfoAsync(token),
+                    KnownPeers = await CreateKnownPeerInfoAsync(
+                        peer.OriginId,
+                        peer.Endpoint,
+                        token),
                     Events = eventBatch
                 };
 
@@ -385,12 +391,18 @@ public sealed class DragnetTransportService : IDisposable
         };
     }
 
-    private async Task<IReadOnlyList<DragnetPeerInfo>> CreateKnownPeerInfoAsync(CancellationToken token)
+    private async Task<IReadOnlyList<DragnetPeerInfo>> CreateKnownPeerInfoAsync(
+        string? excludedOriginId,
+        string? excludedEndpoint,
+        CancellationToken token)
     {
-        var peers = await _peerStore.ListAsync(token);
+        var peers = await _peerStore.SelectForGossipAsync(
+            Math.Max(0, _configuration.MaxKnownPeersPerHeartbeat),
+            _configuration.PeerStaleAfter,
+            excludedOriginId,
+            excludedEndpoint,
+            token);
         return peers
-            .Where(peer => string.IsNullOrWhiteSpace(peer.LastError))
-            .Take(Math.Max(0, _configuration.MaxKnownPeersPerHeartbeat))
             .Select(peer => new DragnetPeerInfo
             {
                 OriginId = peer.OriginId,

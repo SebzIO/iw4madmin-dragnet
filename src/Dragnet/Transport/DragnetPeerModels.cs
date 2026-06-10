@@ -89,5 +89,7 @@ public sealed record DragnetPeerRecord
 
     public DateTimeOffset? EndpointVerifiedAtUtc { get; set; }
 
+    public DateTimeOffset? LastAdvertisedAtUtc { get; set; }
+
     public bool IsBootstrap { get; set; }
 }
