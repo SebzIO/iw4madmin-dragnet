@@ -1413,6 +1413,10 @@ static async Task TestPublicLedgerAsync()
         "ledger should expose only peer propagation attestations");
     var html = await ledger.RenderHtmlAsync(ban.EventId, "Ledger", CancellationToken.None);
     Assert.Contains("Dragnet Public Ban Ledger", html, "public ledger should render its identity");
+    Assert.Contains(
+        "href=\"/\" aria-label=\"Return to IW4MAdmin webfront\">Back to IW4MAdmin</a>",
+        html,
+        "public ledger should provide a direct route back to the IW4MAdmin webfront");
     Assert.Contains("Ledger Player", html, "public ledger should render searchable ban details");
     Assert.Contains("Coverage Network", html, "public ledger should identify attesting networks");
     Assert.Contains("Stale Queue Network", html, "public ledger should identify stale queued reports");
