@@ -10,9 +10,9 @@
     <Authors>Sebz</Authors>
     <Product>Dragnet for IW4MAdmin</Product>
     <Description>Peer-to-peer IW4MAdmin ban review and propagation plugin.</Description>
-    <Version>0.1.0-beta.7</Version>
+    <Version>0.1.0-beta.8</Version>
     <AssemblyVersion>0.1.0.0</AssemblyVersion>
-    <FileVersion>0.1.0.26</FileVersion>
+    <FileVersion>0.1.0.27</FileVersion>
     <NuGetAudit>false</NuGetAudit>
   </PropertyGroup>
 

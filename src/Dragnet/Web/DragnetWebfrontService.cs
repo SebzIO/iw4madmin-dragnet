@@ -1411,8 +1411,8 @@ public sealed class DragnetWebfrontService
         StringBuilder html,
         DragnetOnboardingStatus status)
     {
-        html.AppendLine("<div class=\"border border-line bg-surface/50 overflow-hidden\">");
-        html.AppendLine("<div class=\"px-4 py-3 border-b border-line flex flex-col md:flex-row md:items-center md:justify-between gap-3\">");
+        html.AppendLine("<div class=\"rounded-lg bg-surface/50 p-2\">");
+        html.AppendLine("<div class=\"px-3 py-2 flex flex-col md:flex-row md:items-center md:justify-between gap-3\">");
         html.AppendLine("<div>");
         html.AppendLine("<h3 class=\"font-semibold\">Deployment readiness</h3>");
         html.Append("<div class=\"text-sm text-muted\">");
@@ -1425,7 +1425,7 @@ public sealed class DragnetWebfrontService
         html.AppendLine("</div></div>");
         AppendSetupButton(html);
         html.AppendLine("</div>");
-        html.AppendLine("<div class=\"grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3\">");
+        html.AppendLine("<div class=\"grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2\">");
         AppendOnboardingCheck(html, "Network identity", status.IdentityConfigured,
             status.IdentityConfigured ? _configuration.OriginName : "Choose a recognizable community name");
         AppendOnboardingCheck(html, "Public endpoint", status.EndpointConfigured,
@@ -1456,21 +1456,21 @@ public sealed class DragnetWebfrontService
     private void AppendDeploymentGuide(StringBuilder html)
     {
         var endpoint = _configuration.PublicEndpoint?.TrimEnd('/');
-        html.AppendLine("<div class=\"border border-line bg-surface/50 overflow-hidden\">");
-        html.AppendLine("<div class=\"px-4 py-3 border-b border-line flex flex-col md:flex-row md:items-center md:justify-between gap-2\">");
+        html.AppendLine("<div class=\"rounded-lg bg-surface/50 p-2\">");
+        html.AppendLine("<div class=\"px-3 py-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2\">");
         html.AppendLine("<div><h3 class=\"font-semibold\">Deployment guide</h3>");
         html.AppendLine("<div class=\"text-sm text-muted\">Endpoint-specific routes and reverse-proxy requirements.</div></div>");
         html.AppendLine("<a class=\"text-sm text-primary hover:underline\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"/dragnet/setup-guide\">Open shareable guide</a>");
         html.AppendLine("</div>");
-        html.AppendLine("<div class=\"grid grid-cols-1 lg:grid-cols-2\">");
-        html.AppendLine("<div class=\"p-4 border-b lg:border-r border-line/60 space-y-2 text-sm\">");
+        html.AppendLine("<div class=\"grid grid-cols-1 lg:grid-cols-2 gap-2\">");
+        html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 p-4 space-y-2 text-sm\">");
         AppendGuideValue(html, "Health", endpoint is null ? "Not configured" : $"{endpoint}/health");
         AppendGuideValue(html, "Heartbeat", endpoint is null ? "Not configured" : $"{endpoint}/heartbeat");
         AppendGuideValue(html, "Directory", endpoint is null ? "Not configured" : $"{endpoint}/directory");
         AppendGuideValue(html, "Public ledger", endpoint is null ? "Not configured" : $"{endpoint}/ledger");
         AppendGuideValue(html, "Bootstrap", DragnetConfiguration.OfficialBootstrapEndpoint);
         html.AppendLine("</div>");
-        html.AppendLine("<div class=\"p-4 text-sm space-y-2\">");
+        html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 p-4 text-sm space-y-2\">");
         AppendGuideCheck(html, "TLS certificate valid");
         AppendGuideCheck(html, "POST /dragnet/heartbeat forwarded");
         AppendGuideCheck(html, "X-Forwarded-Proto set to https");
@@ -1500,7 +1500,7 @@ public sealed class DragnetWebfrontService
         bool passed,
         string detail)
     {
-        html.AppendLine("<div class=\"px-4 py-3 border-b border-r border-line/60\">");
+        html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 px-4 py-3\">");
         html.Append("<div class=\"flex items-center gap-2 font-medium\"><i class=\"ph ");
         html.Append(passed ? "ph-check-circle text-success" : "ph-warning-circle text-warning");
         html.Append("\"></i>");
@@ -1648,14 +1648,14 @@ public sealed class DragnetWebfrontService
         DragnetUpdateStatus update,
         DateTimeOffset now)
     {
-        html.AppendLine("<div class=\"border border-line bg-surface/50\">");
-        html.AppendLine("<div class=\"grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4\">");
-        html.AppendLine("<div class=\"px-4 py-3 border-b sm:border-r xl:border-b-0 border-line/60\">");
+        html.AppendLine("<div class=\"rounded-lg bg-surface/50 p-2\">");
+        html.AppendLine("<div class=\"grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2\">");
+        html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 px-4 py-3\">");
         html.Append("<div class=\"text-xs text-muted\">Deployed version</div><div class=\"mt-1 font-semibold\">Dragnet ");
         html.Append(Encode(update.CurrentVersion));
         html.AppendLine("</div></div>");
 
-        html.AppendLine("<div class=\"px-4 py-3 border-b xl:border-r xl:border-b-0 border-line/60\">");
+        html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 px-4 py-3\">");
         html.Append("<div class=\"text-xs text-muted\">Release status</div><div class=\"mt-1 font-medium\">");
         if (update.UpdateAvailable)
         {
@@ -1682,7 +1682,7 @@ public sealed class DragnetWebfrontService
 
         html.AppendLine("</div></div>");
 
-        html.AppendLine("<div class=\"px-4 py-3 border-b sm:border-b-0 sm:border-r border-line/60\">");
+        html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 px-4 py-3\">");
         html.Append("<div class=\"text-xs text-muted\">Last checked</div><div class=\"mt-1 font-medium\">");
         html.Append(update.CheckedAtUtc is null
             ? "Not yet"
@@ -1695,7 +1695,7 @@ public sealed class DragnetWebfrontService
         }
 
         html.AppendLine("</div></div>");
-        html.AppendLine("<div class=\"px-4 py-3 flex flex-col justify-center\">");
+        html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 px-4 py-3 flex flex-col justify-center\">");
         html.AppendLine("<div class=\"text-xs text-muted\">Release channel</div>");
         if (update.UpdateAvailable && !string.IsNullOrWhiteSpace(update.ReleaseUrl))
         {

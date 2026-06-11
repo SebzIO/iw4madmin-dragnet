@@ -1628,6 +1628,13 @@ static async Task TestWebfrontDashboardRendersAsync()
     Assert.Contains("Peer transport", html, "dashboard should include peer section");
     Assert.Contains("Dragnet events", html, "dashboard should include event section");
     Assert.Contains("Deployment readiness", html, "dashboard should include onboarding diagnostics");
+    Assert.False(
+        html.Contains("px-4 py-3 border-b border-r border-line/60", StringComparison.Ordinal),
+        "deployment readiness checks should not render internal divider borders");
+    Assert.Contains(
+        "grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2",
+        html,
+        "release status should use spacing instead of internal dividers");
     Assert.Contains("Signed proof", html, "dashboard should expose identity proof diagnostics");
     Assert.Contains("Deployment guide", html, "dashboard should include endpoint-specific deployment guidance");
     Assert.Contains("/dragnet/setup-guide", html, "dashboard should link to the shareable setup guide");
