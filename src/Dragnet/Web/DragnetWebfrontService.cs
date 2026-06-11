@@ -873,23 +873,41 @@ public sealed class DragnetWebfrontService
         switch (item.ReviewState)
         {
             case DragnetReviewState.PendingBan:
+            case DragnetReviewState.DeniedBan:
+            case DragnetReviewState.IgnoredBan:
                 if (isTrusted)
                 {
                     AppendActionButton(html, item.Event.EventId, DragnetReviewAction.ApproveBan, "Approve", "ph-check");
                 }
 
-                AppendActionButton(html, item.Event.EventId, DragnetReviewAction.DenyBan, "Deny", "ph-x", includeReason: true);
-                AppendActionButton(html, item.Event.EventId, DragnetReviewAction.IgnoreBan, "Ignore", "ph-eye-slash");
+                if (item.ReviewState is not DragnetReviewState.DeniedBan)
+                {
+                    AppendActionButton(html, item.Event.EventId, DragnetReviewAction.DenyBan, "Deny", "ph-x", includeReason: true);
+                }
+
+                if (item.ReviewState is not DragnetReviewState.IgnoredBan)
+                {
+                    AppendActionButton(html, item.Event.EventId, DragnetReviewAction.IgnoreBan, "Ignore", "ph-eye-slash");
+                }
                 break;
 
             case DragnetReviewState.PendingLift:
+            case DragnetReviewState.DeniedLift:
+            case DragnetReviewState.IgnoredLift:
                 if (isTrusted)
                 {
                     AppendActionButton(html, item.Event.EventId, DragnetReviewAction.ApproveLift, "Approve lift", "ph-check");
                 }
 
-                AppendActionButton(html, item.Event.EventId, DragnetReviewAction.DenyLift, "Deny lift", "ph-x", includeReason: true);
-                AppendActionButton(html, item.Event.EventId, DragnetReviewAction.IgnoreLift, "Ignore", "ph-eye-slash");
+                if (item.ReviewState is not DragnetReviewState.DeniedLift)
+                {
+                    AppendActionButton(html, item.Event.EventId, DragnetReviewAction.DenyLift, "Deny lift", "ph-x", includeReason: true);
+                }
+
+                if (item.ReviewState is not DragnetReviewState.IgnoredLift)
+                {
+                    AppendActionButton(html, item.Event.EventId, DragnetReviewAction.IgnoreLift, "Ignore", "ph-eye-slash");
+                }
                 break;
 
             default:

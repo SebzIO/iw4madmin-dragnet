@@ -56,11 +56,11 @@ public sealed class DragnetReviewService
             return item.Result;
         }
 
-        var (expectedState, targetState) = GetStateTransition(action);
-        if (item.Match.ReviewState != expectedState)
+        var targetState = GetTargetState(action);
+        if (!CanApplyAction(item.Match.ReviewState, action))
         {
             return DragnetReviewResult.Failed(
-                $"Dragnet event is {item.Match.ReviewState}, not {expectedState}.");
+                $"Dragnet event is {item.Match.ReviewState}; it cannot be changed to {targetState}.");
         }
 
         if (IsApproval(action) && !_trustService.Evaluate(item.Match.Event).IsTrusted)
@@ -218,17 +218,44 @@ public sealed class DragnetReviewService
 
     public static string ShortId(string eventId) => eventId.Length <= 12 ? eventId : eventId[..12];
 
-    private static (DragnetReviewState ExpectedState, DragnetReviewState TargetState) GetStateTransition(
-        DragnetReviewAction action) => action switch
+    private static DragnetReviewState GetTargetState(DragnetReviewAction action) => action switch
     {
-        DragnetReviewAction.ApproveBan => (DragnetReviewState.PendingBan, DragnetReviewState.ApprovedBan),
-        DragnetReviewAction.DenyBan => (DragnetReviewState.PendingBan, DragnetReviewState.DeniedBan),
-        DragnetReviewAction.IgnoreBan => (DragnetReviewState.PendingBan, DragnetReviewState.IgnoredBan),
-        DragnetReviewAction.ApproveLift => (DragnetReviewState.PendingLift, DragnetReviewState.ApprovedLift),
-        DragnetReviewAction.DenyLift => (DragnetReviewState.PendingLift, DragnetReviewState.DeniedLift),
-        DragnetReviewAction.IgnoreLift => (DragnetReviewState.PendingLift, DragnetReviewState.IgnoredLift),
+        DragnetReviewAction.ApproveBan => DragnetReviewState.ApprovedBan,
+        DragnetReviewAction.DenyBan => DragnetReviewState.DeniedBan,
+        DragnetReviewAction.IgnoreBan => DragnetReviewState.IgnoredBan,
+        DragnetReviewAction.ApproveLift => DragnetReviewState.ApprovedLift,
+        DragnetReviewAction.DenyLift => DragnetReviewState.DeniedLift,
+        DragnetReviewAction.IgnoreLift => DragnetReviewState.IgnoredLift,
         _ => throw new ArgumentOutOfRangeException(nameof(action), action, null)
     };
+
+    private static bool CanApplyAction(
+        DragnetReviewState currentState,
+        DragnetReviewAction action)
+    {
+        var targetState = GetTargetState(action);
+        if (currentState == targetState)
+        {
+            return false;
+        }
+
+        return action switch
+        {
+            DragnetReviewAction.ApproveBan or
+            DragnetReviewAction.DenyBan or
+            DragnetReviewAction.IgnoreBan =>
+                currentState is DragnetReviewState.PendingBan or
+                    DragnetReviewState.DeniedBan or
+                    DragnetReviewState.IgnoredBan,
+            DragnetReviewAction.ApproveLift or
+            DragnetReviewAction.DenyLift or
+            DragnetReviewAction.IgnoreLift =>
+                currentState is DragnetReviewState.PendingLift or
+                    DragnetReviewState.DeniedLift or
+                    DragnetReviewState.IgnoredLift,
+            _ => false
+        };
+    }
 
     private static bool IsApproval(DragnetReviewAction action) =>
         action is DragnetReviewAction.ApproveBan or DragnetReviewAction.ApproveLift;

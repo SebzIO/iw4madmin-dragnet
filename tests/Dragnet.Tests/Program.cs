@@ -156,7 +156,10 @@ static async Task TestReviewTransitionsAsync()
     Assert.Equal(DragnetReviewState.PendingBan, stored.AuditTrail[0].PreviousState, "audit should record previous state");
     Assert.Equal(DragnetReviewState.ApprovedBan, stored.AuditTrail[0].NewState, "audit should record new state");
 
-    var secondPendingBan = CreateEnvelope(originId: "origin-3", eventType: DragnetEventType.BanCreated);
+    var secondPendingBan = CreateEnvelope(originId: "origin-3", eventType: DragnetEventType.BanCreated) with
+    {
+        PlayerNetworkId = "not-a-network-id"
+    };
     await store.UpsertAsync(new DragnetStoredEvent
     {
         Event = secondPendingBan,
@@ -177,6 +180,56 @@ static async Task TestReviewTransitionsAsync()
     Assert.Equal(DragnetReviewState.DeniedBan, stored!.ReviewState, "event should be denied");
     Assert.Equal("local note", stored.LocalDecisionReason, "decision note should be stored");
     Assert.Equal("Second Reviewer", stored.ReviewedByName, "denial reviewer should be recorded");
+
+    var ignored = await reviewService.ApplyActionAsync(
+        secondPendingBan.EventId,
+        DragnetReviewAction.IgnoreBan,
+        "reconsider later",
+        "Third Reviewer",
+        126,
+        CancellationToken.None);
+    Assert.True(ignored.Success, "a denied ban should be changeable to ignored");
+
+    stored = await store.GetAsync(secondPendingBan.EventId, CancellationToken.None);
+    Assert.NotNull(stored, "reconsidered event should remain stored");
+    Assert.Equal(DragnetReviewState.IgnoredBan, stored!.ReviewState, "event should become ignored");
+    Assert.Equal(2, stored.AuditTrail.Count, "reconsideration should append an audit entry");
+    Assert.Equal(DragnetReviewState.DeniedBan, stored.AuditTrail[1].PreviousState,
+        "reconsideration audit should retain the prior decision");
+    Assert.Equal(DragnetReviewState.IgnoredBan, stored.AuditTrail[1].NewState,
+        "reconsideration audit should record the new decision");
+
+    await trustService.TrustAsync(
+        secondPendingBan.OriginId,
+        secondPendingBan.OriginName,
+        false,
+        false,
+        CancellationToken.None);
+    var reconsideredApproval = await reviewService.ApplyActionAsync(
+        secondPendingBan.EventId,
+        DragnetReviewAction.ApproveBan,
+        "evidence reviewed",
+        "Final Reviewer",
+        168,
+        CancellationToken.None);
+    Assert.True(reconsideredApproval.Success, "an ignored ban should be changeable to approved");
+
+    stored = await store.GetAsync(secondPendingBan.EventId, CancellationToken.None);
+    Assert.NotNull(stored, "approved reconsidered event should remain stored");
+    Assert.Equal(DragnetReviewState.ApprovedBan, stored!.ReviewState,
+        "reconsidered event should become approved");
+    Assert.Equal(3, stored.AuditTrail.Count, "approval after reconsideration should append an audit entry");
+
+    var reverseApproval = await reviewService.ApplyActionAsync(
+        secondPendingBan.EventId,
+        DragnetReviewAction.DenyBan,
+        "attempted reversal",
+        "Final Reviewer",
+        168,
+        CancellationToken.None);
+    Assert.False(reverseApproval.Success, "approved events should remain terminal after possible import");
+    Assert.Contains("cannot be changed", reverseApproval.Message,
+        "terminal approval failure should explain that the decision cannot be changed");
 }
 
 static async Task TestBulkReviewAsync()
