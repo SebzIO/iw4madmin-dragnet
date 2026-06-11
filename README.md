@@ -11,6 +11,8 @@ This repository is in the MVP testing stage. The current implementation:
 - loads as an `IPluginV2` IW4MAdmin plugin
 - creates a persistent local RSA identity
 - captures local ban, temp-ban, and ban-lift events from IW4MAdmin
+- lets origin-network administrators add or replace an HTTPS evidence URL after a ban is issued
+- propagates evidence as a separately signed, acknowledged amendment without changing the original ban
 - signs captured events with the local origin identity
 - stores captured events in `Configuration/Dragnet/events.json`
 - stores known peers in `Configuration/Dragnet/peers.json`
@@ -143,6 +145,8 @@ Current Dragnet peers acknowledge each valid event by event ID. The sender retai
 An acknowledgement means the remote Dragnet instance received and validated the event. It does not mean that the remote operator trusted it, approved it, or imported a penalty. Those decisions remain local to each participating network. Older peers that do not advertise acknowledgement support continue using the legacy timestamp-and-event-ID cursor.
 
 Delivery capability negotiation is intentionally excluded from the signed identity payload so current nodes remain identity-proof compatible with `0.1.0-alpha.16`. Identity fields remain signed; the capability flag only selects acknowledgement-based or legacy cursor delivery behavior.
+
+For a locally originated ban, administrators with `ReviewPermission` can use **Add evidence** or **Update evidence** on the event detail panel. Evidence must be an absolute HTTPS URL and is limited to 2048 characters. Dragnet signs the amendment with the originating network identity and peers verify that signature against the original ban before attaching it. Evidence does not alter a peer's trust, review, or penalty-import decision. Peers older than `0.1.0-alpha.19` continue exchanging bans normally but do not receive evidence amendments until upgraded.
 
 `MaxKnownPeersPerHeartbeat` limits the number of peer advertisements carried in one heartbeat, not the total number of peers Dragnet can store or contact. Eligible peers are rotated using their persisted `LastAdvertisedAtUtc` timestamp. Never-advertised peers go first, then the least recently advertised peers; verified and fully healthy peers break otherwise equal ties. Stale peers, visibly errored peers, and the heartbeat counterpart are omitted. This keeps heartbeat payloads bounded while ensuring networks beyond the configured limit still receive discovery exposure.
 

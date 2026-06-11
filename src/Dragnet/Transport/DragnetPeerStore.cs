@@ -230,6 +230,7 @@ public sealed class DragnetPeerStore
                     Signature = peerInfo.Signature,
                     IdentityVerified = identityVerified,
                     SupportsDeliveryAcknowledgements = peerInfo.SupportsDeliveryAcknowledgements,
+                    SupportsEvidenceUpdates = peerInfo.SupportsEvidenceUpdates,
                     LastSeenUtc = observedAtUtc
                 };
             }
@@ -409,6 +410,7 @@ public sealed class DragnetPeerStore
                     : previousEndpointVerifiedAtUtc,
                 LastAdvertisedAtUtc = lastAdvertisedAtUtc,
                 SupportsDeliveryAcknowledgements = receiver.SupportsDeliveryAcknowledgements,
+                SupportsEvidenceUpdates = receiver.SupportsEvidenceUpdates,
                 EventDeliveries = eventDeliveries,
                 PendingAcknowledgementEventIds = pendingAcknowledgements,
                 LastSyncVerifiedAtUtc = relatedRecords
@@ -522,6 +524,49 @@ public sealed class DragnetPeerStore
             if (acknowledgedAny)
             {
                 peer.LastSyncVerifiedAtUtc = now;
+                await SaveUnlockedAsync(token);
+            }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task MarkEvidenceBatchSentAsync(
+        string originId,
+        IReadOnlyList<DragnetEvidenceUpdate> updates,
+        CancellationToken token)
+    {
+        if (updates.Count == 0)
+        {
+            return;
+        }
+
+        await _lock.WaitAsync(token);
+        try
+        {
+            if (_peers.TryGetValue(originId, out var peer))
+            {
+                peer.EventDeliveries ??= [];
+                foreach (var update in updates)
+                {
+                    var delivery = peer.EventDeliveries.FirstOrDefault(item =>
+                        item.EventId.Equals(update.UpdateId, StringComparison.OrdinalIgnoreCase));
+                    if (delivery is null)
+                    {
+                        peer.EventDeliveries.Add(new DragnetEventDeliveryRecord
+                        {
+                            EventId = update.UpdateId
+                        });
+                    }
+                    else
+                    {
+                        delivery.LastSentAtUtc = DateTimeOffset.UtcNow;
+                        delivery.SendAttempts++;
+                    }
+                }
+
                 await SaveUnlockedAsync(token);
             }
         }
@@ -761,6 +806,7 @@ public sealed class DragnetPeerStore
         record.Website = peerInfo.Website;
         record.Version = peerInfo.Version;
         record.SupportsDeliveryAcknowledgements = peerInfo.SupportsDeliveryAcknowledgements;
+        record.SupportsEvidenceUpdates = peerInfo.SupportsEvidenceUpdates;
     }
 
     private static void ApplyIdentityProof(

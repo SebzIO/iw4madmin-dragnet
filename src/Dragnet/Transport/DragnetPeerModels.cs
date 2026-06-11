@@ -27,6 +27,8 @@ public sealed record DragnetPeerInfo
 
     public bool SupportsDeliveryAcknowledgements { get; init; }
 
+    public bool SupportsEvidenceUpdates { get; init; }
+
     public DateTimeOffset SeenAtUtc { get; init; } = DateTimeOffset.UtcNow;
 
     public string GetSigningPayload() =>
@@ -55,6 +57,8 @@ public sealed record DragnetHeartbeatRequest
     public IReadOnlyList<DragnetEventEnvelope> Events { get; init; } = [];
 
     public IReadOnlyList<string> AcknowledgedEventIds { get; init; } = [];
+
+    public IReadOnlyList<DragnetEvidenceUpdate> EvidenceUpdates { get; init; } = [];
 }
 
 public sealed record DragnetHeartbeatResponse
@@ -66,6 +70,8 @@ public sealed record DragnetHeartbeatResponse
     public IReadOnlyList<DragnetEventEnvelope> Events { get; init; } = [];
 
     public IReadOnlyList<string> AcknowledgedEventIds { get; init; } = [];
+
+    public IReadOnlyList<DragnetEvidenceUpdate> EvidenceUpdates { get; init; } = [];
 }
 
 public sealed record DragnetPeerRecord
@@ -113,6 +119,8 @@ public sealed record DragnetPeerRecord
     public DateTimeOffset? LastAdvertisedAtUtc { get; set; }
 
     public bool SupportsDeliveryAcknowledgements { get; set; }
+
+    public bool SupportsEvidenceUpdates { get; set; }
 
     public List<DragnetEventDeliveryRecord> EventDeliveries { get; set; } = [];
 

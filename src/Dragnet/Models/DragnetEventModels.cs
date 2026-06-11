@@ -113,6 +113,32 @@ public sealed record DragnetStoredEvent
     public DateTimeOffset? ImportedAtUtc { get; set; }
 
     public string? ImportError { get; set; }
+
+    public DragnetEvidenceUpdate? EvidenceUpdate { get; set; }
+}
+
+public sealed record DragnetEvidenceUpdate
+{
+    public required string UpdateId { get; init; }
+
+    public required string EventId { get; init; }
+
+    public required string OriginId { get; init; }
+
+    public required string OriginName { get; init; }
+
+    public required string OriginPublicKeyPem { get; init; }
+
+    public required string EvidenceUrl { get; init; }
+
+    public required string SubmittedByName { get; init; }
+
+    public required DateTimeOffset CreatedAtUtc { get; init; }
+
+    public required string Signature { get; init; }
+
+    public string GetSigningPayload() =>
+        JsonSerializer.Serialize(this with { Signature = "" }, DragnetJson.Options);
 }
 
 public sealed record DragnetReviewAuditEntry

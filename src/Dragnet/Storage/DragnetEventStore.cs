@@ -186,6 +186,33 @@ public sealed class DragnetEventStore
         }
     }
 
+    public async Task<bool> SetEvidenceUpdateAsync(
+        DragnetEvidenceUpdate update,
+        CancellationToken token)
+    {
+        await _lock.WaitAsync(token);
+        try
+        {
+            if (!_events.TryGetValue(update.EventId, out var storedEvent) ||
+                storedEvent.Event.EventType is not DragnetEventType.BanCreated ||
+                !storedEvent.Event.OriginId.Equals(update.OriginId, StringComparison.OrdinalIgnoreCase) ||
+                storedEvent.EvidenceUpdate is { CreatedAtUtc: var currentCreatedAt } &&
+                currentCreatedAt >= update.CreatedAtUtc)
+            {
+                return false;
+            }
+
+            storedEvent.EvidenceUpdate = update;
+            storedEvent.LastSeenUtc = DateTimeOffset.UtcNow;
+            await SaveUnlockedAsync(token);
+            return true;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
     private async Task SaveUnlockedAsync(CancellationToken token)
     {
         var tempPath = $"{_storePath}.tmp";

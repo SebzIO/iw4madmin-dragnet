@@ -127,6 +127,7 @@ public sealed class DragnetTransportService : IDisposable
             request.AcknowledgedEventIds,
             token);
         var acceptedEventIds = await ImportEventsAsync(request.Events, token);
+        var acceptedEvidenceIds = await ImportEvidenceUpdatesAsync(request.EvidenceUpdates, token);
 
         foreach (var peer in request.KnownPeers)
         {
@@ -142,6 +143,8 @@ public sealed class DragnetTransportService : IDisposable
             eventBatch,
             token,
             request.Sender.SupportsDeliveryAcknowledgements);
+        var evidenceBatch = await CreateEvidenceBatchAsync(request.Sender.OriginId, request.Sender.SupportsEvidenceUpdates, token);
+        await _peerStore.MarkEvidenceBatchSentAsync(request.Sender.OriginId, evidenceBatch, token);
 
         return new DragnetHeartbeatResponse
         {
@@ -151,7 +154,8 @@ public sealed class DragnetTransportService : IDisposable
                 request.Sender.PublicEndpoint,
                 token),
             Events = eventBatch,
-            AcknowledgedEventIds = acceptedEventIds
+            EvidenceUpdates = evidenceBatch,
+            AcknowledgedEventIds = acceptedEventIds.Concat(acceptedEvidenceIds).ToList()
         };
     }
 
@@ -186,6 +190,10 @@ public sealed class DragnetTransportService : IDisposable
                 }
 
                 var eventBatch = await CreateEventBatchAsync(peer.OriginId, token);
+                var evidenceBatch = await CreateEvidenceBatchAsync(
+                    peer.OriginId,
+                    peer.SupportsEvidenceUpdates,
+                    token);
                 var pendingAcknowledgements = peer.SupportsDeliveryAcknowledgements
                     ? await _peerStore.GetPendingAcknowledgementsAsync(
                         peer.OriginId,
@@ -200,6 +208,7 @@ public sealed class DragnetTransportService : IDisposable
                         peer.Endpoint,
                         token),
                     Events = eventBatch,
+                    EvidenceUpdates = evidenceBatch,
                     AcknowledgedEventIds = pendingAcknowledgements
                 };
 
@@ -247,6 +256,7 @@ public sealed class DragnetTransportService : IDisposable
 
                 var receiverIdentityVerified = VerifyPeerIdentity(heartbeat.Receiver, requireFresh: true);
                 var acceptedEventIds = await ImportEventsAsync(heartbeat.Events, token);
+                var acceptedEvidenceIds = await ImportEvidenceUpdatesAsync(heartbeat.EvidenceUpdates, token);
                 await _peerStore.MarkHeartbeatSucceededAsync(
                     peer.OriginId,
                     heartbeat.Receiver,
@@ -257,13 +267,17 @@ public sealed class DragnetTransportService : IDisposable
                     eventBatch,
                     token,
                     heartbeat.Receiver.SupportsDeliveryAcknowledgements);
+                await _peerStore.MarkEvidenceBatchSentAsync(
+                    heartbeat.Receiver.OriginId,
+                    evidenceBatch,
+                    token);
                 await _peerStore.MarkEventsAcknowledgedAsync(
                     heartbeat.Receiver.OriginId,
                     heartbeat.AcknowledgedEventIds,
                     token);
                 await _peerStore.QueueAcknowledgementsAsync(
                     heartbeat.Receiver.OriginId,
-                    acceptedEventIds,
+                    acceptedEventIds.Concat(acceptedEvidenceIds).ToList(),
                     token);
                 await _peerStore.MarkAcknowledgementsSentAsync(
                     heartbeat.Receiver.OriginId,
@@ -358,6 +372,41 @@ public sealed class DragnetTransportService : IDisposable
         return acceptedEventIds;
     }
 
+    private async Task<IReadOnlyList<string>> ImportEvidenceUpdatesAsync(
+        IReadOnlyList<DragnetEvidenceUpdate> updates,
+        CancellationToken token)
+    {
+        var acceptedIds = new List<string>();
+        foreach (var update in updates)
+        {
+            var storedEvent = await _eventStore.GetAsync(update.EventId, token);
+            if (storedEvent is null ||
+                storedEvent.Event.EventType is not DragnetEventType.BanCreated ||
+                !storedEvent.Event.OriginId.Equals(update.OriginId, StringComparison.OrdinalIgnoreCase) ||
+                !storedEvent.Event.OriginPublicKeyPem.Equals(
+                    update.OriginPublicKeyPem,
+                    StringComparison.Ordinal) ||
+                !IsValidEvidenceUrl(update.EvidenceUrl) ||
+                !_identityService.Verify(
+                    update.OriginId,
+                    update.OriginPublicKeyPem,
+                    update.GetSigningPayload(),
+                    update.Signature))
+            {
+                _logger.LogWarning(
+                    "Rejected Dragnet evidence update {UpdateId} for event {EventId}",
+                    update.UpdateId,
+                    update.EventId);
+                continue;
+            }
+
+            await _eventStore.SetEvidenceUpdateAsync(update, token);
+            acceptedIds.Add(update.UpdateId);
+        }
+
+        return acceptedIds;
+    }
+
     private void ValidateHeartbeatRequest(DragnetHeartbeatRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Sender.OriginId) ||
@@ -381,6 +430,11 @@ public sealed class DragnetTransportService : IDisposable
         if (request.Events.Count > _configuration.MaxEventsPerHeartbeat)
         {
             throw new InvalidOperationException("Heartbeat contains too many events.");
+        }
+
+        if (request.EvidenceUpdates.Count > _configuration.MaxEventsPerHeartbeat)
+        {
+            throw new InvalidOperationException("Heartbeat contains too many evidence updates.");
         }
 
         if (request.AcknowledgedEventIds.Count > _configuration.MaxEventsPerHeartbeat)
@@ -430,6 +484,7 @@ public sealed class DragnetTransportService : IDisposable
             Version = DragnetBuildInfo.Version,
             PublicKeyPem = _identity.PublicKeyPem,
             SupportsDeliveryAcknowledgements = true,
+            SupportsEvidenceUpdates = true,
             SeenAtUtc = DateTimeOffset.UtcNow
         };
         return unsigned with
@@ -463,6 +518,7 @@ public sealed class DragnetTransportService : IDisposable
                 PublicKeyPem = peer.PublicKeyPem,
                 Signature = peer.Signature,
                 SupportsDeliveryAcknowledgements = peer.SupportsDeliveryAcknowledgements,
+                SupportsEvidenceUpdates = peer.SupportsEvidenceUpdates,
                 SeenAtUtc = peer.LastSeenUtc
             })
             .ToList();
@@ -503,6 +559,41 @@ public sealed class DragnetTransportService : IDisposable
             .Select(item => item.Event)
             .ToList();
     }
+
+    private async Task<IReadOnlyList<DragnetEvidenceUpdate>> CreateEvidenceBatchAsync(
+        string peerOriginId,
+        bool peerSupportsEvidenceUpdates,
+        CancellationToken token)
+    {
+        if (!peerSupportsEvidenceUpdates)
+        {
+            return [];
+        }
+
+        var events = await _eventStore.ListAsync(token);
+        var peer = (await _peerStore.ListAsync(token))
+            .FirstOrDefault(item => item.OriginId.Equals(peerOriginId, StringComparison.OrdinalIgnoreCase));
+        var acknowledgedIds = (peer?.EventDeliveries ?? [])
+            .Where(delivery => delivery.AcknowledgedAtUtc is not null)
+            .Select(delivery => delivery.EventId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return events
+            .Where(item => item.ReviewState is DragnetReviewState.ApprovedBan)
+            .Where(item => !item.Event.IsExpired(DateTimeOffset.UtcNow))
+            .Select(item => item.EvidenceUpdate)
+            .Where(update => update is not null && !acknowledgedIds.Contains(update.UpdateId))
+            .OrderBy(update => update!.CreatedAtUtc)
+            .Take(Math.Max(1, _configuration.MaxEventsPerHeartbeat))
+            .Cast<DragnetEvidenceUpdate>()
+            .ToList();
+    }
+
+    private static bool IsValidEvidenceUrl(string? value) =>
+        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+        uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(uri.Host) &&
+        value!.Length <= 2048;
 
     private bool VerifyEnvelope(DragnetEventEnvelope envelope)
     {

@@ -31,6 +31,7 @@ public sealed class DragnetWebfrontService
     private readonly DragnetOnboardingService _onboardingService;
     private readonly DragnetDirectoryService _directoryService;
     private readonly DragnetIdentityDocument _identity;
+    private readonly DragnetIdentityService _identityService;
     private readonly IConfigurationHandlerV2<DragnetConfiguration> _configurationHandler;
     private readonly Func<IManager> _managerFactory;
 
@@ -44,6 +45,7 @@ public sealed class DragnetWebfrontService
         DragnetOnboardingService onboardingService,
         DragnetDirectoryService directoryService,
         DragnetIdentityDocument identity,
+        DragnetIdentityService identityService,
         IConfigurationHandlerV2<DragnetConfiguration> configurationHandler,
         Func<IManager> managerFactory)
     {
@@ -56,6 +58,7 @@ public sealed class DragnetWebfrontService
         _onboardingService = onboardingService;
         _directoryService = directoryService;
         _identity = identity;
+        _identityService = identityService;
         _configurationHandler = configurationHandler;
         _managerFactory = managerFactory;
     }
@@ -361,6 +364,16 @@ public sealed class DragnetWebfrontService
             return retryResult.Message;
         }
 
+        if (string.Equals(actionValue, "SetEvidence", StringComparison.OrdinalIgnoreCase))
+        {
+            meta.TryGetValue("EvidenceUrl", out var evidenceUrl);
+            return await SetEvidenceAsync(
+                eventId,
+                evidenceUrl,
+                GetReviewerName(origin),
+                token);
+        }
+
         if (!Enum.TryParse<DragnetReviewAction>(actionValue, true, out var action))
         {
             return "Invalid Dragnet review action.";
@@ -598,6 +611,10 @@ public sealed class DragnetWebfrontService
         if (IsLocalEvent(envelope))
         {
             html.Append("<span class=\"text-muted\">Local outbound event</span>");
+            if (envelope.EventType is DragnetEventType.BanCreated)
+            {
+                AppendEvidenceButton(html, item);
+            }
         }
         else
         {
@@ -638,15 +655,24 @@ public sealed class DragnetWebfrontService
         html.Append(Encode(envelope.Reason));
         html.AppendLine("</div></div>");
 
-        if (!string.IsNullOrWhiteSpace(envelope.EvidenceUrl))
+        var evidenceUrl = item.EvidenceUpdate?.EvidenceUrl ?? envelope.EvidenceUrl;
+        if (!string.IsNullOrWhiteSpace(evidenceUrl))
         {
             html.AppendLine("<div>");
             html.AppendLine("<div class=\"text-sm text-muted mb-1\">Evidence</div>");
             html.Append("<a class=\"text-primary hover:underline break-all\" href=\"");
-            html.Append(Encode(envelope.EvidenceUrl));
+            html.Append(Encode(evidenceUrl));
             html.Append("\" target=\"_blank\" rel=\"noopener noreferrer\">");
-            html.Append(Encode(envelope.EvidenceUrl));
+            html.Append(Encode(evidenceUrl));
             html.AppendLine("</a></div>");
+            if (item.EvidenceUpdate is { } evidenceUpdate)
+            {
+                html.Append("<div class=\"text-xs text-muted\">Updated by ");
+                html.Append(Encode(evidenceUpdate.SubmittedByName));
+                html.Append(" at ");
+                html.Append(Encode($"{evidenceUpdate.CreatedAtUtc:yyyy-MM-dd HH:mm:ss} UTC"));
+                html.AppendLine("</div>");
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(item.LocalDecisionReason))
@@ -791,6 +817,104 @@ public sealed class DragnetWebfrontService
         html.Append("<button type=\"button\" class=\"profile-action cursor-pointer ml-2\" data-action=\"DynamicAction\" data-action-meta=\"");
         html.Append(Encode(encodedMeta));
         html.Append("\"><span class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ph-arrow-clockwise mr-1\"></i>Retry import</span></button>");
+    }
+
+    private static void AppendEvidenceButton(StringBuilder html, DragnetStoredEvent item)
+    {
+        var label = item.EvidenceUpdate is null && string.IsNullOrWhiteSpace(item.Event.EvidenceUrl)
+            ? "Add evidence"
+            : "Update evidence";
+        var inputs = new List<Dictionary<string, object?>>
+        {
+            new()
+            {
+                ["Name"] = "EventId",
+                ["Type"] = "hidden",
+                ["Value"] = item.Event.EventId
+            },
+            new()
+            {
+                ["Name"] = "ReviewAction",
+                ["Type"] = "hidden",
+                ["Value"] = "SetEvidence"
+            },
+            new()
+            {
+                ["Name"] = "EvidenceUrl",
+                ["Label"] = "Evidence URL",
+                ["Value"] = item.EvidenceUpdate?.EvidenceUrl ?? item.Event.EvidenceUrl ?? "",
+                ["Placeholder"] = "https://www.youtube.com/watch?v=..."
+            }
+        };
+        var meta = new Dictionary<string, string>
+        {
+            ["InteractionId"] = ReviewInteractionId,
+            ["ActionButtonLabel"] = label,
+            ["Name"] = label,
+            ["ShouldRefresh"] = "true",
+            ["Inputs"] = JsonSerializer.Serialize(inputs)
+        };
+
+        var encodedMeta = Uri.EscapeDataString(JsonSerializer.Serialize(meta));
+        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer ml-2\" data-action=\"DynamicAction\" data-action-meta=\"");
+        html.Append(Encode(encodedMeta));
+        html.Append("\"><span class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ph-link mr-1\"></i>");
+        html.Append(Encode(label));
+        html.Append("</span></button>");
+    }
+
+    private async Task<string> SetEvidenceAsync(
+        string eventId,
+        string? evidenceUrl,
+        string submittedByName,
+        CancellationToken token)
+    {
+        evidenceUrl = evidenceUrl?.Trim();
+        if (!Uri.TryCreate(evidenceUrl, UriKind.Absolute, out var uri) ||
+            !uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(uri.Host) ||
+            evidenceUrl.Length > 2048)
+        {
+            return "Evidence must be an absolute HTTPS URL no longer than 2048 characters.";
+        }
+
+        var storedEvent = await _eventStore.GetAsync(eventId, token);
+        if (storedEvent is null)
+        {
+            return "Dragnet event not found.";
+        }
+
+        if (!IsLocalEvent(storedEvent.Event) ||
+            storedEvent.Event.EventType is not DragnetEventType.BanCreated)
+        {
+            return "Evidence can only be added by the network that originated the ban.";
+        }
+
+        var createdAtUtc = DateTimeOffset.UtcNow;
+        var updateIdSource = $"{_identity.OriginId}:{eventId}:{evidenceUrl}:{createdAtUtc:O}";
+        var updateId = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(updateIdSource)))
+            .ToLowerInvariant();
+        var unsigned = new DragnetEvidenceUpdate
+        {
+            UpdateId = updateId,
+            EventId = eventId,
+            OriginId = _identity.OriginId,
+            OriginName = _identity.OriginName,
+            OriginPublicKeyPem = _identity.PublicKeyPem,
+            EvidenceUrl = evidenceUrl,
+            SubmittedByName = submittedByName,
+            CreatedAtUtc = createdAtUtc,
+            Signature = ""
+        };
+        var signed = unsigned with
+        {
+            Signature = _identityService.Sign(_identity, unsigned.GetSigningPayload())
+        };
+
+        return await _eventStore.SetEvidenceUpdateAsync(signed, token)
+            ? "Evidence saved and queued for Dragnet peers."
+            : "Evidence could not be saved.";
     }
 
     private void AppendTrustButtons(StringBuilder html, DragnetEventEnvelope envelope)

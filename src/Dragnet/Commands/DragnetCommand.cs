@@ -224,9 +224,10 @@ public sealed class DragnetCommand : Command
                 $"Reviewed: {item.ReviewState} by {item.ReviewedByName ?? "Unknown"} at {item.ReviewedAtUtc:yyyy-MM-dd HH:mm} UTC");
         }
 
-        if (!string.IsNullOrWhiteSpace(dragnetEvent.EvidenceUrl))
+        var evidenceUrl = item.EvidenceUpdate?.EvidenceUrl ?? dragnetEvent.EvidenceUrl;
+        if (!string.IsNullOrWhiteSpace(evidenceUrl))
         {
-            gameEvent.Origin.Tell($"Evidence: {dragnetEvent.EvidenceUrl}");
+            gameEvent.Origin.Tell($"Evidence: {evidenceUrl}");
         }
     }
 

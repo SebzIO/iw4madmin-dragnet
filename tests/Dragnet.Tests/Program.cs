@@ -28,6 +28,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("import service queues unknown players", TestImportServiceQueuesUnknownPlayersAsync),
     ("heartbeat response sends approved events once", TestHeartbeatResponseBatchAsync),
     ("delivery acknowledgements replay gaps and support resync", TestDeliveryAcknowledgementReplayAsync),
+    ("signed evidence updates propagate only from the ban origin", TestEvidenceUpdatesAsync),
     ("webfront dashboard interaction renders as navigation content", TestWebfrontDashboardRendersAsync),
     ("heartbeat validation rejects oversized and invalid requests", TestHeartbeatValidationAsync),
     ("outbound heartbeat errors include response body", TestOutboundHeartbeatErrorIncludesBodyAsync),
@@ -593,6 +594,7 @@ static Task TestLegacyPeerSignatureCompatibility()
         PublicKeyPem = "public-key",
         Signature = "signature",
         SupportsDeliveryAcknowledgements = true,
+        SupportsEvidenceUpdates = true,
         SeenAtUtc = DateTimeOffset.Parse("2026-06-11T12:00:00Z")
     };
     var legacyPayload = JsonSerializer.Serialize(new
@@ -619,6 +621,9 @@ static Task TestLegacyPeerSignatureCompatibility()
     Assert.True(
         wireDocument.RootElement.GetProperty("supportsDeliveryAcknowledgements").GetBoolean(),
         "capability support must still be advertised on the wire");
+    Assert.True(
+        wireDocument.RootElement.GetProperty("supportsEvidenceUpdates").GetBoolean(),
+        "evidence update support must be advertised outside the legacy signature");
     return Task.CompletedTask;
 }
 
@@ -852,7 +857,7 @@ static async Task TestDeliveryAcknowledgementReplayAsync()
         () => 1,
         new TestLogger<DragnetTransportService>());
     var sharedTimestamp = DateTimeOffset.UtcNow.AddMinutes(-1);
-    var first = CreateEnvelope("local", DragnetEventType.BanCreated) with
+    var first = CreateEnvelope(identity.OriginId, DragnetEventType.BanCreated) with
     {
         EventId = "same-time-a",
         CreatedAtUtc = sharedTimestamp
@@ -871,28 +876,52 @@ static async Task TestDeliveryAcknowledgementReplayAsync()
         }, CancellationToken.None);
     }
 
+    var unsignedEvidence = new DragnetEvidenceUpdate
+    {
+        UpdateId = "evidence-update-a",
+        EventId = first.EventId,
+        OriginId = identity.OriginId,
+        OriginName = identity.OriginName,
+        OriginPublicKeyPem = identity.PublicKeyPem,
+        EvidenceUrl = "https://www.youtube.com/watch?v=evidence",
+        SubmittedByName = "Local Admin",
+        CreatedAtUtc = DateTimeOffset.UtcNow,
+        Signature = ""
+    };
+    var signedEvidence = unsignedEvidence with
+    {
+        Signature = identityService.Sign(identity, unsignedEvidence.GetSigningPayload())
+    };
+    await eventStore.SetEvidenceUpdateAsync(signedEvidence, CancellationToken.None);
+
     var request = CreateHeartbeatRequest("remote") with
     {
         Sender = CreateHeartbeatRequest("remote").Sender with
         {
-            SupportsDeliveryAcknowledgements = true
+            SupportsDeliveryAcknowledgements = true,
+            SupportsEvidenceUpdates = true
         }
     };
     var initial = await transport.HandleHeartbeatAsync(request, CancellationToken.None);
     Assert.Equal(2, initial.Events.Count, "acknowledgement peer should receive all equal-timestamp events");
+    Assert.Equal(1, initial.EvidenceUpdates.Count, "capable peer should receive signed evidence updates");
 
     var replay = await transport.HandleHeartbeatAsync(request, CancellationToken.None);
     Assert.Equal(2, replay.Events.Count, "unacknowledged events should replay");
 
     var acknowledged = await transport.HandleHeartbeatAsync(request with
     {
-        AcknowledgedEventIds = initial.Events.Select(item => item.EventId).ToList()
+        AcknowledgedEventIds = initial.Events
+            .Select(item => item.EventId)
+            .Concat(initial.EvidenceUpdates.Select(item => item.UpdateId))
+            .ToList()
     }, CancellationToken.None);
     Assert.Equal(0, acknowledged.Events.Count, "acknowledged events should stop replaying");
+    Assert.Equal(0, acknowledged.EvidenceUpdates.Count, "acknowledged evidence updates should stop replaying");
     var peer = (await peerStore.ListAsync(CancellationToken.None))
         .Single(item => item.OriginId == "remote");
-    Assert.Equal(2, peer.EventDeliveries.Count(item => item.AcknowledgedAtUtc is not null),
-        "peer delivery records should persist acknowledgements");
+    Assert.Equal(3, peer.EventDeliveries.Count(item => item.AcknowledgedAtUtc is not null),
+        "peer delivery records should persist event and evidence acknowledgements");
     Assert.NotNull(peer.LastSyncVerifiedAtUtc, "acknowledgements should update sync verification time");
 
     Assert.True(await peerStore.RequestResyncAsync("remote", CancellationToken.None),
@@ -915,6 +944,103 @@ static async Task TestDeliveryAcknowledgementReplayAsync()
         0,
         (await peerStore.GetPendingAcknowledgementsAsync("remote", 10, CancellationToken.None)).Count,
         "successfully transmitted acknowledgements should leave the queue");
+}
+
+static async Task TestEvidenceUpdatesAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        PublicEndpoint = "https://local.example/dragnet"
+    };
+    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
+    await eventStore.LoadAsync(CancellationToken.None);
+    var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
+    await peerStore.LoadAsync(configuration, CancellationToken.None);
+    var identityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "identity"));
+    var identity = identityService.LoadOrCreate("Local");
+    var remoteIdentityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "remote"));
+    var remoteIdentity = remoteIdentityService.LoadOrCreate("Remote");
+    var trustService = new DragnetTrustService(configuration, new RecordingConfigurationHandler<DragnetConfiguration>());
+    var importService = new DragnetImportService(
+        configuration,
+        eventStore,
+        managerFactory: () => null!,
+        logger: new TestLogger<DragnetImportService>());
+    var reviewService = new DragnetReviewService(eventStore, importService, trustService);
+    var transport = new DragnetTransportService(
+        configuration,
+        eventStore,
+        peerStore,
+        identity,
+        identityService,
+        reviewService,
+        trustService,
+        () => 1,
+        new TestLogger<DragnetTransportService>());
+    var remoteBan = CreateEnvelope(remoteIdentity.OriginId, DragnetEventType.BanCreated) with
+    {
+        EventId = "remote-ban-with-evidence",
+        OriginName = remoteIdentity.OriginName,
+        OriginPublicKeyPem = remoteIdentity.PublicKeyPem
+    };
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = remoteBan,
+        ReviewState = DragnetReviewState.PendingBan
+    }, CancellationToken.None);
+    var unsignedUpdate = new DragnetEvidenceUpdate
+    {
+        UpdateId = "remote-evidence-update",
+        EventId = remoteBan.EventId,
+        OriginId = remoteIdentity.OriginId,
+        OriginName = remoteIdentity.OriginName,
+        OriginPublicKeyPem = remoteIdentity.PublicKeyPem,
+        EvidenceUrl = "https://youtu.be/example",
+        SubmittedByName = "Remote Admin",
+        CreatedAtUtc = DateTimeOffset.UtcNow,
+        Signature = ""
+    };
+    var signedUpdate = unsignedUpdate with
+    {
+        Signature = remoteIdentityService.Sign(remoteIdentity, unsignedUpdate.GetSigningPayload())
+    };
+    var sender = CreateSignedPeerInfo(
+        remoteIdentityService,
+        remoteIdentity,
+        "https://remote.example/dragnet",
+        directoryListed: false) with
+    {
+        SupportsDeliveryAcknowledgements = true,
+        SupportsEvidenceUpdates = true
+    };
+    var accepted = await transport.HandleHeartbeatAsync(new DragnetHeartbeatRequest
+    {
+        Sender = sender,
+        EvidenceUpdates = [signedUpdate]
+    }, CancellationToken.None);
+
+    Assert.True(accepted.AcknowledgedEventIds.Contains(signedUpdate.UpdateId),
+        "valid origin-signed evidence update should be acknowledged");
+    var stored = await eventStore.GetAsync(remoteBan.EventId, CancellationToken.None);
+    Assert.Equal(signedUpdate.EvidenceUrl, stored!.EvidenceUpdate!.EvidenceUrl,
+        "valid evidence update should be attached without replacing the original ban");
+
+    var tampered = signedUpdate with
+    {
+        UpdateId = "tampered-evidence-update",
+        EvidenceUrl = "https://evil.example/tampered"
+    };
+    var rejected = await transport.HandleHeartbeatAsync(new DragnetHeartbeatRequest
+    {
+        Sender = sender,
+        EvidenceUpdates = [tampered]
+    }, CancellationToken.None);
+    Assert.False(rejected.AcknowledgedEventIds.Contains(tampered.UpdateId),
+        "tampered evidence update must not be acknowledged");
+    stored = await eventStore.GetAsync(remoteBan.EventId, CancellationToken.None);
+    Assert.Equal(signedUpdate.EvidenceUrl, stored!.EvidenceUpdate!.EvidenceUrl,
+        "tampered evidence must not replace accepted evidence");
 }
 
 static async Task TestWebfrontDashboardRendersAsync()
@@ -989,6 +1115,7 @@ static async Task TestWebfrontDashboardRendersAsync()
         onboardingService,
         directoryService,
         identity,
+        identityService,
         configurationHandler,
         managerFactory: () => null!);
     var interaction = await webfront.CreateNavigationInteractionAsync(CancellationToken.None);
@@ -1047,6 +1174,7 @@ static async Task TestWebfrontDashboardRendersAsync()
         ["filter"] = DragnetEventFilter.Local.ToString()
     }, CancellationToken.None);
     Assert.Contains("Local outbound event", html, "local event detail should be identified as outbound");
+    Assert.Contains("Add evidence", html, "local ban detail should allow origin administrators to add evidence");
     Assert.Contains(">Local<", html, "local event origin and trust should be identified as local");
     Assert.Contains("Outbound", html, "local events should not look like pending imports");
     Assert.False(html.Contains("Historical Local Name</td>", StringComparison.OrdinalIgnoreCase),
@@ -1265,6 +1393,21 @@ static async Task TestHeartbeatValidationAsync()
         },
         AcknowledgedEventIds = ["event-1", "event-2"]
     }, CancellationToken.None), "event acknowledgement limit should be enforced");
+
+    await Assert.ThrowsAsync<InvalidOperationException>(() => transport.HandleHeartbeatAsync(new DragnetHeartbeatRequest
+    {
+        Sender = new DragnetPeerInfo
+        {
+            OriginId = "remote",
+            OriginName = "Remote",
+            PublicEndpoint = "https://remote.example/dragnet"
+        },
+        EvidenceUpdates =
+        [
+            CreateEvidenceUpdate("evidence-1", "event-1"),
+            CreateEvidenceUpdate("evidence-2", "event-2")
+        ]
+    }, CancellationToken.None), "evidence update limit should be enforced");
 }
 
 static async Task TestOutboundHeartbeatErrorIncludesBodyAsync()
@@ -1449,6 +1592,19 @@ static DragnetEventEnvelope CreateEnvelope(
         Signature = "signature"
     };
 }
+
+static DragnetEvidenceUpdate CreateEvidenceUpdate(string updateId, string eventId) => new()
+{
+    UpdateId = updateId,
+    EventId = eventId,
+    OriginId = "remote",
+    OriginName = "Remote",
+    OriginPublicKeyPem = "public-key",
+    EvidenceUrl = "https://example.test/evidence",
+    SubmittedByName = "Admin",
+    CreatedAtUtc = DateTimeOffset.UtcNow,
+    Signature = "signature"
+};
 
 public static class Assert
 {
