@@ -88,6 +88,10 @@ public sealed class DragnetController : ControllerBase
         Content(await _ledgerService.RenderHtmlAsync(id, q, token), "text/html; charset=utf-8");
 
     [AllowAnonymous]
+    [HttpGet("/Interaction/Render/Webfront::Nav::Main::DragnetLedger")]
+    public RedirectResult LedgerNavigation() => Redirect("/dragnet/ledger");
+
+    [AllowAnonymous]
     [HttpGet("/dragnet/ledger/data")]
     [ProducesResponseType<DragnetLedgerSnapshot>(StatusCodes.Status200OK)]
     public async Task<ActionResult<DragnetLedgerSnapshot>> LedgerData(CancellationToken token) =>

@@ -91,9 +91,10 @@ public sealed class DragnetWebfrontService
             DisplayMeta = "ph-list-magnifying-glass",
             InteractionId = LedgerNavigationInteractionId,
             MinimumPermission = EFClient.Permission.User,
-            InteractionType = InteractionType.ExternalLink,
+            InteractionType = InteractionType.RawContent,
             ActionPath = ledgerUrl,
-            Source = "Dragnet"
+            Source = "Dragnet",
+            Action = (_, _, _, _, _) => Task.FromResult(RenderLedgerRedirect(ledgerUrl))
         };
 
         return Task.FromResult(interaction);
@@ -1783,6 +1784,15 @@ public sealed class DragnetWebfrontService
         return string.IsNullOrWhiteSpace(endpoint)
             ? "/dragnet/ledger"
             : $"{endpoint}/ledger";
+    }
+
+    private static string RenderLedgerRedirect(string ledgerUrl)
+    {
+        var encodedUrl = Encode(ledgerUrl);
+        return $"""
+                <meta http-equiv="refresh" content="0;url={encodedUrl}">
+                <p>Opening <a href="{encodedUrl}">Dragnet Ledger</a>...</p>
+                """;
     }
 
     private static string FilterLabel(DragnetEventFilter filter) => filter switch

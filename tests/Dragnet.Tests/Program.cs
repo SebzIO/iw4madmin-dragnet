@@ -1314,6 +1314,20 @@ static async Task TestPublicLedgerAsync()
     Assert.Contains("https://youtu.be/evidence", html, "public ledger should link HTTPS evidence");
     Assert.False(html.Contains("private reviewer note", StringComparison.Ordinal),
         "public ledger must not expose private local review notes");
+
+    var controller = new DragnetController(
+        null!,
+        null!,
+        null!,
+        null!,
+        null!,
+        null!,
+        null!,
+        null!,
+        null!,
+        null!);
+    var redirect = controller.LedgerNavigation();
+    Assert.Equal("/dragnet/ledger", redirect.Url, "ledger interaction route should redirect to the public ledger");
 }
 
 static async Task TestAttestationBackfillAsync()
@@ -1471,9 +1485,19 @@ static async Task TestWebfrontDashboardRendersAsync()
         DragnetWebfrontService.LedgerNavigationInteractionId,
         ledgerInteraction.InteractionId,
         "ledger navigation should register under the main sidebar");
-    Assert.Equal(InteractionType.ExternalLink, ledgerInteraction.InteractionType, "ledger navigation should be a direct link");
+    Assert.Equal(InteractionType.RawContent, ledgerInteraction.InteractionType, "ledger navigation should render a redirect fallback");
     Assert.Equal("https://local.example/dragnet/ledger", ledgerInteraction.ActionPath, "ledger navigation should open the public ledger");
     Assert.Equal(EFClient.Permission.User, ledgerInteraction.MinimumPermission, "ledger navigation should be available to users");
+    var ledgerRedirect = await ledgerInteraction.Action(
+        0,
+        null,
+        null,
+        new Dictionary<string, string>(),
+        CancellationToken.None);
+    Assert.Contains(
+        "url=https://local.example/dragnet/ledger",
+        ledgerRedirect,
+        "ledger navigation fallback should redirect to the public ledger");
 
     var reviewInteraction = await webfront.CreateReviewInteractionAsync(CancellationToken.None);
     var trustInteraction = await webfront.CreateTrustInteractionAsync(CancellationToken.None);
