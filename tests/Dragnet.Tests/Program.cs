@@ -1262,6 +1262,20 @@ static async Task TestPublicLedgerAsync()
         [
             new DragnetBanAttestation
             {
+                AttestationId = "origin-ledger-attestation",
+                EventId = ban.EventId,
+                NetworkOriginId = ban.OriginId,
+                NetworkName = ban.OriginName,
+                PublicEndpoint = "https://origin.example/dragnet",
+                NetworkPublicKeyPem = "origin-public-key",
+                ServerCount = 99,
+                ServerNames = ["Origin Server"],
+                Status = DragnetBanCoverageStatus.Enforced,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+                Signature = "origin-signature"
+            },
+            new DragnetBanAttestation
+            {
                 AttestationId = "ledger-attestation",
                 EventId = ban.EventId,
                 NetworkOriginId = "network-id",
@@ -1283,10 +1297,19 @@ static async Task TestPublicLedgerAsync()
     var ledgerBan = snapshot.Bans.Single();
     Assert.Equal(1, ledgerBan.AcceptedNetworkCount, "ledger should count signed network coverage");
     Assert.Equal(3, ledgerBan.EnforcedServerCount, "ledger should sum enforced server coverage");
+    Assert.Equal(1, ledgerBan.Attestations.Count, "ledger should omit the ban origin's implicit attestation");
+    Assert.False(
+        ledgerBan.Attestations.Any(attestation =>
+            attestation.NetworkOriginId.Equals(ban.OriginId, StringComparison.OrdinalIgnoreCase)),
+        "ledger should expose only peer propagation attestations");
     var html = await ledger.RenderHtmlAsync(ban.EventId, "Ledger", CancellationToken.None);
     Assert.Contains("Dragnet Public Ban Ledger", html, "public ledger should render its identity");
     Assert.Contains("Ledger Player", html, "public ledger should render searchable ban details");
     Assert.Contains("Coverage Network", html, "public ledger should identify attesting networks");
+    Assert.False(html.Contains("Origin Server", StringComparison.Ordinal),
+        "public ledger should not repeat implicit origin enforcement");
+    Assert.Contains("Peer network acceptance and enforcement", html,
+        "public ledger should describe attestations as peer propagation");
     Assert.Contains("TDM, Domination, Hardpoint", html, "public ledger should name covered servers");
     Assert.Contains("https://youtu.be/evidence", html, "public ledger should link HTTPS evidence");
     Assert.False(html.Contains("private reviewer note", StringComparison.Ordinal),

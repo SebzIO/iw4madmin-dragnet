@@ -147,6 +147,8 @@ A remote listing becomes verified only after the local node directly contacts it
 
 Coverage attestations are signed by the network making the statement and are independently verified before storage or display. **Accepted** means the network approved the ban but did not import a local penalty, **Queued** means approval is retained until IW4MAdmin knows the player locally, and **Enforced** means the network imported or originated the penalty. Each attestation includes the network's signed server count and public server names, so ban detail pages identify the actual servers covered by that network. Coverage is reported against the networks currently known by the viewing peer, so temporary peer discovery differences can produce short-lived count differences between ledgers.
 
+The ledger omits an attestation from the network that originated a ban because origin enforcement is implicit. Acceptance and enforced-server totals therefore measure propagation to other known peer networks.
+
 The public ledger does not expose IP addresses, local trust settings, reviewer identities, private decision notes, denial reasons, ignored decisions, private keys, or IW4MAdmin authentication data. Player names, game network IDs, public ban reasons, origins, evidence URLs, and signed acceptance/enforcement statements are public.
 
 `PeerFailureThreshold` controls how many consecutive heartbeat failures are required before a peer is shown as errored. A successful heartbeat clears the failure count and visible error automatically.

@@ -31,6 +31,10 @@ public sealed class DragnetLedgerService
         var events = await _eventStore.ListAsync(token);
         var peers = await _peerStore.ListAsync(token);
         var now = DateTimeOffset.UtcNow;
+        var knownNetworkCount = peers.Select(peer => peer.OriginId)
+            .Append("local")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
         var lifts = events
             .Where(item => item.Event.EventType is DragnetEventType.BanLifted)
             .Select(item => item.Event)
@@ -51,6 +55,9 @@ public sealed class DragnetLedgerService
                         ? "Expired"
                         : "Active";
                 var attestations = (item.BanAttestations ?? [])
+                    .Where(attestation => !attestation.NetworkOriginId.Equals(
+                        envelope.OriginId,
+                        StringComparison.OrdinalIgnoreCase))
                     .OrderByDescending(attestation => attestation.Status)
                     .ThenBy(attestation => attestation.NetworkName)
                     .Select(attestation => new DragnetLedgerAttestation
@@ -78,6 +85,7 @@ public sealed class DragnetLedgerService
                     ExpiresAtUtc = envelope.ExpiresAtUtc,
                     Status = status,
                     EvidenceUrl = NormalizeHttpsUrl(item.EvidenceUpdate?.EvidenceUrl ?? envelope.EvidenceUrl),
+                    EligibleNetworkCount = Math.Max(0, knownNetworkCount - 1),
                     AcceptedNetworkCount = attestations.Count,
                     EnforcedNetworkCount = attestations.Count(attestation =>
                         attestation.Status == DragnetBanCoverageStatus.Enforced.ToString()),
@@ -94,10 +102,7 @@ public sealed class DragnetLedgerService
         {
             GeneratedAtUtc = now,
             DragnetVersion = DragnetBuildInfo.Version,
-            KnownNetworkCount = peers.Select(peer => peer.OriginId)
-                .Append("local")
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Count(),
+            KnownNetworkCount = knownNetworkCount,
             KnownServerCount = Math.Max(0, _localServerCount()) +
                                peers.Sum(peer => Math.Max(0, peer.ServerCount)),
             Bans = bans
@@ -157,7 +162,7 @@ public sealed class DragnetLedgerService
             html.Append("\">");
             html.Append(Encode(ban.Status));
             html.Append("</td><td class=\"coverage\">");
-            html.Append(Encode($"{ban.AcceptedNetworkCount} / {snapshot.KnownNetworkCount} known"));
+            html.Append(Encode($"{ban.AcceptedNetworkCount} / {ban.EligibleNetworkCount} peers"));
             html.Append("</td><td>");
             html.Append(ban.EnforcedServerCount);
             html.Append("</td><td>");
@@ -171,7 +176,7 @@ public sealed class DragnetLedgerService
         html.AppendLine("</tbody></table></div>");
         if (selected is not null)
         {
-            AppendDetail(html, selected, snapshot.KnownNetworkCount);
+            AppendDetail(html, selected);
         }
         html.Append("<footer class=\"muted\" style=\"margin-top:24px\">Generated ");
         html.Append(Encode($"{snapshot.GeneratedAtUtc:yyyy-MM-dd HH:mm:ss} UTC"));
@@ -183,8 +188,7 @@ public sealed class DragnetLedgerService
 
     private static void AppendDetail(
         StringBuilder html,
-        DragnetLedgerBan ban,
-        int knownNetworkCount)
+        DragnetLedgerBan ban)
     {
         html.Append("<section class=\"detail\"><h2>");
         html.Append(Encode(ban.PlayerName));
@@ -193,7 +197,7 @@ public sealed class DragnetLedgerService
         AppendField(html, "Network ID", $"{ban.PlayerNetworkId} {ban.PlayerGame}".Trim());
         AppendField(html, "Origin", $"{ban.OriginName} / {ban.OriginServerName}");
         AppendField(html, "Status", ban.Status);
-        AppendField(html, "Accepted coverage", $"{ban.AcceptedNetworkCount} of {knownNetworkCount} known networks");
+        AppendField(html, "Peer acceptance", $"{ban.AcceptedNetworkCount} of {ban.EligibleNetworkCount} known peer networks");
         AppendField(html, "Created", $"{ban.CreatedAtUtc:yyyy-MM-dd HH:mm:ss} UTC");
         AppendField(html, "Expires", ban.ExpiresAtUtc is null
             ? "Permanent"
@@ -207,10 +211,10 @@ public sealed class DragnetLedgerService
             html.Append(Encode(ban.EvidenceUrl));
             html.Append("</a></p>");
         }
-        html.Append("<div class=\"attest\"><h3>Network acceptance and enforcement</h3>");
+        html.Append("<div class=\"attest\"><h3>Peer network acceptance and enforcement</h3>");
         if (ban.Attestations.Count == 0)
         {
-            html.Append("<p class=\"muted\">No upgraded network has published an acceptance attestation yet.</p>");
+            html.Append("<p class=\"muted\">No peer network has published an acceptance attestation yet. Origin enforcement is implicit.</p>");
         }
         else
         {
@@ -301,6 +305,7 @@ public sealed record DragnetLedgerBan
     public DateTimeOffset? ExpiresAtUtc { get; init; }
     public required string Status { get; init; }
     public string? EvidenceUrl { get; init; }
+    public required int EligibleNetworkCount { get; init; }
     public required int AcceptedNetworkCount { get; init; }
     public required int EnforcedNetworkCount { get; init; }
     public required int EnforcedServerCount { get; init; }
