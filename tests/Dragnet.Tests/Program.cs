@@ -1425,6 +1425,17 @@ static async Task TestPublicLedgerAsync()
         "public ledger should describe attestations as peer propagation");
     Assert.Contains("TDM, Domination, Hardpoint", html, "public ledger should name covered servers");
     Assert.Contains("https://youtu.be/evidence", html, "public ledger should link HTTPS evidence");
+    Assert.Contains(
+        "</td></tr>\n<tr class=\"detail-row\"><td colspan=\"8\"><section class=\"detail\">",
+        html,
+        "selected ban details should expand directly beneath the ban row");
+    Assert.Contains(
+        $"/dragnet/ledger?id={ledgerBan.EventId}&amp;q=Ledger#ban-{ledgerBan.EventId}",
+        html,
+        "ledger selection links should preserve search and return to the expanded row");
+    Assert.False(
+        html.Contains("</tbody></table></div><section class=\"detail\">", StringComparison.Ordinal),
+        "selected ban details should not render below the entire ledger table");
     Assert.False(html.Contains("private reviewer note", StringComparison.Ordinal),
         "public ledger must not expose private local review notes");
 

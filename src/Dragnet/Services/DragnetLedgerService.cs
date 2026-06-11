@@ -257,7 +257,7 @@ public sealed class DragnetLedgerService
         html.AppendLine("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
         html.AppendLine("<title>Dragnet Public Ban Ledger</title>");
         html.AppendLine("<style>");
-        html.AppendLine(":root{color-scheme:dark;--bg:#0b0d10;--surface:#12161b;--line:#29313a;--text:#edf1f5;--muted:#9aa6b2;--accent:#45a3ff;--good:#52d273;--warn:#f0b84b;--bad:#ff6b6b}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px system-ui,sans-serif;letter-spacing:0}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}.wrap{max-width:1280px;margin:auto;padding:24px}.top{display:flex;justify-content:space-between;gap:20px;align-items:end;border-bottom:1px solid var(--line);padding-bottom:20px}.brand{font-size:28px;font-weight:700}.sub,.muted{color:var(--muted)}.metrics{display:flex;gap:24px;flex-wrap:wrap}.metric strong{display:block;font-size:22px}.tools{display:flex;gap:10px;margin:20px 0}.tools input{width:min(420px,100%);background:var(--surface);border:1px solid var(--line);color:var(--text);padding:10px 12px}.tools button{background:var(--accent);border:0;color:#06111c;padding:10px 16px;font-weight:700;cursor:pointer}.table{overflow:auto;border:1px solid var(--line)}table{width:100%;border-collapse:collapse;min-width:1000px}th,td{padding:12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-size:12px;text-transform:uppercase;background:var(--surface)}tr:hover td{background:#10151a}.status{font-weight:700}.Active{color:var(--bad)}.Expired,.Lifted,.Unreported,.Unavailable{color:var(--muted)}.coverage,.Healthy,.Enforced{color:var(--good)}.Degraded,.Queued,.stale{color:var(--warn)}.Accepted{color:var(--accent)}.detail{margin-top:24px;border-top:2px solid var(--accent);background:var(--surface);padding:20px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.field{border-bottom:1px solid var(--line);padding-bottom:10px}.field label{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}.attest{margin-top:18px}.attest-row{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1.5fr;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}@media(max-width:760px){.wrap{padding:16px}.top{align-items:start;flex-direction:column}.grid{grid-template-columns:1fr}.attest-row{grid-template-columns:1fr 1fr}.brand{font-size:23px}}</style></head><body><main class=\"wrap\">");
+        html.AppendLine(":root{color-scheme:dark;--bg:#0b0d10;--surface:#12161b;--line:#29313a;--text:#edf1f5;--muted:#9aa6b2;--accent:#45a3ff;--good:#52d273;--warn:#f0b84b;--bad:#ff6b6b}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--text);font:14px system-ui,sans-serif;letter-spacing:0}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}.wrap{max-width:1280px;margin:auto;padding:24px}.top{display:flex;justify-content:space-between;gap:20px;align-items:end;border-bottom:1px solid var(--line);padding-bottom:20px}.brand{font-size:28px;font-weight:700}.sub,.muted{color:var(--muted)}.metrics{display:flex;gap:24px;flex-wrap:wrap}.metric strong{display:block;font-size:22px}.tools{display:flex;gap:10px;margin:20px 0}.tools input{width:min(420px,100%);background:var(--surface);border:1px solid var(--line);color:var(--text);padding:10px 12px}.tools button{background:var(--accent);border:0;color:#06111c;padding:10px 16px;font-weight:700;cursor:pointer}.table{overflow:auto;border:1px solid var(--line)}table{width:100%;border-collapse:collapse;min-width:1000px}th,td{padding:12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-size:12px;text-transform:uppercase;background:var(--surface)}tr:hover td{background:#10151a}.selected-ban td{background:#101820}.detail-row>td{padding:0;background:var(--bg);border-bottom:1px solid var(--line)}.detail-row:hover>td{background:var(--bg)}.status{font-weight:700}.Active{color:var(--bad)}.Expired,.Lifted,.Unreported,.Unavailable{color:var(--muted)}.coverage,.Healthy,.Enforced{color:var(--good)}.Degraded,.Queued,.stale{color:var(--warn)}.Accepted{color:var(--accent)}.detail{border-left:3px solid var(--accent);background:var(--surface);padding:20px 24px;margin:8px}.detail h2{margin-top:0}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.field{border-bottom:1px solid var(--line);padding-bottom:10px}.field label{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}.attest{margin-top:18px}.attest-row{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1.5fr;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}@media(max-width:760px){.wrap{padding:16px}.top{align-items:start;flex-direction:column}.grid{grid-template-columns:1fr}.attest-row{grid-template-columns:1fr 1fr}.brand{font-size:23px}}</style></head><body><main class=\"wrap\">");
         html.Append("<header class=\"top\"><div><div class=\"brand\">Dragnet Public Ban Ledger</div><div class=\"sub\">Signed, peer-to-peer ban coverage across participating IW4MAdmin networks.</div></div><div class=\"metrics\">");
         AppendMetric(html, snapshot.Bans.Count, "shared bans");
         AppendMetric(html, snapshot.KnownNetworkCount, "known networks");
@@ -269,8 +269,19 @@ public sealed class DragnetLedgerService
         html.AppendLine("<div class=\"table\"><table><thead><tr><th>Player</th><th>Origin</th><th>Type</th><th>Status</th><th>Reconciliation</th><th>Accepted</th><th>Enforced servers</th><th>Issued</th></tr></thead><tbody>");
         foreach (var ban in filtered)
         {
-            html.Append("<tr><td><a href=\"/dragnet/ledger?id=");
-            html.Append(Uri.EscapeDataString(ban.EventId));
+            var isSelected = selected is not null &&
+                             selected.EventIds.Contains(ban.EventId, StringComparer.OrdinalIgnoreCase);
+            html.Append("<tr id=\"ban-");
+            html.Append(Encode(ban.EventId));
+            html.Append("\"");
+            if (isSelected)
+            {
+                html.Append(" class=\"selected-ban\"");
+            }
+            html.Append("><td><a aria-expanded=\"");
+            html.Append(isSelected ? "true" : "false");
+            html.Append("\" href=\"");
+            html.Append(Encode(BuildLedgerSelectionUrl(ban.EventId, search)));
             html.Append("\"><strong>");
             html.Append(Encode(ban.PlayerName));
             html.Append("</strong></a><div class=\"muted\">");
@@ -300,16 +311,16 @@ public sealed class DragnetLedgerService
             html.Append("</td><td>");
             html.Append(Encode($"{ban.CreatedAtUtc:yyyy-MM-dd HH:mm} UTC"));
             html.AppendLine("</td></tr>");
+            if (isSelected)
+            {
+                AppendDetail(html, ban);
+            }
         }
         if (filtered.Count == 0)
         {
             html.AppendLine("<tr><td colspan=\"8\" class=\"muted\">No bans match this search.</td></tr>");
         }
         html.AppendLine("</tbody></table></div>");
-        if (selected is not null)
-        {
-            AppendDetail(html, selected);
-        }
         html.Append("<footer class=\"muted\" style=\"margin-top:24px\">Generated ");
         html.Append(Encode($"{snapshot.GeneratedAtUtc:yyyy-MM-dd HH:mm:ss} UTC"));
         html.Append(" by Dragnet ");
@@ -322,7 +333,7 @@ public sealed class DragnetLedgerService
         StringBuilder html,
         DragnetLedgerBan ban)
     {
-        html.Append("<section class=\"detail\"><h2>");
+        html.Append("<tr class=\"detail-row\"><td colspan=\"8\"><section class=\"detail\"><h2>");
         html.Append(Encode(ban.PlayerName));
         html.Append("</h2><div class=\"grid\">");
         AppendField(html, "Reason", ban.Reason);
@@ -400,7 +411,18 @@ public sealed class DragnetLedgerService
                 html.Append("</div></div>");
             }
         }
-        html.Append("</div></section>");
+        html.Append("</div></section></td></tr>");
+    }
+
+    private static string BuildLedgerSelectionUrl(string eventId, string? search)
+    {
+        var url = $"/dragnet/ledger?id={Uri.EscapeDataString(eventId)}";
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            url += $"&q={Uri.EscapeDataString(search)}";
+        }
+
+        return $"{url}#ban-{Uri.EscapeDataString(eventId)}";
     }
 
     private static void AppendMetric(StringBuilder html, int value, string label)
