@@ -1635,6 +1635,16 @@ static async Task TestWebfrontDashboardRendersAsync()
         "grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2",
         html,
         "release status should use spacing instead of internal dividers");
+    Assert.False(
+        html.Contains("<tr class=\"border-b border-line/60\">", StringComparison.Ordinal),
+        "dashboard data tables should use spacing and hover states instead of row dividers");
+    Assert.False(
+        html.Contains("p-4 border-r border-line/60 border-b border-line/60", StringComparison.Ordinal),
+        "event detail cells should not render divider borders");
+    Assert.Contains(
+        "grid grid-cols-1 lg:grid-cols-3 gap-2 p-2",
+        html,
+        "event details should use spaced surface cells");
     Assert.Contains("Signed proof", html, "dashboard should expose identity proof diagnostics");
     Assert.Contains("Deployment guide", html, "dashboard should include endpoint-specific deployment guidance");
     Assert.Contains("/dragnet/setup-guide", html, "dashboard should link to the shareable setup guide");

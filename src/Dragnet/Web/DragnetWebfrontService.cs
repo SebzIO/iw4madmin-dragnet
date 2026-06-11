@@ -250,14 +250,14 @@ public sealed class DragnetWebfrontService
         AppendMetric(html, "Pending deliveries", pendingDeliveryCount.ToString());
         html.AppendLine("</div>");
 
-        html.AppendLine("<div class=\"rounded-lg border border-line bg-surface/50 overflow-hidden\">");
-        html.AppendLine("<div class=\"px-4 py-3 border-b border-line flex flex-col md:flex-row md:items-center md:justify-between gap-2\">");
+        html.AppendLine("<div class=\"rounded-lg bg-surface/50 p-2\">");
+        html.AppendLine("<div class=\"px-3 py-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2\">");
         html.AppendLine("<h3 class=\"text-lg font-semibold\">Peer transport</h3>");
         html.Append("<span class=\"text-sm text-muted\">Endpoint: ");
         html.Append(Encode(_configuration.PublicEndpoint ?? "not configured"));
         html.AppendLine("</span>");
         html.AppendLine("</div>");
-        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Endpoint</th><th class=\"px-4 py-3\">Source</th><th class=\"px-4 py-3\">Last seen</th><th class=\"px-4 py-3\">Last advertised</th><th class=\"px-4 py-3\">Delivery</th><th class=\"px-4 py-3\">Status</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
+        html.AppendLine("<div class=\"rounded-md bg-surface-alt/20 overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted\"><tr><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Endpoint</th><th class=\"px-4 py-3\">Source</th><th class=\"px-4 py-3\">Last seen</th><th class=\"px-4 py-3\">Last advertised</th><th class=\"px-4 py-3\">Delivery</th><th class=\"px-4 py-3\">Status</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
 
         if (peers.Count == 0)
         {
@@ -267,7 +267,7 @@ public sealed class DragnetWebfrontService
         {
             foreach (var peer in peers.OrderByDescending(peer => peer.LastSeenUtc))
             {
-                html.AppendLine("<tr class=\"border-b border-line/60\">");
+                html.AppendLine("<tr class=\"hover:bg-surface-alt/30\">");
                 html.Append("<td class=\"px-4 py-3 font-medium\">");
                 html.Append(Encode(peer.OriginName));
                 html.AppendLine("</td>");
@@ -305,17 +305,17 @@ public sealed class DragnetWebfrontService
             AppendEventDetail(html, selectedEvent, now);
         }
 
-        html.AppendLine("<div class=\"rounded-lg border border-line bg-surface/50 overflow-hidden\">");
-        html.AppendLine("<div class=\"px-4 py-3 border-b border-line flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between\">");
+        html.AppendLine("<div class=\"rounded-lg bg-surface/50 p-2\">");
+        html.AppendLine("<div class=\"px-3 py-2 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between\">");
         html.AppendLine("<h3 class=\"text-lg font-semibold\">Dragnet events</h3>");
         AppendBulkReviewControls(html, bulkApprovableEvents.Count);
         AppendFilterLinks(html, filter);
         html.AppendLine("</div>");
-        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3 w-10\"><input type=\"checkbox\" aria-label=\"Select all eligible bans\" onclick=\"document.querySelectorAll('.dragnet-bulk-ban').forEach(function(c){c.checked=this.checked;},this)\"></th><th class=\"px-4 py-3\">Player</th><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Trust</th><th class=\"px-4 py-3\">Type</th><th class=\"px-4 py-3\">State</th><th class=\"px-4 py-3\">Import</th><th class=\"px-4 py-3\">Created</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
+        html.AppendLine("<div class=\"rounded-md bg-surface-alt/20 overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted\"><tr><th class=\"px-4 py-3 w-10\"><input type=\"checkbox\" aria-label=\"Select all eligible bans\" onclick=\"document.querySelectorAll('.dragnet-bulk-ban').forEach(function(c){c.checked=this.checked;},this)\"></th><th class=\"px-4 py-3\">Player</th><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Trust</th><th class=\"px-4 py-3\">Type</th><th class=\"px-4 py-3\">State</th><th class=\"px-4 py-3\">Import</th><th class=\"px-4 py-3\">Created</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
 
         foreach (var item in filteredEvents)
         {
-            html.AppendLine("<tr class=\"border-b border-line/60\">");
+            html.AppendLine("<tr class=\"hover:bg-surface-alt/30\">");
             html.Append("<td class=\"px-4 py-3\">");
             if (IsBulkApprovable(item))
             {
@@ -691,8 +691,8 @@ public sealed class DragnetWebfrontService
         DateTimeOffset now)
     {
         var envelope = item.Event;
-        html.AppendLine("<div class=\"rounded-lg border border-line bg-surface/50 overflow-hidden\">");
-        html.AppendLine("<div class=\"px-4 py-3 border-b border-line flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between\">");
+        html.AppendLine("<div class=\"rounded-lg bg-surface/50 p-2\">");
+        html.AppendLine("<div class=\"px-3 py-2 flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between\">");
         html.AppendLine("<div>");
         html.Append("<h3 class=\"text-lg font-semibold\">");
         html.Append(Encode(envelope.PlayerName));
@@ -720,7 +720,7 @@ public sealed class DragnetWebfrontService
 
         html.AppendLine("</div></div></div>");
 
-        html.AppendLine("<div class=\"grid grid-cols-1 lg:grid-cols-3 gap-0 border-b border-line\">");
+        html.AppendLine("<div class=\"grid grid-cols-1 lg:grid-cols-3 gap-2 p-2\">");
         AppendDetailCell(html, "Type", $"{envelope.EventType} / {envelope.PenaltyKind}");
         AppendDetailCell(html, "Review state", item.ReviewState.ToString());
         AppendDetailCell(html, "Import", DescribeImport(item));
@@ -784,11 +784,11 @@ public sealed class DragnetWebfrontService
         {
             html.AppendLine("<div>");
             html.AppendLine("<div class=\"text-sm text-muted mb-2\">Audit trail</div>");
-            html.AppendLine("<div class=\"overflow-x-auto rounded-md border border-line\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-3 py-2\">When</th><th class=\"px-3 py-2\">Reviewer</th><th class=\"px-3 py-2\">Change</th><th class=\"px-3 py-2\">Reason</th></tr></thead><tbody>");
+            html.AppendLine("<div class=\"overflow-x-auto rounded-md bg-surface-alt/20\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted\"><tr><th class=\"px-3 py-2\">When</th><th class=\"px-3 py-2\">Reviewer</th><th class=\"px-3 py-2\">Change</th><th class=\"px-3 py-2\">Reason</th></tr></thead><tbody>");
 
             foreach (var entry in item.AuditTrail.OrderByDescending(entry => entry.ReviewedAtUtc))
             {
-                html.AppendLine("<tr class=\"border-b border-line/60\">");
+                html.AppendLine("<tr class=\"hover:bg-surface-alt/30\">");
                 html.Append("<td class=\"px-3 py-2 text-muted\">");
                 html.Append(Encode($"{entry.ReviewedAtUtc:yyyy-MM-dd HH:mm:ss} UTC"));
                 html.AppendLine("</td>");
@@ -834,7 +834,7 @@ public sealed class DragnetWebfrontService
 
     private static void AppendDetailCell(StringBuilder html, string label, string value)
     {
-        html.AppendLine("<div class=\"p-4 border-r border-line/60 border-b border-line/60\">");
+        html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 p-4\">");
         html.Append("<div class=\"text-sm text-muted\">");
         html.Append(Encode(label));
         html.AppendLine("</div>");
@@ -1584,14 +1584,14 @@ public sealed class DragnetWebfrontService
         IReadOnlyList<DragnetDirectoryEntry> entries,
         DateTimeOffset now)
     {
-        html.AppendLine("<div class=\"border border-line bg-surface/50 overflow-hidden\">");
-        html.AppendLine("<div class=\"px-4 py-3 border-b border-line flex flex-col md:flex-row md:items-center md:justify-between gap-2\">");
+        html.AppendLine("<div class=\"rounded-lg bg-surface/50 p-2\">");
+        html.AppendLine("<div class=\"px-3 py-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2\">");
         html.AppendLine("<div><h3 class=\"font-semibold\">Community directory</h3>");
         html.AppendLine("<div class=\"text-sm text-muted\">Public, opt-in network listings. Directory presence does not grant trust.</div></div>");
         html.Append("<a class=\"text-sm text-primary hover:underline\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"/dragnet/directory\">");
         html.Append(Encode($"{entries.Count} live listing{(entries.Count == 1 ? "" : "s")}"));
         html.AppendLine("</a></div>");
-        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3\">Network</th><th class=\"px-4 py-3\">Verification</th><th class=\"px-4 py-3\">Region</th><th class=\"px-4 py-3\">Servers</th><th class=\"px-4 py-3\">Version</th><th class=\"px-4 py-3\">Seen</th></tr></thead><tbody>");
+        html.AppendLine("<div class=\"rounded-md bg-surface-alt/20 overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted\"><tr><th class=\"px-4 py-3\">Network</th><th class=\"px-4 py-3\">Verification</th><th class=\"px-4 py-3\">Region</th><th class=\"px-4 py-3\">Servers</th><th class=\"px-4 py-3\">Version</th><th class=\"px-4 py-3\">Seen</th></tr></thead><tbody>");
         if (entries.Count == 0)
         {
             html.AppendLine("<tr><td colspan=\"6\" class=\"px-4 py-5 text-center text-muted\">No live networks have opted into directory publication.</td></tr>");
@@ -1600,7 +1600,7 @@ public sealed class DragnetWebfrontService
         {
             foreach (var entry in entries)
             {
-                html.AppendLine("<tr class=\"border-b border-line/60\">");
+                html.AppendLine("<tr class=\"hover:bg-surface-alt/30\">");
                 html.Append("<td class=\"px-4 py-3 font-medium\">");
                 if (!string.IsNullOrWhiteSpace(entry.Website))
                 {

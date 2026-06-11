@@ -2,7 +2,7 @@ namespace Dragnet;
 
 public static class DragnetBuildInfo
 {
-    public const string Version = "0.1.0-beta.8";
+    public const string Version = "0.1.0-beta.9";
 
     public const string RepositoryUrl = "https://github.com/SebzIO/iw4madmin-dragnet";
 }
