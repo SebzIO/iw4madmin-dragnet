@@ -136,6 +136,64 @@ public sealed class DragnetReviewService
             : DragnetReviewResult.Failed($"Dragnet import failed: {importResult.Message}");
     }
 
+    public async Task<DragnetBulkReviewResult> ApplyBulkActionAsync(
+        IReadOnlyList<string> eventIds,
+        DragnetReviewAction action,
+        string? reason,
+        string reviewedByName,
+        int? reviewedByClientId,
+        CancellationToken token)
+    {
+        var distinctIds = eventIds
+            .Where(eventId => !string.IsNullOrWhiteSpace(eventId))
+            .Select(eventId => eventId.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (distinctIds.Count == 0)
+        {
+            return DragnetBulkReviewResult.Failed("Select at least one Dragnet event.");
+        }
+
+        if (distinctIds.Count > 100)
+        {
+            return DragnetBulkReviewResult.Failed("A bulk review can include at most 100 Dragnet events.");
+        }
+
+        var failures = new List<string>();
+        var succeeded = 0;
+        foreach (var eventId in distinctIds)
+        {
+            if (await _store.GetAsync(eventId, token) is null)
+            {
+                failures.Add($"{ShortId(eventId)}: Dragnet event not found.");
+                continue;
+            }
+
+            var result = await ApplyActionAsync(
+                eventId,
+                action,
+                reason,
+                reviewedByName,
+                reviewedByClientId,
+                token);
+            if (result.Success)
+            {
+                succeeded++;
+            }
+            else
+            {
+                failures.Add($"{ShortId(eventId)}: {result.Message}");
+            }
+        }
+
+        return new DragnetBulkReviewResult(
+            true,
+            succeeded,
+            failures.Count,
+            failures,
+            $"Bulk review complete: {succeeded} approved, {failures.Count} failed.");
+    }
+
     public async Task<(DragnetStoredEvent? Match, DragnetReviewResult Result)> FindByPrefixAsync(
         string eventIdPrefix,
         CancellationToken token)
@@ -191,4 +249,15 @@ public sealed record DragnetReviewResult(bool Success, string Message)
     public static DragnetReviewResult Succeeded(string message) => new(true, message);
 
     public static DragnetReviewResult Failed(string message) => new(false, message);
+}
+
+public sealed record DragnetBulkReviewResult(
+    bool Success,
+    int SucceededCount,
+    int FailedCount,
+    IReadOnlyList<string> Failures,
+    string Message)
+{
+    public static DragnetBulkReviewResult Failed(string message) =>
+        new(false, 0, 0, [], message);
 }

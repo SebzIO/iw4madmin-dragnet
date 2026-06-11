@@ -34,6 +34,7 @@ This repository is in the MVP testing stage. The current implementation:
 - adds an administrator-only Dragnet webfront interaction page
 - supports webfront peer health, stale-peer visibility, delivery coverage, event resync, error clearing, and discovered-peer removal
 - supports webfront-first approve, deny, ignore, retry-import, and trust decisions
+- supports checkbox selection, select-all, and one-action bulk approval for trusted pending bans
 - supports webfront event filters and event detail inspection
 - records reviewer identity, decision time, state transition, and reason in a persistent audit trail
 - imports approved remote bans and lifts into IW4MAdmin
@@ -243,6 +244,8 @@ Current behavior:
 - `!dragnet liftignore <eventId>`
 
 Trust commands persist changes to `DragnetSettings`.
+
+The administrator dashboard displays checkboxes beside trusted pending ban events. **Select all** selects every eligible ban on the current page, and **Approve selected** processes them through the same trust, import, attestation, reviewer, and audit logic as individual approval. A batch is limited to 100 unique events; failures are reported individually and do not prevent other selected bans from being processed.
 
 ## Local Smoke Test
 

@@ -202,6 +202,7 @@ public sealed class DragnetWebfrontService
         var pendingDeliveryCount = Math.Max(0, deliveryTargetCount - acknowledgedDeliveryCount);
         var updateStatus = _updateService.Status;
         var filteredEvents = FilterEvents(events, filter).Take(50).ToList();
+        var bulkApprovableEvents = filteredEvents.Where(IsBulkApprovable).ToList();
         var selectedEvent = ResolveSelectedEvent(events, selectedEventId) ?? filteredEvents.FirstOrDefault();
 
         var html = new StringBuilder();
@@ -287,13 +288,25 @@ public sealed class DragnetWebfrontService
         html.AppendLine("<div class=\"rounded-lg border border-line bg-surface/50 overflow-hidden\">");
         html.AppendLine("<div class=\"px-4 py-3 border-b border-line flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between\">");
         html.AppendLine("<h3 class=\"text-lg font-semibold\">Dragnet events</h3>");
+        AppendBulkReviewControls(html, bulkApprovableEvents.Count);
         AppendFilterLinks(html, filter);
         html.AppendLine("</div>");
-        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3\">Player</th><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Trust</th><th class=\"px-4 py-3\">Type</th><th class=\"px-4 py-3\">State</th><th class=\"px-4 py-3\">Import</th><th class=\"px-4 py-3\">Created</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
+        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3 w-10\"><input type=\"checkbox\" aria-label=\"Select all eligible bans\" onclick=\"document.querySelectorAll('.dragnet-bulk-ban').forEach(function(c){c.checked=this.checked;},this)\"></th><th class=\"px-4 py-3\">Player</th><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Trust</th><th class=\"px-4 py-3\">Type</th><th class=\"px-4 py-3\">State</th><th class=\"px-4 py-3\">Import</th><th class=\"px-4 py-3\">Created</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
 
         foreach (var item in filteredEvents)
         {
             html.AppendLine("<tr class=\"border-b border-line/60\">");
+            html.Append("<td class=\"px-4 py-3\">");
+            if (IsBulkApprovable(item))
+            {
+                html.Append("<input type=\"checkbox\" class=\"dragnet-bulk-ban\" aria-label=\"Select ban for ");
+                html.Append(Encode(item.Event.PlayerName));
+                html.Append("\" value=\"");
+                html.Append(Encode(item.Event.EventId));
+                html.Append("\">");
+            }
+
+            html.AppendLine("</td>");
             html.Append("<td class=\"px-4 py-3 font-medium\">");
             AppendEventLink(html, item.Event.EventId, item.Event.PlayerName, filter);
             html.AppendLine("</td>");
@@ -331,7 +344,7 @@ public sealed class DragnetWebfrontService
 
         if (filteredEvents.Count == 0)
         {
-            html.AppendLine("<tr><td colspan=\"8\" class=\"px-4 py-6 text-center text-muted\">No Dragnet events stored.</td></tr>");
+            html.AppendLine("<tr><td colspan=\"9\" class=\"px-4 py-6 text-center text-muted\">No Dragnet events stored.</td></tr>");
         }
 
         html.AppendLine("</tbody></table></div></div>");
@@ -352,8 +365,49 @@ public sealed class DragnetWebfrontService
         }
 
         if (meta is null ||
-            !meta.TryGetValue("EventId", out var eventId) ||
             !meta.TryGetValue("ReviewAction", out var actionValue))
+        {
+            return "Invalid Dragnet review action.";
+        }
+
+        if (string.Equals(actionValue, "BulkApproveBan", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!meta.TryGetValue("EventIds", out var eventIdsJson))
+            {
+                return "No Dragnet events were selected.";
+            }
+
+            if (eventIdsJson.Length > 10_000)
+            {
+                return "Bulk Dragnet selection is too large.";
+            }
+
+            List<string>? eventIds;
+            try
+            {
+                eventIds = JsonSerializer.Deserialize<List<string>>(eventIdsJson);
+            }
+            catch (JsonException)
+            {
+                return "Invalid bulk Dragnet selection.";
+            }
+
+            var bulkResult = await _reviewService.ApplyBulkActionAsync(
+                eventIds ?? [],
+                DragnetReviewAction.ApproveBan,
+                "Bulk approval",
+                GetReviewerName(origin),
+                origin?.ClientId,
+                token);
+            if (bulkResult.Failures.Count == 0)
+            {
+                return bulkResult.Message;
+            }
+
+            return $"{bulkResult.Message} {string.Join(" | ", bulkResult.Failures.Take(5))}";
+        }
+
+        if (!meta.TryGetValue("EventId", out var eventId))
         {
             return "Invalid Dragnet review action.";
         }
@@ -802,6 +856,12 @@ public sealed class DragnetWebfrontService
         }
     }
 
+    private bool IsBulkApprovable(DragnetStoredEvent item) =>
+        !IsLocalEvent(item.Event) &&
+        item.Event.EventType is DragnetEventType.BanCreated &&
+        item.ReviewState is DragnetReviewState.PendingBan &&
+        _trustService.Evaluate(item.Event).IsTrusted;
+
     private static void AppendRetryImportButton(StringBuilder html, string eventId)
     {
         var meta = new Dictionary<string, string>
@@ -817,6 +877,22 @@ public sealed class DragnetWebfrontService
         html.Append("<button type=\"button\" class=\"profile-action cursor-pointer ml-2\" data-action=\"DynamicAction\" data-action-meta=\"");
         html.Append(Encode(encodedMeta));
         html.Append("\"><span class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ph-arrow-clockwise mr-1\"></i>Retry import</span></button>");
+    }
+
+    private static void AppendBulkReviewControls(StringBuilder html, int eligibleCount)
+    {
+        if (eligibleCount == 0)
+        {
+            return;
+        }
+
+        html.Append("<div class=\"flex flex-wrap items-center gap-2\"><span class=\"text-xs text-muted\">");
+        html.Append(Encode($"{eligibleCount} trusted pending ban{(eligibleCount == 1 ? "" : "s")} on this page"));
+        html.Append("</span><button type=\"button\" class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\" onclick=\"document.querySelectorAll('.dragnet-bulk-ban').forEach(function(c){c.checked=true;})\"><i class=\"ph ph-check-square mr-1\"></i>Select all</button>");
+        html.Append("<button type=\"button\" class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-action-primary bg-action-primary text-foreground text-sm\" onclick=\"(function(){var ids=Array.from(document.querySelectorAll('.dragnet-bulk-ban:checked')).map(function(c){return c.value;});if(ids.length===0){alert('Select at least one trusted pending ban.');return;}var inputs=[{Name:'ReviewAction',Type:'hidden',Value:'BulkApproveBan'},{Name:'EventIds',Type:'hidden',Value:JSON.stringify(ids)}];var meta={InteractionId:'");
+        html.Append(ReviewInteractionId);
+        html.Append("',ActionButtonLabel:'Approve selected',Name:'Approve selected bans',ShouldRefresh:'true',Inputs:JSON.stringify(inputs)};var trigger=document.getElementById('dragnet-bulk-trigger');trigger.dataset.actionMeta=encodeURIComponent(JSON.stringify(meta));trigger.click();})()\"><i class=\"ph ph-checks mr-1\"></i>Approve selected</button>");
+        html.Append("<button id=\"dragnet-bulk-trigger\" type=\"button\" class=\"profile-action hidden\" data-action=\"DynamicAction\" data-action-meta=\"\"></button></div>");
     }
 
     private static void AppendEvidenceButton(StringBuilder html, DragnetStoredEvent item)

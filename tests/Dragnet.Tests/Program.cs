@@ -16,6 +16,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("identity service updates configured display name without rotating keys", TestIdentityRenamesWithoutRotatingKeys),
     ("trust service persists and evaluates auto-approval", TestTrustServicePersistsAsync),
     ("review service denies pending ban and blocks untrusted approval", TestReviewTransitionsAsync),
+    ("bulk review approves trusted selections with individual audits", TestBulkReviewAsync),
     ("peer store tracks bootstrap, errors, removal, and send cursor", TestPeerStoreAsync),
     ("peer gossip selection rotates fairly and persists", TestPeerGossipRotationAsync),
     ("statistics aggregate participating servers and shared bans", TestStatisticsAsync),
@@ -176,6 +177,91 @@ static async Task TestReviewTransitionsAsync()
     Assert.Equal(DragnetReviewState.DeniedBan, stored!.ReviewState, "event should be denied");
     Assert.Equal("local note", stored.LocalDecisionReason, "decision note should be stored");
     Assert.Equal("Second Reviewer", stored.ReviewedByName, "denial reviewer should be recorded");
+}
+
+static async Task TestBulkReviewAsync()
+{
+    await using var testDir = new TestDirectory();
+    var store = new DragnetEventStore(testDir.Path);
+    await store.LoadAsync(CancellationToken.None);
+    var configuration = new DragnetConfiguration();
+    var trustService = new DragnetTrustService(
+        configuration,
+        new RecordingConfigurationHandler<DragnetConfiguration>());
+    var importService = new DragnetImportService(
+        configuration,
+        store,
+        managerFactory: () => null!,
+        logger: new TestLogger<DragnetImportService>());
+    var reviewService = new DragnetReviewService(store, importService, trustService);
+    var trustedOne = CreateEnvelope("trusted-origin", DragnetEventType.BanCreated) with
+    {
+        EventId = "bulk-trusted-one",
+        PlayerNetworkId = "unknown-one"
+    };
+    var trustedTwo = CreateEnvelope("trusted-origin", DragnetEventType.BanCreated) with
+    {
+        EventId = "bulk-trusted-two",
+        PlayerNetworkId = "unknown-two"
+    };
+    var untrusted = CreateEnvelope("untrusted-origin", DragnetEventType.BanCreated) with
+    {
+        EventId = "bulk-untrusted",
+        PlayerNetworkId = "unknown-three"
+    };
+    foreach (var envelope in new[] { trustedOne, trustedTwo, untrusted })
+    {
+        await store.UpsertAsync(new DragnetStoredEvent
+        {
+            Event = envelope,
+            ReviewState = DragnetReviewState.PendingBan
+        }, CancellationToken.None);
+    }
+
+    await trustService.TrustAsync(
+        trustedOne.OriginId,
+        trustedOne.OriginName,
+        false,
+        false,
+        CancellationToken.None);
+    var result = await reviewService.ApplyBulkActionAsync(
+        [trustedOne.EventId, trustedTwo.EventId, trustedOne.EventId, untrusted.EventId],
+        DragnetReviewAction.ApproveBan,
+        "Bulk approval",
+        "Bulk Reviewer",
+        99,
+        CancellationToken.None);
+
+    Assert.True(result.Success, "valid bulk request should complete even when individual items fail");
+    Assert.Equal(2, result.SucceededCount, "trusted unique selections should approve");
+    Assert.Equal(1, result.FailedCount, "untrusted selection should be reported as failed");
+    Assert.Contains("not trusted", result.Failures.Single(), "bulk failure should preserve the trust reason");
+    foreach (var eventId in new[] { trustedOne.EventId, trustedTwo.EventId })
+    {
+        var stored = await store.GetAsync(eventId, CancellationToken.None);
+        Assert.Equal(DragnetReviewState.ApprovedBan, stored!.ReviewState,
+            "trusted bulk selection should be approved");
+        Assert.Equal("Bulk Reviewer", stored.ReviewedByName,
+            "bulk approval should preserve reviewer identity");
+        Assert.Equal(1, stored.AuditTrail.Count,
+            "each bulk-approved ban should receive one audit entry");
+    }
+
+    var untrustedStored = await store.GetAsync(untrusted.EventId, CancellationToken.None);
+    Assert.Equal(DragnetReviewState.PendingBan, untrustedStored!.ReviewState,
+        "failed bulk selection should remain pending");
+    Assert.Equal(0, untrustedStored.AuditTrail.Count,
+        "failed bulk selection should not create an audit transition");
+
+    result = await reviewService.ApplyBulkActionAsync(
+        Enumerable.Range(0, 101).Select(index => $"missing-{index}").ToList(),
+        DragnetReviewAction.ApproveBan,
+        null,
+        "Bulk Reviewer",
+        99,
+        CancellationToken.None);
+    Assert.False(result.Success, "bulk review should reject more than 100 unique events");
+    Assert.Contains("at most 100", result.Message, "bulk limit failure should be explicit");
 }
 
 static async Task TestPeerStoreAsync()
@@ -1286,6 +1372,16 @@ static async Task TestWebfrontDashboardRendersAsync()
         Event = legacyEvent,
         ReviewState = DragnetReviewState.PendingBan
     }, CancellationToken.None);
+    var bulkEvent = CreateEnvelope(originId: "bulk-origin", eventType: DragnetEventType.BanCreated) with
+    {
+        EventId = "dashboard-bulk-event",
+        PlayerName = "Bulk Player"
+    };
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = bulkEvent,
+        ReviewState = DragnetReviewState.PendingBan
+    }, CancellationToken.None);
     var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
     await peerStore.LoadAsync(configuration, CancellationToken.None);
     await peerStore.UpsertAsync(new DragnetPeerInfo
@@ -1296,6 +1392,12 @@ static async Task TestWebfrontDashboardRendersAsync()
         SupportsDeliveryAcknowledgements = true
     }, CancellationToken.None);
     var trustService = new DragnetTrustService(configuration, new RecordingConfigurationHandler<DragnetConfiguration>());
+    await trustService.TrustAsync(
+        bulkEvent.OriginId,
+        bulkEvent.OriginName,
+        false,
+        false,
+        CancellationToken.None);
     var importService = new DragnetImportService(
         configuration,
         eventStore,
@@ -1364,6 +1466,9 @@ static async Task TestWebfrontDashboardRendersAsync()
     Assert.Contains("Delivery", html, "peer table should expose delivery coverage");
     Assert.Contains("Verify sync", html, "peer actions should expose delivery verification");
     Assert.Contains("Resync", html, "peer actions should expose event replay");
+    Assert.Contains("Select all", html, "dashboard should expose selecting all eligible pending bans");
+    Assert.Contains("Approve selected", html, "dashboard should expose bulk approval");
+    Assert.Contains("dragnet-bulk-ban", html, "trusted pending bans should render selection checkboxes");
     Assert.Contains("Configure", html, "dashboard should expose the setup action");
     Assert.Contains($"Dragnet {DragnetBuildInfo.Version}", html, "dashboard should show deployed Dragnet version");
     Assert.Contains("Queued imports", html, "dashboard should distinguish queued imports");
