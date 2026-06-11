@@ -17,6 +17,7 @@ public sealed class DragnetTransportService : IDisposable
     private readonly DragnetIdentityService _identityService;
     private readonly DragnetReviewService _reviewService;
     private readonly DragnetTrustService _trustService;
+    private readonly DragnetAttestationService? _attestationService;
     private readonly Func<int> _localServerCount;
     private readonly ILogger<DragnetTransportService> _logger;
     private readonly HttpClient _httpClient;
@@ -33,7 +34,8 @@ public sealed class DragnetTransportService : IDisposable
         DragnetReviewService reviewService,
         DragnetTrustService trustService,
         Func<int> localServerCount,
-        ILogger<DragnetTransportService> logger)
+        ILogger<DragnetTransportService> logger,
+        DragnetAttestationService? attestationService = null)
         : this(
             configuration,
             eventStore,
@@ -45,7 +47,8 @@ public sealed class DragnetTransportService : IDisposable
             localServerCount,
             logger,
             new HttpClient(),
-            ownsHttpClient: true)
+            ownsHttpClient: true,
+            attestationService: attestationService)
     {
     }
 
@@ -60,7 +63,8 @@ public sealed class DragnetTransportService : IDisposable
         Func<int> localServerCount,
         ILogger<DragnetTransportService> logger,
         HttpClient httpClient,
-        bool ownsHttpClient = false)
+        bool ownsHttpClient = false,
+        DragnetAttestationService? attestationService = null)
     {
         _configuration = configuration;
         _eventStore = eventStore;
@@ -69,6 +73,7 @@ public sealed class DragnetTransportService : IDisposable
         _identityService = identityService;
         _reviewService = reviewService;
         _trustService = trustService;
+        _attestationService = attestationService;
         _localServerCount = localServerCount;
         _logger = logger;
         _httpClient = httpClient;
@@ -129,6 +134,10 @@ public sealed class DragnetTransportService : IDisposable
         var acceptedEventIds = await ImportEventsAsync(request.Events, token);
         var acceptedEvidenceIds = await ImportEvidenceUpdatesAsync(request.EvidenceUpdates, token);
         var acceptedAttestationIds = await ImportBanAttestationsAsync(request.BanAttestations, token);
+        if (senderIdentityVerified)
+        {
+            await ProcessAttestationRefreshRequestsAsync(request.AttestationRefreshEventIds, token);
+        }
 
         foreach (var peer in request.KnownPeers)
         {
@@ -151,6 +160,16 @@ public sealed class DragnetTransportService : IDisposable
             request.Sender.SupportsBanAttestations,
             token);
         await _peerStore.MarkAttestationBatchSentAsync(request.Sender.OriginId, attestationBatch, token);
+        var attestationRefreshEventIds = request.Sender.SupportsAttestationRefreshRequests
+            ? await _peerStore.GetPendingAttestationRefreshAsync(
+                request.Sender.OriginId,
+                _configuration.MaxEventsPerHeartbeat,
+                token)
+            : [];
+        await _peerStore.MarkAttestationRefreshSentAsync(
+            request.Sender.OriginId,
+            attestationRefreshEventIds,
+            token);
 
         return new DragnetHeartbeatResponse
         {
@@ -162,6 +181,7 @@ public sealed class DragnetTransportService : IDisposable
             Events = eventBatch,
             EvidenceUpdates = evidenceBatch,
             BanAttestations = attestationBatch,
+            AttestationRefreshEventIds = attestationRefreshEventIds,
             AcknowledgedEventIds = acceptedEventIds
                 .Concat(acceptedEvidenceIds)
                 .Concat(acceptedAttestationIds)
@@ -214,6 +234,12 @@ public sealed class DragnetTransportService : IDisposable
                         _configuration.MaxEventsPerHeartbeat,
                         token)
                     : [];
+                var attestationRefreshEventIds = peer.SupportsAttestationRefreshRequests
+                    ? await _peerStore.GetPendingAttestationRefreshAsync(
+                        peer.OriginId,
+                        _configuration.MaxEventsPerHeartbeat,
+                        token)
+                    : [];
                 var request = new DragnetHeartbeatRequest
                 {
                     Sender = CreateLocalPeerInfo(),
@@ -224,6 +250,7 @@ public sealed class DragnetTransportService : IDisposable
                     Events = eventBatch,
                     EvidenceUpdates = evidenceBatch,
                     BanAttestations = attestationBatch,
+                    AttestationRefreshEventIds = attestationRefreshEventIds,
                     AcknowledgedEventIds = pendingAcknowledgements
                 };
 
@@ -275,6 +302,12 @@ public sealed class DragnetTransportService : IDisposable
                 var acceptedAttestationIds = await ImportBanAttestationsAsync(
                     heartbeat.BanAttestations,
                     token);
+                if (receiverIdentityVerified)
+                {
+                    await ProcessAttestationRefreshRequestsAsync(
+                        heartbeat.AttestationRefreshEventIds,
+                        token);
+                }
                 await _peerStore.MarkHeartbeatSucceededAsync(
                     peer.OriginId,
                     heartbeat.Receiver,
@@ -307,6 +340,10 @@ public sealed class DragnetTransportService : IDisposable
                 await _peerStore.MarkAcknowledgementsSentAsync(
                     heartbeat.Receiver.OriginId,
                     pendingAcknowledgements,
+                    token);
+                await _peerStore.MarkAttestationRefreshSentAsync(
+                    heartbeat.Receiver.OriginId,
+                    attestationRefreshEventIds,
                     token);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -479,6 +516,40 @@ public sealed class DragnetTransportService : IDisposable
         return acceptedIds;
     }
 
+    private async Task ProcessAttestationRefreshRequestsAsync(
+        IReadOnlyList<string> eventIds,
+        CancellationToken token)
+    {
+        if (_attestationService is null)
+        {
+            return;
+        }
+
+        foreach (var eventId in eventIds
+                     .Where(eventId => !string.IsNullOrWhiteSpace(eventId))
+                     .Distinct(StringComparer.OrdinalIgnoreCase)
+                     .Take(Math.Max(1, _configuration.MaxEventsPerHeartbeat)))
+        {
+            var storedEvent = await _eventStore.GetAsync(eventId, token);
+            if (storedEvent?.Event.EventType is not DragnetEventType.BanCreated ||
+                !storedEvent.Event.OriginId.Equals(_identity.OriginId, StringComparison.OrdinalIgnoreCase) &&
+                storedEvent.ReviewState is not DragnetReviewState.ApprovedBan)
+            {
+                continue;
+            }
+
+            var status = storedEvent.Event.OriginId.Equals(
+                             _identity.OriginId,
+                             StringComparison.OrdinalIgnoreCase) ||
+                         storedEvent.ImportedAtUtc is not null
+                ? DragnetBanCoverageStatus.Enforced
+                : storedEvent.ImportError?.StartsWith("Queued:", StringComparison.OrdinalIgnoreCase) == true
+                    ? DragnetBanCoverageStatus.Queued
+                    : DragnetBanCoverageStatus.Accepted;
+            await _attestationService.PublishAsync(eventId, status, token);
+        }
+    }
+
     private void ValidateHeartbeatRequest(DragnetHeartbeatRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Sender.OriginId) ||
@@ -512,6 +583,17 @@ public sealed class DragnetTransportService : IDisposable
         if (request.BanAttestations.Count > _configuration.MaxEventsPerHeartbeat)
         {
             throw new InvalidOperationException("Heartbeat contains too many ban attestations.");
+        }
+
+        if (request.AttestationRefreshEventIds.Count > _configuration.MaxEventsPerHeartbeat)
+        {
+            throw new InvalidOperationException("Heartbeat contains too many attestation refresh requests.");
+        }
+
+        if (request.AttestationRefreshEventIds.Any(eventId =>
+                string.IsNullOrWhiteSpace(eventId) || eventId.Length > 256))
+        {
+            throw new InvalidOperationException("Heartbeat contains an invalid attestation refresh event id.");
         }
 
         if (request.AcknowledgedEventIds.Count > _configuration.MaxEventsPerHeartbeat)
@@ -563,6 +645,7 @@ public sealed class DragnetTransportService : IDisposable
             SupportsDeliveryAcknowledgements = true,
             SupportsEvidenceUpdates = true,
             SupportsBanAttestations = true,
+            SupportsAttestationRefreshRequests = true,
             SeenAtUtc = DateTimeOffset.UtcNow
         };
         return unsigned with
@@ -598,6 +681,7 @@ public sealed class DragnetTransportService : IDisposable
                 SupportsDeliveryAcknowledgements = peer.SupportsDeliveryAcknowledgements,
                 SupportsEvidenceUpdates = peer.SupportsEvidenceUpdates,
                 SupportsBanAttestations = peer.SupportsBanAttestations,
+                SupportsAttestationRefreshRequests = peer.SupportsAttestationRefreshRequests,
                 SeenAtUtc = peer.LastSeenUtc
             })
             .ToList();

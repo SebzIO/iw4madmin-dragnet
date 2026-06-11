@@ -539,6 +539,28 @@ public sealed class DragnetWebfrontService
                     ? "Dragnet peer resync queued. Approved active events will replay on the next successful heartbeat."
                     : "That Dragnet peer was not found.";
 
+            case "RefreshCoverage":
+            {
+                var activeOriginBanIds = (await _eventStore.ListAsync(token))
+                    .Where(item =>
+                        item.Event.EventType is DragnetEventType.BanCreated &&
+                        item.Event.OriginId.Equals(_identity.OriginId, StringComparison.OrdinalIgnoreCase) &&
+                        !item.Event.IsExpired(DateTimeOffset.UtcNow))
+                    .Select(item => item.Event.EventId)
+                    .ToList();
+                if (activeOriginBanIds.Count == 0)
+                {
+                    return "This network has no active originated bans to refresh.";
+                }
+
+                return await _peerStore.QueueAttestationRefreshAsync(
+                    peerOriginId,
+                    activeOriginBanIds,
+                    token)
+                    ? $"Queued coverage refresh for {activeOriginBanIds.Count} active originated ban(s)."
+                    : "That Dragnet peer was not found.";
+            }
+
             case "VerifySync":
             {
                 var peer = (await _peerStore.ListAsync(token))
@@ -1071,6 +1093,15 @@ public sealed class DragnetWebfrontService
 
         AppendPeerActionButton(html, peer, "VerifySync", "Verify sync", "ph-checks");
         AppendPeerActionButton(html, peer, "Resync", "Resync", "ph-arrows-clockwise");
+        if (peer.SupportsAttestationRefreshRequests)
+        {
+            AppendPeerActionButton(
+                html,
+                peer,
+                "RefreshCoverage",
+                "Refresh coverage",
+                "ph-broadcast");
+        }
     }
 
     private static void AppendDeliveryStatus(

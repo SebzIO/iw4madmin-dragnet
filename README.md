@@ -17,6 +17,9 @@ This repository is in the MVP testing stage. The current implementation:
 - exposes machine-readable ledger data at `GET /dragnet/ledger/data`
 - adds a direct `Dragnet Ledger` link to IW4MAdmin's public `Main` navigation section
 - publishes signed per-network ban attestations for accepted, queued, and enforced coverage
+- consolidates duplicate events that share an origin and IW4MAdmin penalty ID while preserving their event IDs
+- reconciles coverage as enforced, queued, accepted, unreported, stale, degraded, or unavailable per peer
+- lets administrators request fresh coverage attestations for their network's active originated bans
 - signs captured events with the local origin identity
 - stores captured events in `Configuration/Dragnet/events.json`
 - stores known peers in `Configuration/Dragnet/peers.json`
@@ -148,6 +151,10 @@ A remote listing becomes verified only after the local node directly contacts it
 Coverage attestations are signed by the network making the statement and are independently verified before storage or display. **Accepted** means the network approved the ban but did not import a local penalty, **Queued** means approval is retained until IW4MAdmin knows the player locally, and **Enforced** means the network imported or originated the penalty. Each attestation includes the network's signed server count and public server names, so ban detail pages identify the actual servers covered by that network. Coverage is reported against the networks currently known by the viewing peer, so temporary peer discovery differences can produce short-lived count differences between ledgers.
 
 The ledger omits an attestation from the network that originated a ban because origin enforcement is implicit. Acceptance and enforced-server totals therefore measure propagation to other known peer networks.
+
+Duplicate event rows are consolidated only when they have the same origin fingerprint and a positive IW4MAdmin penalty ID. Dragnet does not merge bans merely because they target the same player. The detail view retains the underlying event IDs and reports peer availability separately from signed coverage, so an offline peer is not represented as a denial.
+
+Administrators can use **Refresh coverage** on a capable peer from the Dragnet dashboard. The request is persisted until a successful heartbeat and asks that peer to republish its current signed status for active bans originated by this network. Older peers ignore the optional request field and continue exchanging bans normally.
 
 The public ledger does not expose IP addresses, local trust settings, reviewer identities, private decision notes, denial reasons, ignored decisions, private keys, or IW4MAdmin authentication data. Player names, game network IDs, public ban reasons, origins, evidence URLs, and signed acceptance/enforcement statements are public.
 

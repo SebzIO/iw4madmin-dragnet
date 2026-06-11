@@ -232,6 +232,7 @@ public sealed class DragnetPeerStore
                     SupportsDeliveryAcknowledgements = peerInfo.SupportsDeliveryAcknowledgements,
                     SupportsEvidenceUpdates = peerInfo.SupportsEvidenceUpdates,
                     SupportsBanAttestations = peerInfo.SupportsBanAttestations,
+                    SupportsAttestationRefreshRequests = peerInfo.SupportsAttestationRefreshRequests,
                     LastSeenUtc = observedAtUtc
                 };
             }
@@ -381,6 +382,10 @@ public sealed class DragnetPeerStore
                 .SelectMany(peer => peer.PendingAcknowledgementEventIds ?? [])
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            var pendingAttestationRefreshEventIds = relatedRecords
+                .SelectMany(peer => peer.PendingAttestationRefreshEventIds ?? [])
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
 
             foreach (var related in relatedRecords)
             {
@@ -413,8 +418,10 @@ public sealed class DragnetPeerStore
                 SupportsDeliveryAcknowledgements = receiver.SupportsDeliveryAcknowledgements,
                 SupportsEvidenceUpdates = receiver.SupportsEvidenceUpdates,
                 SupportsBanAttestations = receiver.SupportsBanAttestations,
+                SupportsAttestationRefreshRequests = receiver.SupportsAttestationRefreshRequests,
                 EventDeliveries = eventDeliveries,
                 PendingAcknowledgementEventIds = pendingAcknowledgements,
+                PendingAttestationRefreshEventIds = pendingAttestationRefreshEventIds,
                 LastSyncVerifiedAtUtc = relatedRecords
                     .Where(peer => peer.LastSyncVerifiedAtUtc is not null)
                     .Select(peer => peer.LastSyncVerifiedAtUtc)
@@ -700,6 +707,88 @@ public sealed class DragnetPeerStore
         }
     }
 
+    public async Task<bool> QueueAttestationRefreshAsync(
+        string originId,
+        IReadOnlyList<string> eventIds,
+        CancellationToken token)
+    {
+        await _lock.WaitAsync(token);
+        try
+        {
+            if (!_peers.TryGetValue(originId, out var peer))
+            {
+                return false;
+            }
+
+            peer.PendingAttestationRefreshEventIds ??= [];
+            foreach (var eventId in eventIds
+                         .Where(eventId => !string.IsNullOrWhiteSpace(eventId))
+                         .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!peer.PendingAttestationRefreshEventIds.Contains(
+                        eventId,
+                        StringComparer.OrdinalIgnoreCase))
+                {
+                    peer.PendingAttestationRefreshEventIds.Add(eventId);
+                }
+            }
+
+            await SaveUnlockedAsync(token);
+            return true;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task<IReadOnlyList<string>> GetPendingAttestationRefreshAsync(
+        string originId,
+        int maximum,
+        CancellationToken token)
+    {
+        await _lock.WaitAsync(token);
+        try
+        {
+            return _peers.TryGetValue(originId, out var peer)
+                ? (peer.PendingAttestationRefreshEventIds ?? [])
+                    .Take(Math.Max(0, maximum))
+                    .ToList()
+                : [];
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task MarkAttestationRefreshSentAsync(
+        string originId,
+        IReadOnlyList<string> eventIds,
+        CancellationToken token)
+    {
+        if (eventIds.Count == 0)
+        {
+            return;
+        }
+
+        await _lock.WaitAsync(token);
+        try
+        {
+            if (_peers.TryGetValue(originId, out var peer))
+            {
+                peer.PendingAttestationRefreshEventIds ??= [];
+                peer.PendingAttestationRefreshEventIds.RemoveAll(eventId =>
+                    eventIds.Contains(eventId, StringComparer.OrdinalIgnoreCase));
+                await SaveUnlockedAsync(token);
+            }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
     public async Task<bool> RequestResyncAsync(string originId, CancellationToken token)
     {
         await _lock.WaitAsync(token);
@@ -854,6 +943,7 @@ public sealed class DragnetPeerStore
         record.SupportsDeliveryAcknowledgements = peerInfo.SupportsDeliveryAcknowledgements;
         record.SupportsEvidenceUpdates = peerInfo.SupportsEvidenceUpdates;
         record.SupportsBanAttestations = peerInfo.SupportsBanAttestations;
+        record.SupportsAttestationRefreshRequests = peerInfo.SupportsAttestationRefreshRequests;
     }
 
     public static string AttestationDeliveryKey(DragnetBanAttestation attestation) =>
