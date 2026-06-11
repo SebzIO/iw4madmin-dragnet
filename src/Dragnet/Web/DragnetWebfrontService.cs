@@ -186,6 +186,17 @@ public sealed class DragnetWebfrontService
             now - advertisedAt <= _configuration.PeerStaleAfter);
         var verifiedPeers = peers.Count(peer => peer.IdentityVerified);
         var legacyPeers = peers.Count(peer => !peer.IdentityVerified);
+        var deliverableEvents = GetDeliverableEvents(events, now);
+        var acknowledgementPeers = peers
+            .Where(peer => peer.SupportsDeliveryAcknowledgements)
+            .ToList();
+        var deliveryTargetCount = deliverableEvents.Count * acknowledgementPeers.Count;
+        var acknowledgedDeliveryCount = acknowledgementPeers.Sum(peer =>
+            (peer.EventDeliveries ?? []).Count(delivery =>
+                delivery.AcknowledgedAtUtc is not null &&
+                deliverableEvents.Any(item =>
+                    item.Event.EventId.Equals(delivery.EventId, StringComparison.OrdinalIgnoreCase))));
+        var pendingDeliveryCount = Math.Max(0, deliveryTargetCount - acknowledgedDeliveryCount);
         var updateStatus = _updateService.Status;
         var filteredEvents = FilterEvents(events, filter).Take(50).ToList();
         var selectedEvent = ResolveSelectedEvent(events, selectedEventId) ?? filteredEvents.FirstOrDefault();
@@ -211,6 +222,8 @@ public sealed class DragnetWebfrontService
         AppendMetric(html, "Advertised recently", recentlyAdvertisedPeers.ToString());
         AppendMetric(html, "Verified identities", verifiedPeers.ToString());
         AppendMetric(html, "Legacy identities", legacyPeers.ToString());
+        AppendMetric(html, "Acknowledged deliveries", acknowledgedDeliveryCount.ToString());
+        AppendMetric(html, "Pending deliveries", pendingDeliveryCount.ToString());
         html.AppendLine("</div>");
 
         html.AppendLine("<div class=\"rounded-lg border border-line bg-surface/50 overflow-hidden\">");
@@ -220,7 +233,7 @@ public sealed class DragnetWebfrontService
         html.Append(Encode(_configuration.PublicEndpoint ?? "not configured"));
         html.AppendLine("</span>");
         html.AppendLine("</div>");
-        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Endpoint</th><th class=\"px-4 py-3\">Source</th><th class=\"px-4 py-3\">Last seen</th><th class=\"px-4 py-3\">Last advertised</th><th class=\"px-4 py-3\">Last sent</th><th class=\"px-4 py-3\">Status</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
+        html.AppendLine("<div class=\"overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted border-b border-line\"><tr><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Endpoint</th><th class=\"px-4 py-3\">Source</th><th class=\"px-4 py-3\">Last seen</th><th class=\"px-4 py-3\">Last advertised</th><th class=\"px-4 py-3\">Delivery</th><th class=\"px-4 py-3\">Status</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
 
         if (peers.Count == 0)
         {
@@ -249,9 +262,7 @@ public sealed class DragnetWebfrontService
                     : Encode(DescribeAge(now - peer.LastAdvertisedAtUtc.Value)));
                 html.AppendLine("</td>");
                 html.Append("<td class=\"px-4 py-3 text-muted\">");
-                html.Append(peer.LastEventSentAtUtc is null || peer.LastEventSentAtUtc.Value <= DateTimeOffset.UnixEpoch
-                    ? "Never"
-                    : Encode(DescribeAge(now - peer.LastEventSentAtUtc.Value)));
+                AppendDeliveryStatus(html, peer, deliverableEvents, now);
                 html.AppendLine("</td>");
                 html.Append("<td class=\"px-4 py-3\">");
                 AppendPeerStatus(html, peer, now);
@@ -435,6 +446,36 @@ public sealed class DragnetWebfrontService
                 return await _peerStore.RemoveAsync(peerOriginId, token)
                     ? "Removed Dragnet peer."
                     : "That Dragnet peer was not found.";
+
+            case "Resync":
+                return await _peerStore.RequestResyncAsync(peerOriginId, token)
+                    ? "Dragnet peer resync queued. Approved active events will replay on the next successful heartbeat."
+                    : "That Dragnet peer was not found.";
+
+            case "VerifySync":
+            {
+                var peer = (await _peerStore.ListAsync(token))
+                    .FirstOrDefault(item =>
+                        item.OriginId.Equals(peerOriginId, StringComparison.OrdinalIgnoreCase));
+                if (peer is null)
+                {
+                    return "That Dragnet peer was not found.";
+                }
+
+                var deliverable = GetDeliverableEvents(
+                    await _eventStore.ListAsync(token),
+                    DateTimeOffset.UtcNow);
+                if (!peer.SupportsDeliveryAcknowledgements)
+                {
+                    return $"Peer {peer.OriginName} is legacy/unknown delivery coverage. Upgrade both nodes for acknowledgements.";
+                }
+
+                var acknowledged = CountAcknowledgedDeliveries(peer, deliverable);
+                var sentPending = CountSentPendingDeliveries(peer, deliverable);
+                return $"Peer {peer.OriginName}: {acknowledged}/{deliverable.Count} acknowledged, " +
+                       $"{sentPending} sent awaiting acknowledgement, " +
+                       $"{Math.Max(0, deliverable.Count - acknowledged - sentPending)} not yet sent.";
+            }
 
             default:
                 return "Invalid Dragnet peer action.";
@@ -807,7 +848,71 @@ public sealed class DragnetWebfrontService
         {
             AppendPeerActionButton(html, peer, "Remove", "Remove", "ph-trash");
         }
+
+        AppendPeerActionButton(html, peer, "VerifySync", "Verify sync", "ph-checks");
+        AppendPeerActionButton(html, peer, "Resync", "Resync", "ph-arrows-clockwise");
     }
+
+    private static void AppendDeliveryStatus(
+        StringBuilder html,
+        DragnetPeerRecord peer,
+        IReadOnlyList<DragnetStoredEvent> deliverableEvents,
+        DateTimeOffset now)
+    {
+        if (!peer.SupportsDeliveryAcknowledgements)
+        {
+            html.Append("<span class=\"text-muted\">Legacy / unknown</span>");
+            return;
+        }
+
+        var acknowledged = CountAcknowledgedDeliveries(peer, deliverableEvents);
+        var pending = CountSentPendingDeliveries(peer, deliverableEvents);
+        html.Append("<span class=\"text-success\">");
+        html.Append(Encode($"{acknowledged}/{deliverableEvents.Count} acknowledged"));
+        html.Append("</span>");
+        if (pending > 0)
+        {
+            var failed = !string.IsNullOrWhiteSpace(peer.LastError);
+            html.Append(failed
+                ? "<div class=\"text-xs text-danger\">"
+                : "<div class=\"text-xs text-warning\">");
+            html.Append(Encode(failed
+                ? $"{pending} delivery attempts blocked"
+                : $"{pending} awaiting acknowledgement"));
+            html.Append("</div>");
+        }
+
+        if (peer.LastSyncVerifiedAtUtc is { } verifiedAt)
+        {
+            html.Append("<div class=\"text-xs text-muted\">Verified ");
+            html.Append(Encode(DescribeAge(now - verifiedAt)));
+            html.Append("</div>");
+        }
+    }
+
+    private static int CountAcknowledgedDeliveries(
+        DragnetPeerRecord peer,
+        IReadOnlyList<DragnetStoredEvent> deliverableEvents) =>
+        (peer.EventDeliveries ?? []).Count(delivery =>
+            delivery.AcknowledgedAtUtc is not null &&
+            deliverableEvents.Any(item =>
+                item.Event.EventId.Equals(delivery.EventId, StringComparison.OrdinalIgnoreCase)));
+
+    private static int CountSentPendingDeliveries(
+        DragnetPeerRecord peer,
+        IReadOnlyList<DragnetStoredEvent> deliverableEvents) =>
+        (peer.EventDeliveries ?? []).Count(delivery =>
+            delivery.AcknowledgedAtUtc is null &&
+            deliverableEvents.Any(item =>
+                item.Event.EventId.Equals(delivery.EventId, StringComparison.OrdinalIgnoreCase)));
+
+    private static IReadOnlyList<DragnetStoredEvent> GetDeliverableEvents(
+        IReadOnlyList<DragnetStoredEvent> events,
+        DateTimeOffset now) =>
+        events
+            .Where(item => item.ReviewState is DragnetReviewState.ApprovedBan or DragnetReviewState.ApprovedLift)
+            .Where(item => item.Event.EventType is DragnetEventType.BanLifted || !item.Event.IsExpired(now))
+            .ToList();
 
     private static void AppendPeerActionButton(
         StringBuilder html,

@@ -147,6 +147,19 @@ public sealed class DragnetController : ControllerBase
         var peers = await _peerStore.ListAsync(token);
         var now = DateTimeOffset.UtcNow;
         var update = _updateService.Status;
+        var deliverableEventIds = events
+            .Where(item => item.ReviewState is DragnetReviewState.ApprovedBan or DragnetReviewState.ApprovedLift)
+            .Where(item => item.Event.EventType is DragnetEventType.BanLifted || !item.Event.IsExpired(now))
+            .Select(item => item.Event.EventId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var acknowledgementPeers = peers
+            .Where(peer => peer.SupportsDeliveryAcknowledgements)
+            .ToList();
+        var acknowledgedDeliveries = acknowledgementPeers.Sum(peer =>
+            (peer.EventDeliveries ?? []).Count(delivery =>
+                delivery.AcknowledgedAtUtc is not null &&
+                deliverableEventIds.Contains(delivery.EventId)));
+        var deliveryTargets = deliverableEventIds.Count * acknowledgementPeers.Count;
 
         return Ok(new DragnetStatusResponse
         {
@@ -178,6 +191,10 @@ public sealed class DragnetController : ControllerBase
                 now - advertisedAt <= _configuration.PeerStaleAfter),
             VerifiedIdentityPeerCount = peers.Count(peer => peer.IdentityVerified),
             LegacyIdentityPeerCount = peers.Count(peer => !peer.IdentityVerified),
+            DeliveryAcknowledgementPeerCount = acknowledgementPeers.Count,
+            DeliverableEventCount = deliverableEventIds.Count,
+            AcknowledgedDeliveryCount = acknowledgedDeliveries,
+            PendingDeliveryCount = Math.Max(0, deliveryTargets - acknowledgedDeliveries),
             PendingBanCount = events.Count(item => item.ReviewState is DragnetReviewState.PendingBan),
             PendingLiftCount = events.Count(item => item.ReviewState is DragnetReviewState.PendingLift),
             ApprovedBanCount = events.Count(item => item.ReviewState is DragnetReviewState.ApprovedBan),
@@ -270,6 +287,14 @@ public sealed record DragnetStatusResponse
     public required int VerifiedIdentityPeerCount { get; init; }
 
     public required int LegacyIdentityPeerCount { get; init; }
+
+    public required int DeliveryAcknowledgementPeerCount { get; init; }
+
+    public required int DeliverableEventCount { get; init; }
+
+    public required int AcknowledgedDeliveryCount { get; init; }
+
+    public required int PendingDeliveryCount { get; init; }
 
     public required int PendingBanCount { get; init; }
 

@@ -229,6 +229,7 @@ public sealed class DragnetPeerStore
                     PublicKeyPem = peerInfo.PublicKeyPem,
                     Signature = peerInfo.Signature,
                     IdentityVerified = identityVerified,
+                    SupportsDeliveryAcknowledgements = peerInfo.SupportsDeliveryAcknowledgements,
                     LastSeenUtc = observedAtUtc
                 };
             }
@@ -346,6 +347,11 @@ public sealed class DragnetPeerStore
                 .Where(peer => peer.LastEventSentAtUtc is not null)
                 .Select(peer => peer.LastEventSentAtUtc)
                 .Max();
+            var lastEventSentId = relatedRecords
+                .Where(peer => !string.IsNullOrWhiteSpace(peer.LastEventSentId))
+                .OrderByDescending(peer => peer.LastEventSentAtUtc)
+                .Select(peer => peer.LastEventSentId)
+                .FirstOrDefault();
             var isBootstrap = relatedRecords.Any(peer => peer.IsBootstrap);
             var previouslyVerified = relatedRecords.Any(peer => peer.IdentityVerified);
             var previousEndpointVerifiedAtUtc = relatedRecords
@@ -361,6 +367,18 @@ public sealed class DragnetPeerStore
                 .Where(peer => peer.LastAdvertisedAtUtc is not null)
                 .Select(peer => peer.LastAdvertisedAtUtc)
                 .Max();
+            var eventDeliveries = relatedRecords
+                .SelectMany(peer => peer.EventDeliveries ?? [])
+                .GroupBy(delivery => delivery.EventId, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group
+                    .OrderByDescending(delivery => delivery.AcknowledgedAtUtc)
+                    .ThenByDescending(delivery => delivery.LastSentAtUtc)
+                    .First())
+                .ToList();
+            var pendingAcknowledgements = relatedRecords
+                .SelectMany(peer => peer.PendingAcknowledgementEventIds ?? [])
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
 
             foreach (var related in relatedRecords)
             {
@@ -377,6 +395,7 @@ public sealed class DragnetPeerStore
                 FirstSeenUtc = firstSeenUtc,
                 LastSeenUtc = DateTimeOffset.UtcNow,
                 LastEventSentAtUtc = lastEventSentAtUtc,
+                LastEventSentId = lastEventSentId,
                 ServerCount = preserveVerifiedMetadata ? previousProof!.ServerCount : receiver.ServerCount,
                 DirectoryListed = preserveVerifiedMetadata ? previousProof!.DirectoryListed : receiver.DirectoryListed,
                 Region = preserveVerifiedMetadata ? previousProof!.Region : receiver.Region,
@@ -389,6 +408,17 @@ public sealed class DragnetPeerStore
                     ? DateTimeOffset.UtcNow
                     : previousEndpointVerifiedAtUtc,
                 LastAdvertisedAtUtc = lastAdvertisedAtUtc,
+                SupportsDeliveryAcknowledgements = receiver.SupportsDeliveryAcknowledgements,
+                EventDeliveries = eventDeliveries,
+                PendingAcknowledgementEventIds = pendingAcknowledgements,
+                LastSyncVerifiedAtUtc = relatedRecords
+                    .Where(peer => peer.LastSyncVerifiedAtUtc is not null)
+                    .Select(peer => peer.LastSyncVerifiedAtUtc)
+                    .Max(),
+                LastResyncRequestedAtUtc = relatedRecords
+                    .Where(peer => peer.LastResyncRequestedAtUtc is not null)
+                    .Select(peer => peer.LastResyncRequestedAtUtc)
+                    .Max(),
                 IsBootstrap = isBootstrap
             };
             ClearFailureState(healthy);
@@ -404,7 +434,8 @@ public sealed class DragnetPeerStore
     public async Task MarkEventBatchSentAsync(
         string originId,
         IReadOnlyList<DragnetEventEnvelope> sentEvents,
-        CancellationToken token)
+        CancellationToken token,
+        bool trackAcknowledgements = false)
     {
         if (sentEvents.Count == 0)
         {
@@ -417,12 +448,184 @@ public sealed class DragnetPeerStore
             if (_peers.TryGetValue(originId, out var existing))
             {
                 var latestSentAt = sentEvents.Max(envelope => envelope.CreatedAtUtc);
+                var latestSent = sentEvents
+                    .OrderBy(envelope => envelope.CreatedAtUtc)
+                    .ThenBy(envelope => envelope.EventId, StringComparer.OrdinalIgnoreCase)
+                    .Last();
                 existing.LastEventSentAtUtc = existing.LastEventSentAtUtc is null ||
                                               latestSentAt > existing.LastEventSentAtUtc
                     ? latestSentAt
                     : existing.LastEventSentAtUtc;
+                existing.LastEventSentId = latestSent.EventId;
+                if (trackAcknowledgements)
+                {
+                    existing.EventDeliveries ??= [];
+                    foreach (var envelope in sentEvents)
+                    {
+                        var delivery = existing.EventDeliveries.FirstOrDefault(item =>
+                            item.EventId.Equals(envelope.EventId, StringComparison.OrdinalIgnoreCase));
+                        if (delivery is null)
+                        {
+                            existing.EventDeliveries.Add(new DragnetEventDeliveryRecord
+                            {
+                                EventId = envelope.EventId
+                            });
+                        }
+                        else
+                        {
+                            delivery.LastSentAtUtc = DateTimeOffset.UtcNow;
+                            delivery.SendAttempts++;
+                        }
+                    }
+                }
                 await SaveUnlockedAsync(token);
             }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task MarkEventsAcknowledgedAsync(
+        string originId,
+        IReadOnlyList<string> eventIds,
+        CancellationToken token)
+    {
+        if (eventIds.Count == 0)
+        {
+            return;
+        }
+
+        await _lock.WaitAsync(token);
+        try
+        {
+            if (!_peers.TryGetValue(originId, out var peer))
+            {
+                return;
+            }
+
+            peer.EventDeliveries ??= [];
+            var now = DateTimeOffset.UtcNow;
+            var acknowledgedAny = false;
+            foreach (var eventId in eventIds.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                var delivery = peer.EventDeliveries.FirstOrDefault(item =>
+                    item.EventId.Equals(eventId, StringComparison.OrdinalIgnoreCase));
+                if (delivery is not null)
+                {
+                    delivery.AcknowledgedAtUtc = now;
+                    acknowledgedAny = true;
+                }
+            }
+
+            if (acknowledgedAny)
+            {
+                peer.LastSyncVerifiedAtUtc = now;
+                await SaveUnlockedAsync(token);
+            }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task QueueAcknowledgementsAsync(
+        string originId,
+        IReadOnlyList<string> eventIds,
+        CancellationToken token)
+    {
+        if (eventIds.Count == 0)
+        {
+            return;
+        }
+
+        await _lock.WaitAsync(token);
+        try
+        {
+            if (_peers.TryGetValue(originId, out var peer))
+            {
+                peer.PendingAcknowledgementEventIds ??= [];
+                foreach (var eventId in eventIds)
+                {
+                    if (!peer.PendingAcknowledgementEventIds.Contains(eventId, StringComparer.OrdinalIgnoreCase))
+                    {
+                        peer.PendingAcknowledgementEventIds.Add(eventId);
+                    }
+                }
+
+                await SaveUnlockedAsync(token);
+            }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task<IReadOnlyList<string>> GetPendingAcknowledgementsAsync(
+        string originId,
+        int maximum,
+        CancellationToken token)
+    {
+        await _lock.WaitAsync(token);
+        try
+        {
+            return _peers.TryGetValue(originId, out var peer)
+                ? (peer.PendingAcknowledgementEventIds ?? []).Take(Math.Max(0, maximum)).ToList()
+                : [];
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task MarkAcknowledgementsSentAsync(
+        string originId,
+        IReadOnlyList<string> eventIds,
+        CancellationToken token)
+    {
+        if (eventIds.Count == 0)
+        {
+            return;
+        }
+
+        await _lock.WaitAsync(token);
+        try
+        {
+            if (_peers.TryGetValue(originId, out var peer))
+            {
+                peer.PendingAcknowledgementEventIds ??= [];
+                peer.PendingAcknowledgementEventIds.RemoveAll(eventId =>
+                    eventIds.Contains(eventId, StringComparer.OrdinalIgnoreCase));
+                await SaveUnlockedAsync(token);
+            }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task<bool> RequestResyncAsync(string originId, CancellationToken token)
+    {
+        await _lock.WaitAsync(token);
+        try
+        {
+            if (!_peers.TryGetValue(originId, out var peer))
+            {
+                return false;
+            }
+
+            peer.EventDeliveries = [];
+            peer.LastEventSentAtUtc = null;
+            peer.LastEventSentId = null;
+            peer.LastSyncVerifiedAtUtc = null;
+            peer.LastResyncRequestedAtUtc = DateTimeOffset.UtcNow;
+            await SaveUnlockedAsync(token);
+            return true;
         }
         finally
         {
@@ -535,6 +738,7 @@ public sealed class DragnetPeerStore
                     provisional.LastEventSentAtUtc > canonical.LastEventSentAtUtc)
                 {
                     canonical.LastEventSentAtUtc = provisional.LastEventSentAtUtc;
+                    canonical.LastEventSentId = provisional.LastEventSentId;
                 }
 
                 _peers.Remove(provisional.OriginId);
@@ -556,6 +760,7 @@ public sealed class DragnetPeerStore
         record.Region = peerInfo.Region;
         record.Website = peerInfo.Website;
         record.Version = peerInfo.Version;
+        record.SupportsDeliveryAcknowledgements = peerInfo.SupportsDeliveryAcknowledgements;
     }
 
     private static void ApplyIdentityProof(

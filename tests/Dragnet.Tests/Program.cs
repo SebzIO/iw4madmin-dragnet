@@ -25,6 +25,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("import service skips disabled and already imported events", TestImportServiceSkipsAsync),
     ("import service queues unknown players", TestImportServiceQueuesUnknownPlayersAsync),
     ("heartbeat response sends approved events once", TestHeartbeatResponseBatchAsync),
+    ("delivery acknowledgements replay gaps and support resync", TestDeliveryAcknowledgementReplayAsync),
     ("webfront dashboard interaction renders as navigation content", TestWebfrontDashboardRendersAsync),
     ("heartbeat validation rejects oversized and invalid requests", TestHeartbeatValidationAsync),
     ("outbound heartbeat errors include response body", TestOutboundHeartbeatErrorIncludesBodyAsync),
@@ -773,6 +774,103 @@ static async Task TestHeartbeatResponseBatchAsync()
     Assert.Equal(0, secondResponse.Events.Count, "heartbeat should not resend events already sent to peer");
 }
 
+static async Task TestDeliveryAcknowledgementReplayAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        MaxEventsPerHeartbeat = 10,
+        PublicEndpoint = "https://local.example/dragnet"
+    };
+    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
+    await eventStore.LoadAsync(CancellationToken.None);
+    var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
+    await peerStore.LoadAsync(configuration, CancellationToken.None);
+    var identityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "identity"));
+    var identity = identityService.LoadOrCreate("Local");
+    var trustService = new DragnetTrustService(configuration, new RecordingConfigurationHandler<DragnetConfiguration>());
+    var importService = new DragnetImportService(
+        configuration,
+        eventStore,
+        managerFactory: () => null!,
+        logger: new TestLogger<DragnetImportService>());
+    var reviewService = new DragnetReviewService(eventStore, importService, trustService);
+    var transport = new DragnetTransportService(
+        configuration,
+        eventStore,
+        peerStore,
+        identity,
+        identityService,
+        reviewService,
+        trustService,
+        () => 1,
+        new TestLogger<DragnetTransportService>());
+    var sharedTimestamp = DateTimeOffset.UtcNow.AddMinutes(-1);
+    var first = CreateEnvelope("local", DragnetEventType.BanCreated) with
+    {
+        EventId = "same-time-a",
+        CreatedAtUtc = sharedTimestamp
+    };
+    var second = CreateEnvelope("local", DragnetEventType.BanCreated) with
+    {
+        EventId = "same-time-b",
+        CreatedAtUtc = sharedTimestamp
+    };
+    foreach (var envelope in new[] { first, second })
+    {
+        await eventStore.UpsertAsync(new DragnetStoredEvent
+        {
+            Event = envelope,
+            ReviewState = DragnetReviewState.ApprovedBan
+        }, CancellationToken.None);
+    }
+
+    var request = CreateHeartbeatRequest("remote") with
+    {
+        Sender = CreateHeartbeatRequest("remote").Sender with
+        {
+            SupportsDeliveryAcknowledgements = true
+        }
+    };
+    var initial = await transport.HandleHeartbeatAsync(request, CancellationToken.None);
+    Assert.Equal(2, initial.Events.Count, "acknowledgement peer should receive all equal-timestamp events");
+
+    var replay = await transport.HandleHeartbeatAsync(request, CancellationToken.None);
+    Assert.Equal(2, replay.Events.Count, "unacknowledged events should replay");
+
+    var acknowledged = await transport.HandleHeartbeatAsync(request with
+    {
+        AcknowledgedEventIds = initial.Events.Select(item => item.EventId).ToList()
+    }, CancellationToken.None);
+    Assert.Equal(0, acknowledged.Events.Count, "acknowledged events should stop replaying");
+    var peer = (await peerStore.ListAsync(CancellationToken.None))
+        .Single(item => item.OriginId == "remote");
+    Assert.Equal(2, peer.EventDeliveries.Count(item => item.AcknowledgedAtUtc is not null),
+        "peer delivery records should persist acknowledgements");
+    Assert.NotNull(peer.LastSyncVerifiedAtUtc, "acknowledgements should update sync verification time");
+
+    Assert.True(await peerStore.RequestResyncAsync("remote", CancellationToken.None),
+        "manual resync should clear delivery coverage");
+    var resync = await transport.HandleHeartbeatAsync(request, CancellationToken.None);
+    Assert.Equal(2, resync.Events.Count, "manual resync should replay all active approved events");
+
+    await peerStore.QueueAcknowledgementsAsync(
+        "remote",
+        ["remote-event-a", "remote-event-b"],
+        CancellationToken.None);
+    await peerStore.LoadAsync(configuration, CancellationToken.None);
+    var pending = await peerStore.GetPendingAcknowledgementsAsync(
+        "remote",
+        10,
+        CancellationToken.None);
+    Assert.Equal(2, pending.Count, "queued response acknowledgements should survive restart");
+    await peerStore.MarkAcknowledgementsSentAsync("remote", pending, CancellationToken.None);
+    Assert.Equal(
+        0,
+        (await peerStore.GetPendingAcknowledgementsAsync("remote", 10, CancellationToken.None)).Count,
+        "successfully transmitted acknowledgements should leave the queue");
+}
+
 static async Task TestWebfrontDashboardRendersAsync()
 {
     await using var testDir = new TestDirectory();
@@ -801,6 +899,13 @@ static async Task TestWebfrontDashboardRendersAsync()
     }, CancellationToken.None);
     var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
     await peerStore.LoadAsync(configuration, CancellationToken.None);
+    await peerStore.UpsertAsync(new DragnetPeerInfo
+    {
+        OriginId = "dashboard-peer",
+        OriginName = "Dashboard Peer",
+        PublicEndpoint = "https://peer.example/dragnet",
+        SupportsDeliveryAcknowledgements = true
+    }, CancellationToken.None);
     var trustService = new DragnetTrustService(configuration, new RecordingConfigurationHandler<DragnetConfiguration>());
     var importService = new DragnetImportService(
         configuration,
@@ -864,6 +969,11 @@ static async Task TestWebfrontDashboardRendersAsync()
     Assert.Contains("Deployment guide", html, "dashboard should include endpoint-specific deployment guidance");
     Assert.Contains("/dragnet/setup-guide", html, "dashboard should link to the shareable setup guide");
     Assert.Contains("Community directory", html, "dashboard should include the opt-in directory");
+    Assert.Contains("Acknowledged deliveries", html, "dashboard should summarize acknowledged event delivery");
+    Assert.Contains("Pending deliveries", html, "dashboard should summarize incomplete event delivery");
+    Assert.Contains("Delivery", html, "peer table should expose delivery coverage");
+    Assert.Contains("Verify sync", html, "peer actions should expose delivery verification");
+    Assert.Contains("Resync", html, "peer actions should expose event replay");
     Assert.Contains("Configure", html, "dashboard should expose the setup action");
     Assert.Contains($"Dragnet {DragnetBuildInfo.Version}", html, "dashboard should show deployed Dragnet version");
     Assert.Contains("Queued imports", html, "dashboard should distinguish queued imports");
@@ -1098,6 +1208,17 @@ static async Task TestHeartbeatValidationAsync()
             CreateEnvelope(originId: "remote", eventType: DragnetEventType.BanLifted)
         ]
     }, CancellationToken.None), "event limit should be enforced");
+
+    await Assert.ThrowsAsync<InvalidOperationException>(() => transport.HandleHeartbeatAsync(new DragnetHeartbeatRequest
+    {
+        Sender = new DragnetPeerInfo
+        {
+            OriginId = "remote",
+            OriginName = "Remote",
+            PublicEndpoint = "https://remote.example/dragnet"
+        },
+        AcknowledgedEventIds = ["event-1", "event-2"]
+    }, CancellationToken.None), "event acknowledgement limit should be enforced");
 }
 
 static async Task TestOutboundHeartbeatErrorIncludesBodyAsync()

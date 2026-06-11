@@ -25,6 +25,8 @@ public sealed record DragnetPeerInfo
 
     public string? Signature { get; init; }
 
+    public bool SupportsDeliveryAcknowledgements { get; init; }
+
     public DateTimeOffset SeenAtUtc { get; init; } = DateTimeOffset.UtcNow;
 
     public string GetSigningPayload() =>
@@ -38,6 +40,8 @@ public sealed record DragnetHeartbeatRequest
     public IReadOnlyList<DragnetPeerInfo> KnownPeers { get; init; } = [];
 
     public IReadOnlyList<DragnetEventEnvelope> Events { get; init; } = [];
+
+    public IReadOnlyList<string> AcknowledgedEventIds { get; init; } = [];
 }
 
 public sealed record DragnetHeartbeatResponse
@@ -47,6 +51,8 @@ public sealed record DragnetHeartbeatResponse
     public IReadOnlyList<DragnetPeerInfo> KnownPeers { get; init; } = [];
 
     public IReadOnlyList<DragnetEventEnvelope> Events { get; init; } = [];
+
+    public IReadOnlyList<string> AcknowledgedEventIds { get; init; } = [];
 }
 
 public sealed record DragnetPeerRecord
@@ -62,6 +68,8 @@ public sealed record DragnetPeerRecord
     public DateTimeOffset LastSeenUtc { get; set; } = DateTimeOffset.UtcNow;
 
     public DateTimeOffset? LastEventSentAtUtc { get; set; }
+
+    public string? LastEventSentId { get; set; }
 
     public string? LastError { get; set; }
 
@@ -91,5 +99,24 @@ public sealed record DragnetPeerRecord
 
     public DateTimeOffset? LastAdvertisedAtUtc { get; set; }
 
+    public bool SupportsDeliveryAcknowledgements { get; set; }
+
+    public List<DragnetEventDeliveryRecord> EventDeliveries { get; set; } = [];
+
+    public List<string> PendingAcknowledgementEventIds { get; set; } = [];
+
+    public DateTimeOffset? LastSyncVerifiedAtUtc { get; set; }
+
+    public DateTimeOffset? LastResyncRequestedAtUtc { get; set; }
+
     public bool IsBootstrap { get; set; }
+}
+
+public sealed record DragnetEventDeliveryRecord
+{
+    public required string EventId { get; init; }
+    public DateTimeOffset FirstSentAtUtc { get; init; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset LastSentAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public int SendAttempts { get; set; } = 1;
+    public DateTimeOffset? AcknowledgedAtUtc { get; set; }
 }

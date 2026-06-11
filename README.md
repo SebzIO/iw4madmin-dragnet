@@ -15,7 +15,8 @@ This repository is in the MVP testing stage. The current implementation:
 - stores captured events in `Configuration/Dragnet/events.json`
 - stores known peers in `Configuration/Dragnet/peers.json`
 - sends outbound HTTPS heartbeat/gossip batches to configured peers
-- tracks per-peer gossip cursors to avoid resending already delivered approved events
+- tracks per-peer event acknowledgements and replays approved events until receipt is confirmed
+- retains cursor-based delivery compatibility with older Dragnet peers
 - validates inbound heartbeat sender, peer, and event batch limits
 - exposes `POST /dragnet/heartbeat` for peer heartbeat/gossip
 - seeds new installations through the official Dragnet bootstrap endpoint
@@ -26,7 +27,7 @@ This repository is in the MVP testing stage. The current implementation:
 - rotates gossiped peers fairly across heartbeat batches
 - persists per-peer advertisement timestamps across restarts
 - adds an administrator-only Dragnet webfront interaction page
-- supports webfront peer health, stale-peer visibility, error clearing, and discovered-peer removal
+- supports webfront peer health, stale-peer visibility, delivery coverage, event resync, error clearing, and discovered-peer removal
 - supports webfront-first approve, deny, ignore, retry-import, and trust decisions
 - supports webfront event filters and event detail inspection
 - records reviewer identity, decision time, state transition, and reason in a persistent audit trail
@@ -136,6 +137,10 @@ A remote listing becomes verified only after the local node directly contacts it
 `GET {PublicEndpoint}/setup-guide` provides a shareable JSON deployment checklist tailored to the configured endpoint. It contains public routes, the official bootstrap endpoint, and reverse-proxy requirements; it contains no credentials, private keys, bans, players, or trust settings.
 
 `PeerFailureThreshold` controls how many consecutive heartbeat failures are required before a peer is shown as errored. A successful heartbeat clears the failure count and visible error automatically.
+
+Current Dragnet peers acknowledge each valid event by event ID. The sender retains per-peer delivery state and replays unacknowledged active events, including events that share the same creation timestamp. The dashboard reports acknowledged and pending delivery coverage and provides per-peer **Verify sync** and **Resync** actions. Resync clears only that peer's delivery cursor and causes active approved events to be offered again; it does not change trust, review, or import decisions.
+
+An acknowledgement means the remote Dragnet instance received and validated the event. It does not mean that the remote operator trusted it, approved it, or imported a penalty. Those decisions remain local to each participating network. Older peers that do not advertise acknowledgement support continue using the legacy timestamp-and-event-ID cursor.
 
 `MaxKnownPeersPerHeartbeat` limits the number of peer advertisements carried in one heartbeat, not the total number of peers Dragnet can store or contact. Eligible peers are rotated using their persisted `LastAdvertisedAtUtc` timestamp. Never-advertised peers go first, then the least recently advertised peers; verified and fully healthy peers break otherwise equal ties. Stale peers, visibly errored peers, and the heartbeat counterpart are omitted. This keeps heartbeat payloads bounded while ensuring networks beyond the configured limit still receive discovery exposure.
 

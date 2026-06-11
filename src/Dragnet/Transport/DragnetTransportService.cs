@@ -122,7 +122,11 @@ public sealed class DragnetTransportService : IDisposable
             await _peerStore.UpsertAsync(request.Sender, token, senderIdentityVerified);
         }
 
-        await ImportEventsAsync(request.Events, token);
+        await _peerStore.MarkEventsAcknowledgedAsync(
+            request.Sender.OriginId,
+            request.AcknowledgedEventIds,
+            token);
+        var acceptedEventIds = await ImportEventsAsync(request.Events, token);
 
         foreach (var peer in request.KnownPeers)
         {
@@ -133,7 +137,11 @@ public sealed class DragnetTransportService : IDisposable
         }
 
         var eventBatch = await CreateEventBatchAsync(request.Sender.OriginId, token);
-        await _peerStore.MarkEventBatchSentAsync(request.Sender.OriginId, eventBatch, token);
+        await _peerStore.MarkEventBatchSentAsync(
+            request.Sender.OriginId,
+            eventBatch,
+            token,
+            request.Sender.SupportsDeliveryAcknowledgements);
 
         return new DragnetHeartbeatResponse
         {
@@ -142,7 +150,8 @@ public sealed class DragnetTransportService : IDisposable
                 request.Sender.OriginId,
                 request.Sender.PublicEndpoint,
                 token),
-            Events = eventBatch
+            Events = eventBatch,
+            AcknowledgedEventIds = acceptedEventIds
         };
     }
 
@@ -177,6 +186,12 @@ public sealed class DragnetTransportService : IDisposable
                 }
 
                 var eventBatch = await CreateEventBatchAsync(peer.OriginId, token);
+                var pendingAcknowledgements = peer.SupportsDeliveryAcknowledgements
+                    ? await _peerStore.GetPendingAcknowledgementsAsync(
+                        peer.OriginId,
+                        _configuration.MaxEventsPerHeartbeat,
+                        token)
+                    : [];
                 var request = new DragnetHeartbeatRequest
                 {
                     Sender = CreateLocalPeerInfo(),
@@ -184,7 +199,8 @@ public sealed class DragnetTransportService : IDisposable
                         peer.OriginId,
                         peer.Endpoint,
                         token),
-                    Events = eventBatch
+                    Events = eventBatch,
+                    AcknowledgedEventIds = pendingAcknowledgements
                 };
 
                 var response = await _httpClient.PostAsJsonAsync(
@@ -230,13 +246,29 @@ public sealed class DragnetTransportService : IDisposable
                 }
 
                 var receiverIdentityVerified = VerifyPeerIdentity(heartbeat.Receiver, requireFresh: true);
-                await ImportEventsAsync(heartbeat.Events, token);
+                var acceptedEventIds = await ImportEventsAsync(heartbeat.Events, token);
                 await _peerStore.MarkHeartbeatSucceededAsync(
                     peer.OriginId,
                     heartbeat.Receiver,
                     token,
                     receiverIdentityVerified);
-                await _peerStore.MarkEventBatchSentAsync(heartbeat.Receiver.OriginId, eventBatch, token);
+                await _peerStore.MarkEventBatchSentAsync(
+                    heartbeat.Receiver.OriginId,
+                    eventBatch,
+                    token,
+                    heartbeat.Receiver.SupportsDeliveryAcknowledgements);
+                await _peerStore.MarkEventsAcknowledgedAsync(
+                    heartbeat.Receiver.OriginId,
+                    heartbeat.AcknowledgedEventIds,
+                    token);
+                await _peerStore.QueueAcknowledgementsAsync(
+                    heartbeat.Receiver.OriginId,
+                    acceptedEventIds,
+                    token);
+                await _peerStore.MarkAcknowledgementsSentAsync(
+                    heartbeat.Receiver.OriginId,
+                    pendingAcknowledgements,
+                    token);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -254,18 +286,23 @@ public sealed class DragnetTransportService : IDisposable
         }
     }
 
-    private async Task ImportEventsAsync(IReadOnlyList<DragnetEventEnvelope> events, CancellationToken token)
+    private async Task<IReadOnlyList<string>> ImportEventsAsync(
+        IReadOnlyList<DragnetEventEnvelope> events,
+        CancellationToken token)
     {
+        var acceptedEventIds = new List<string>();
         foreach (var envelope in events)
         {
             if (string.Equals(envelope.OriginId, _identity.OriginId, StringComparison.OrdinalIgnoreCase))
             {
+                acceptedEventIds.Add(envelope.EventId);
                 continue;
             }
 
             if (envelope.EventType is DragnetEventType.BanCreated &&
                 envelope.IsExpired(DateTimeOffset.UtcNow))
             {
+                acceptedEventIds.Add(envelope.EventId);
                 continue;
             }
 
@@ -274,6 +311,8 @@ public sealed class DragnetTransportService : IDisposable
                 _logger.LogWarning("Rejected Dragnet event {EventId}: invalid signature", envelope.EventId);
                 continue;
             }
+
+            acceptedEventIds.Add(envelope.EventId);
 
             var trust = _trustService.Evaluate(envelope);
             var reviewState = envelope.EventType is DragnetEventType.BanLifted
@@ -315,6 +354,8 @@ public sealed class DragnetTransportService : IDisposable
                 }
             }
         }
+
+        return acceptedEventIds;
     }
 
     private void ValidateHeartbeatRequest(DragnetHeartbeatRequest request)
@@ -340,6 +381,11 @@ public sealed class DragnetTransportService : IDisposable
         if (request.Events.Count > _configuration.MaxEventsPerHeartbeat)
         {
             throw new InvalidOperationException("Heartbeat contains too many events.");
+        }
+
+        if (request.AcknowledgedEventIds.Count > _configuration.MaxEventsPerHeartbeat)
+        {
+            throw new InvalidOperationException("Heartbeat contains too many event acknowledgements.");
         }
 
         if (!string.IsNullOrWhiteSpace(request.Sender.PublicEndpoint) &&
@@ -383,6 +429,7 @@ public sealed class DragnetTransportService : IDisposable
             Website = NormalizeMetadata(_configuration.DirectoryWebsite),
             Version = DragnetBuildInfo.Version,
             PublicKeyPem = _identity.PublicKeyPem,
+            SupportsDeliveryAcknowledgements = true,
             SeenAtUtc = DateTimeOffset.UtcNow
         };
         return unsigned with
@@ -415,6 +462,7 @@ public sealed class DragnetTransportService : IDisposable
                 Version = peer.Version,
                 PublicKeyPem = peer.PublicKeyPem,
                 Signature = peer.Signature,
+                SupportsDeliveryAcknowledgements = peer.SupportsDeliveryAcknowledgements,
                 SeenAtUtc = peer.LastSeenUtc
             })
             .ToList();
@@ -428,13 +476,29 @@ public sealed class DragnetTransportService : IDisposable
         var peer = (await _peerStore.ListAsync(token))
             .FirstOrDefault(peer => string.Equals(peer.OriginId, peerOriginId, StringComparison.OrdinalIgnoreCase));
         var lastSentAt = peer?.LastEventSentAtUtc;
+        var lastSentId = peer?.LastEventSentId;
+        var acknowledgedEventIds = peer?.SupportsDeliveryAcknowledgements == true
+            ? (peer.EventDeliveries ?? [])
+                .Where(delivery => delivery.AcknowledgedAtUtc is not null)
+                .Select(delivery => delivery.EventId)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : null;
 
         return events
             .Where(item => item.ReviewState is DragnetReviewState.ApprovedBan or DragnetReviewState.ApprovedLift)
             .Where(item => item.Event.EventType is DragnetEventType.BanLifted ||
                            !item.Event.IsExpired(DateTimeOffset.UtcNow))
-            .Where(item => lastSentAt is null || item.Event.CreatedAtUtc > lastSentAt)
+            .Where(item => acknowledgedEventIds is not null
+                ? !acknowledgedEventIds.Contains(item.Event.EventId)
+                : lastSentAt is null ||
+                  item.Event.CreatedAtUtc > lastSentAt ||
+                  item.Event.CreatedAtUtc == lastSentAt &&
+                  string.Compare(
+                      item.Event.EventId,
+                      lastSentId,
+                      StringComparison.OrdinalIgnoreCase) > 0)
             .OrderBy(item => item.Event.CreatedAtUtc)
+            .ThenBy(item => item.Event.EventId, StringComparer.OrdinalIgnoreCase)
             .Take(Math.Max(1, _configuration.MaxEventsPerHeartbeat))
             .Select(item => item.Event)
             .ToList();
