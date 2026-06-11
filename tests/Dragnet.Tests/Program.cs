@@ -9,6 +9,7 @@ using Dragnet.Transport;
 using Dragnet.Web;
 using Microsoft.Extensions.Logging;
 using SharedLibraryCore.Interfaces;
+using System.Text.Json;
 
 var tests = new (string Name, Func<Task> Test)[]
 {
@@ -21,6 +22,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("onboarding verifies public health and readiness", TestOnboardingReadinessAsync),
     ("directory lists only opted-in healthy networks", TestDirectoryListingsAsync),
     ("heartbeat peer proofs reject tampering", TestHeartbeatPeerProofValidationAsync),
+    ("peer capability negotiation preserves legacy identity signatures", TestLegacyPeerSignatureCompatibility),
     ("event store expires elapsed temp bans", TestEventStoreExpiresElapsedTempBansAsync),
     ("import service skips disabled and already imported events", TestImportServiceSkipsAsync),
     ("import service queues unknown players", TestImportServiceQueuesUnknownPlayersAsync),
@@ -574,6 +576,50 @@ static async Task TestHeartbeatPeerProofValidationAsync()
             Sender = stale
         }, CancellationToken.None),
         "stale direct identity proofs should be rejected");
+}
+
+static Task TestLegacyPeerSignatureCompatibility()
+{
+    var peer = new DragnetPeerInfo
+    {
+        OriginId = "legacy-compatible",
+        OriginName = "Legacy Compatible",
+        PublicEndpoint = "https://legacy.example/dragnet",
+        ServerCount = 3,
+        DirectoryListed = true,
+        Region = "Europe",
+        Website = "https://legacy.example",
+        Version = "0.1.0-alpha.18",
+        PublicKeyPem = "public-key",
+        Signature = "signature",
+        SupportsDeliveryAcknowledgements = true,
+        SeenAtUtc = DateTimeOffset.Parse("2026-06-11T12:00:00Z")
+    };
+    var legacyPayload = JsonSerializer.Serialize(new
+    {
+        peer.OriginId,
+        peer.OriginName,
+        peer.PublicEndpoint,
+        peer.ServerCount,
+        peer.DirectoryListed,
+        peer.Region,
+        peer.Website,
+        peer.Version,
+        peer.PublicKeyPem,
+        Signature = (string?)null,
+        peer.SeenAtUtc
+    }, DragnetJson.Options);
+    var wirePayload = JsonSerializer.Serialize(peer, DragnetJson.Options);
+
+    Assert.Equal(legacyPayload, peer.GetSigningPayload(),
+        "new capability fields must not change the alpha.16 identity signing payload");
+    Assert.False(peer.GetSigningPayload().Contains("supportsDeliveryAcknowledgements", StringComparison.Ordinal),
+        "capability negotiation should remain outside the signed legacy identity payload");
+    using var wireDocument = JsonDocument.Parse(wirePayload);
+    Assert.True(
+        wireDocument.RootElement.GetProperty("supportsDeliveryAcknowledgements").GetBoolean(),
+        "capability support must still be advertised on the wire");
+    return Task.CompletedTask;
 }
 
 static async Task TestEventStoreExpiresElapsedTempBansAsync()

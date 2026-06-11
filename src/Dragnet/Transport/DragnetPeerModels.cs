@@ -30,7 +30,20 @@ public sealed record DragnetPeerInfo
     public DateTimeOffset SeenAtUtc { get; init; } = DateTimeOffset.UtcNow;
 
     public string GetSigningPayload() =>
-        JsonSerializer.Serialize(this with { Signature = null }, DragnetJson.Options);
+        JsonSerializer.Serialize(new
+        {
+            OriginId,
+            OriginName,
+            PublicEndpoint,
+            ServerCount,
+            DirectoryListed,
+            Region,
+            Website,
+            Version,
+            PublicKeyPem,
+            Signature = (string?)null,
+            SeenAtUtc
+        }, DragnetJson.Options);
 }
 
 public sealed record DragnetHeartbeatRequest
