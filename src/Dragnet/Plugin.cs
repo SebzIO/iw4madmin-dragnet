@@ -23,6 +23,7 @@ public sealed class Plugin : IPluginV2
     private readonly DragnetPeerStore _peerStore;
     private readonly DragnetTransportService _transportService;
     private readonly DragnetStatisticsService _statisticsService;
+    private readonly DragnetAttestationService _attestationService;
     private readonly DragnetUpdateService _updateService;
     private readonly DragnetWebfrontService _webfrontService;
     private readonly IInteractionRegistration _interactionRegistration;
@@ -44,6 +45,7 @@ public sealed class Plugin : IPluginV2
         DragnetPeerStore peerStore,
         DragnetTransportService transportService,
         DragnetStatisticsService statisticsService,
+        DragnetAttestationService attestationService,
         DragnetUpdateService updateService,
         DragnetWebfrontService webfrontService,
         IInteractionRegistration interactionRegistration,
@@ -57,6 +59,7 @@ public sealed class Plugin : IPluginV2
         _peerStore = peerStore;
         _transportService = transportService;
         _statisticsService = statisticsService;
+        _attestationService = attestationService;
         _updateService = updateService;
         _webfrontService = webfrontService;
         _interactionRegistration = interactionRegistration;
@@ -110,6 +113,15 @@ public sealed class Plugin : IPluginV2
             var managerFactory = serviceProvider.GetRequiredService<Func<IManager>>();
             return () => managerFactory().GetServers().Count;
         });
+        serviceCollection.AddSingleton<Func<IReadOnlyList<string>>>(serviceProvider =>
+        {
+            var managerFactory = serviceProvider.GetRequiredService<Func<IManager>>();
+            return () => managerFactory().GetServers()
+                .Select(server => server.ServerName ?? server.Hostname)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .ToList();
+        });
+        serviceCollection.AddSingleton<DragnetAttestationService>();
         serviceCollection.AddSingleton<DragnetImportService>();
         serviceCollection.AddSingleton<DragnetReviewService>();
         serviceCollection.AddSingleton(serviceProvider =>
@@ -126,6 +138,7 @@ public sealed class Plugin : IPluginV2
         serviceCollection.AddSingleton<DragnetUpdateService>();
         serviceCollection.AddSingleton<DragnetOnboardingService>();
         serviceCollection.AddSingleton<DragnetDirectoryService>();
+        serviceCollection.AddSingleton<DragnetLedgerService>();
         serviceCollection.AddSingleton<DragnetWebfrontService>();
         serviceCollection.AddSingleton<IManagerCommand, DragnetCommand>();
     }
@@ -134,6 +147,7 @@ public sealed class Plugin : IPluginV2
     {
         await _eventStore.LoadAsync(token);
         await _peerStore.LoadAsync(_configuration, token);
+        await _attestationService.BackfillAsync(token);
         RegisterMessageTokens(manager);
         _interactionRegistration.RegisterInteraction(
             DragnetWebfrontService.NavigationInteractionId,

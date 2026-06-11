@@ -13,6 +13,9 @@ This repository is in the MVP testing stage. The current implementation:
 - captures local ban, temp-ban, and ban-lift events from IW4MAdmin
 - lets origin-network administrators add or replace an HTTPS evidence URL after a ban is issued
 - propagates evidence as a separately signed, acknowledged amendment without changing the original ban
+- exposes an anonymous, read-only `GET /dragnet/ledger` public ban ledger on every upgraded peer
+- exposes machine-readable ledger data at `GET /dragnet/ledger/data`
+- publishes signed per-network ban attestations for accepted, queued, and enforced coverage
 - signs captured events with the local origin identity
 - stores captured events in `Configuration/Dragnet/events.json`
 - stores known peers in `Configuration/Dragnet/peers.json`
@@ -138,6 +141,12 @@ A remote listing becomes verified only after the local node directly contacts it
 
 `GET {PublicEndpoint}/setup-guide` provides a shareable JSON deployment checklist tailored to the configured endpoint. It contains public routes, the official bootstrap endpoint, and reverse-proxy requirements; it contains no credentials, private keys, bans, players, or trust settings.
 
+`GET {PublicEndpoint}/ledger` is the public Dragnet ban ledger. It lists all ban-created events known to that peer, current active/expired/lifted status, evidence links, and signed network coverage. Selecting a ban shows which upgraded networks have published **Accepted**, **Queued**, or **Enforced** attestations and how many game servers those networks report. `GET {PublicEndpoint}/ledger/data` exposes the same public information as JSON.
+
+Coverage attestations are signed by the network making the statement and are independently verified before storage or display. **Accepted** means the network approved the ban but did not import a local penalty, **Queued** means approval is retained until IW4MAdmin knows the player locally, and **Enforced** means the network imported or originated the penalty. Each attestation includes the network's signed server count and public server names, so ban detail pages identify the actual servers covered by that network. Coverage is reported against the networks currently known by the viewing peer, so temporary peer discovery differences can produce short-lived count differences between ledgers.
+
+The public ledger does not expose IP addresses, local trust settings, reviewer identities, private decision notes, denial reasons, ignored decisions, private keys, or IW4MAdmin authentication data. Player names, game network IDs, public ban reasons, origins, evidence URLs, and signed acceptance/enforcement statements are public.
+
 `PeerFailureThreshold` controls how many consecutive heartbeat failures are required before a peer is shown as errored. A successful heartbeat clears the failure count and visible error automatically.
 
 Current Dragnet peers acknowledge each valid event by event ID. The sender retains per-peer delivery state and replays unacknowledged active events, including events that share the same creation timestamp. The dashboard reports acknowledged and pending delivery coverage and provides per-peer **Verify sync** and **Resync** actions. Resync clears only that peer's delivery cursor and causes active approved events to be offered again; it does not change trust, review, or import decisions.
@@ -147,6 +156,8 @@ An acknowledgement means the remote Dragnet instance received and validated the 
 Delivery capability negotiation is intentionally excluded from the signed identity payload so current nodes remain identity-proof compatible with `0.1.0-alpha.16`. Identity fields remain signed; the capability flag only selects acknowledgement-based or legacy cursor delivery behavior.
 
 For a locally originated ban, administrators with `ReviewPermission` can use **Add evidence** or **Update evidence** on the event detail panel. Evidence must be an absolute HTTPS URL and is limited to 2048 characters. Dragnet signs the amendment with the originating network identity and peers verify that signature against the original ban before attaching it. Evidence does not alter a peer's trust, review, or penalty-import decision. Peers older than `0.1.0-alpha.19` continue exchanging bans normally but do not receive evidence amendments until upgraded.
+
+`0.1.0-beta.1` introduces the public ledger protocol. Alpha peers remain compatible for bans and evidence but do not publish or relay signed coverage attestations until upgraded.
 
 `MaxKnownPeersPerHeartbeat` limits the number of peer advertisements carried in one heartbeat, not the total number of peers Dragnet can store or contact. Eligible peers are rotated using their persisted `LastAdvertisedAtUtc` timestamp. Never-advertised peers go first, then the least recently advertised peers; verified and fully healthy peers break otherwise equal ties. Stale peers, visibly errored peers, and the heartbeat counterpart are omitted. This keeps heartbeat payloads bounded while ensuring networks beyond the configured limit still receive discovery exposure.
 

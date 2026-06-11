@@ -8,15 +8,26 @@ public sealed class DragnetReviewService
     private readonly DragnetEventStore _store;
     private readonly DragnetImportService _importService;
     private readonly DragnetTrustService _trustService;
+    private readonly DragnetAttestationService? _attestationService;
 
     public DragnetReviewService(
         DragnetEventStore store,
         DragnetImportService importService,
         DragnetTrustService trustService)
+        : this(store, importService, trustService, null)
+    {
+    }
+
+    public DragnetReviewService(
+        DragnetEventStore store,
+        DragnetImportService importService,
+        DragnetTrustService trustService,
+        DragnetAttestationService? attestationService)
     {
         _store = store;
         _importService = importService;
         _trustService = trustService;
+        _attestationService = attestationService;
     }
 
     public async Task<IReadOnlyList<DragnetStoredEvent>> ListPendingAsync(
@@ -75,6 +86,16 @@ public sealed class DragnetReviewService
             reviewedByName,
             reviewedByClientId,
             token);
+        if (action is DragnetReviewAction.ApproveBan &&
+            _attestationService is not null &&
+            importResult is { Imported: false } &&
+            !importResult.Message.StartsWith("Queued:", StringComparison.OrdinalIgnoreCase))
+        {
+            await _attestationService.PublishAsync(
+                item.Match.Event.EventId,
+                DragnetBanCoverageStatus.Accepted,
+                token);
+        }
         var message = $"Dragnet event {ShortId(item.Match.Event.EventId)} marked {targetState}.";
         if (importResult is { Imported: true })
         {

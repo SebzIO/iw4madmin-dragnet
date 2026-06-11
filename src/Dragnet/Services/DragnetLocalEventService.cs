@@ -16,6 +16,7 @@ public sealed class DragnetLocalEventService
     private readonly DragnetEventStore _store;
     private readonly DragnetIdentityDocument _identity;
     private readonly DragnetIdentityService _identityService;
+    private readonly DragnetAttestationService _attestationService;
     private readonly ILogger<DragnetLocalEventService> _logger;
 
     public DragnetLocalEventService(
@@ -23,12 +24,14 @@ public sealed class DragnetLocalEventService
         DragnetEventStore store,
         DragnetIdentityDocument identity,
         DragnetIdentityService identityService,
+        DragnetAttestationService attestationService,
         ILogger<DragnetLocalEventService> logger)
     {
         _configuration = configuration;
         _store = store;
         _identity = identity;
         _identityService = identityService;
+        _attestationService = attestationService;
         _logger = logger;
     }
 
@@ -61,6 +64,10 @@ public sealed class DragnetLocalEventService
             Event = envelope,
             ReviewState = DragnetReviewState.ApprovedBan
         }, token);
+        await _attestationService.PublishAsync(
+            envelope.EventId,
+            DragnetBanCoverageStatus.Enforced,
+            token);
 
         _logger.LogInformation(
             "Captured local Dragnet ban event {EventId} for {PlayerName}",

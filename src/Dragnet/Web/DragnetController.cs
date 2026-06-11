@@ -21,6 +21,7 @@ public sealed class DragnetController : ControllerBase
     private readonly DragnetTransportService _transportService;
     private readonly DragnetUpdateService _updateService;
     private readonly DragnetDirectoryService _directoryService;
+    private readonly DragnetLedgerService _ledgerService;
     private readonly DragnetIdentityDocument _identity;
     private readonly DragnetIdentityService _identityService;
     private readonly Func<int> _localServerCount;
@@ -32,6 +33,7 @@ public sealed class DragnetController : ControllerBase
         DragnetTransportService transportService,
         DragnetUpdateService updateService,
         DragnetDirectoryService directoryService,
+        DragnetLedgerService ledgerService,
         DragnetIdentityDocument identity,
         DragnetIdentityService identityService,
         Func<int> localServerCount)
@@ -42,6 +44,7 @@ public sealed class DragnetController : ControllerBase
         _transportService = transportService;
         _updateService = updateService;
         _directoryService = directoryService;
+        _ledgerService = ledgerService;
         _identity = identity;
         _identityService = identityService;
         _localServerCount = localServerCount;
@@ -76,6 +79,21 @@ public sealed class DragnetController : ControllerBase
         Ok(await _directoryService.ListAsync(token));
 
     [AllowAnonymous]
+    [HttpGet("/dragnet/ledger")]
+    [Produces("text/html")]
+    public async Task<ContentResult> Ledger(
+        [FromQuery] string? id,
+        [FromQuery] string? q,
+        CancellationToken token) =>
+        Content(await _ledgerService.RenderHtmlAsync(id, q, token), "text/html; charset=utf-8");
+
+    [AllowAnonymous]
+    [HttpGet("/dragnet/ledger/data")]
+    [ProducesResponseType<DragnetLedgerSnapshot>(StatusCodes.Status200OK)]
+    public async Task<ActionResult<DragnetLedgerSnapshot>> LedgerData(CancellationToken token) =>
+        Ok(await _ledgerService.GetSnapshotAsync(token));
+
+    [AllowAnonymous]
     [HttpGet("/dragnet/setup-guide")]
     [ProducesResponseType<DragnetSetupGuideResponse>(StatusCodes.Status200OK)]
     public ActionResult<DragnetSetupGuideResponse> SetupGuide()
@@ -88,6 +106,7 @@ public sealed class DragnetController : ControllerBase
             HealthUrl = endpoint is null ? null : $"{endpoint}/health",
             HeartbeatUrl = endpoint is null ? null : $"{endpoint}/heartbeat",
             DirectoryUrl = endpoint is null ? null : $"{endpoint}/directory",
+            LedgerUrl = endpoint is null ? null : $"{endpoint}/ledger",
             OfficialBootstrapEndpoint = DragnetConfiguration.OfficialBootstrapEndpoint,
             DirectoryListingEnabled = _configuration.DirectoryListingEnabled,
             RequiredProxyFeatures =
@@ -244,6 +263,7 @@ public sealed record DragnetSetupGuideResponse
     public string? HealthUrl { get; init; }
     public string? HeartbeatUrl { get; init; }
     public string? DirectoryUrl { get; init; }
+    public string? LedgerUrl { get; init; }
     public required string OfficialBootstrapEndpoint { get; init; }
     public required bool DirectoryListingEnabled { get; init; }
     public IReadOnlyList<string> RequiredProxyFeatures { get; init; } = [];

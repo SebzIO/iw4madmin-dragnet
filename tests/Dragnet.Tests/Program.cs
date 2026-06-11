@@ -29,6 +29,9 @@ var tests = new (string Name, Func<Task> Test)[]
     ("heartbeat response sends approved events once", TestHeartbeatResponseBatchAsync),
     ("delivery acknowledgements replay gaps and support resync", TestDeliveryAcknowledgementReplayAsync),
     ("signed evidence updates propagate only from the ban origin", TestEvidenceUpdatesAsync),
+    ("signed ban attestations propagate and update coverage", TestBanAttestationsAsync),
+    ("ledger attestations backfill existing approved bans", TestAttestationBackfillAsync),
+    ("public ledger renders searchable ban coverage", TestPublicLedgerAsync),
     ("webfront dashboard interaction renders as navigation content", TestWebfrontDashboardRendersAsync),
     ("heartbeat validation rejects oversized and invalid requests", TestHeartbeatValidationAsync),
     ("outbound heartbeat errors include response body", TestOutboundHeartbeatErrorIncludesBodyAsync),
@@ -595,6 +598,7 @@ static Task TestLegacyPeerSignatureCompatibility()
         Signature = "signature",
         SupportsDeliveryAcknowledgements = true,
         SupportsEvidenceUpdates = true,
+        SupportsBanAttestations = true,
         SeenAtUtc = DateTimeOffset.Parse("2026-06-11T12:00:00Z")
     };
     var legacyPayload = JsonSerializer.Serialize(new
@@ -617,6 +621,8 @@ static Task TestLegacyPeerSignatureCompatibility()
         "new capability fields must not change the alpha.16 identity signing payload");
     Assert.False(peer.GetSigningPayload().Contains("supportsDeliveryAcknowledgements", StringComparison.Ordinal),
         "capability negotiation should remain outside the signed legacy identity payload");
+    Assert.False(peer.GetSigningPayload().Contains("supportsBanAttestations", StringComparison.Ordinal),
+        "new ledger capability fields must remain outside the legacy identity signature");
     using var wireDocument = JsonDocument.Parse(wirePayload);
     Assert.True(
         wireDocument.RootElement.GetProperty("supportsDeliveryAcknowledgements").GetBoolean(),
@@ -624,6 +630,9 @@ static Task TestLegacyPeerSignatureCompatibility()
     Assert.True(
         wireDocument.RootElement.GetProperty("supportsEvidenceUpdates").GetBoolean(),
         "evidence update support must be advertised outside the legacy signature");
+    Assert.True(
+        wireDocument.RootElement.GetProperty("supportsBanAttestations").GetBoolean(),
+        "ban attestation support must be advertised outside the legacy signature");
     return Task.CompletedTask;
 }
 
@@ -1043,6 +1052,214 @@ static async Task TestEvidenceUpdatesAsync()
         "tampered evidence must not replace accepted evidence");
 }
 
+static async Task TestBanAttestationsAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        PublicEndpoint = "https://local.example/dragnet"
+    };
+    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
+    await eventStore.LoadAsync(CancellationToken.None);
+    var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
+    await peerStore.LoadAsync(configuration, CancellationToken.None);
+    var identityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "identity"));
+    var identity = identityService.LoadOrCreate("Local");
+    var remoteIdentityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "remote"));
+    var remoteIdentity = remoteIdentityService.LoadOrCreate("Remote Network");
+    var trustService = new DragnetTrustService(configuration, new RecordingConfigurationHandler<DragnetConfiguration>());
+    var importService = new DragnetImportService(
+        configuration,
+        eventStore,
+        managerFactory: () => null!,
+        logger: new TestLogger<DragnetImportService>());
+    var reviewService = new DragnetReviewService(eventStore, importService, trustService);
+    var transport = new DragnetTransportService(
+        configuration,
+        eventStore,
+        peerStore,
+        identity,
+        identityService,
+        reviewService,
+        trustService,
+        () => 2,
+        new TestLogger<DragnetTransportService>());
+    var ban = CreateEnvelope("ban-origin", DragnetEventType.BanCreated) with
+    {
+        EventId = "ledger-ban"
+    };
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = ban,
+        ReviewState = DragnetReviewState.PendingBan
+    }, CancellationToken.None);
+    var unsigned = new DragnetBanAttestation
+    {
+        AttestationId = DragnetAttestationService.CreateAttestationId(
+            remoteIdentity.OriginId,
+            ban.EventId),
+        EventId = ban.EventId,
+        NetworkOriginId = remoteIdentity.OriginId,
+        NetworkName = remoteIdentity.OriginName,
+        PublicEndpoint = "https://remote.example/dragnet",
+        NetworkPublicKeyPem = remoteIdentity.PublicKeyPem,
+        ServerCount = 4,
+        ServerNames = ["Remote TDM", "Remote Domination", "Remote Hardpoint", "Remote KC"],
+        Status = DragnetBanCoverageStatus.Enforced,
+        UpdatedAtUtc = DateTimeOffset.UtcNow,
+        Signature = ""
+    };
+    var signed = unsigned with
+    {
+        Signature = remoteIdentityService.Sign(remoteIdentity, unsigned.GetSigningPayload())
+    };
+    var sender = CreateSignedPeerInfo(
+        remoteIdentityService,
+        remoteIdentity,
+        "https://remote.example/dragnet",
+        directoryListed: false) with
+    {
+        SupportsDeliveryAcknowledgements = true,
+        SupportsBanAttestations = true
+    };
+    var response = await transport.HandleHeartbeatAsync(new DragnetHeartbeatRequest
+    {
+        Sender = sender,
+        BanAttestations = [signed]
+    }, CancellationToken.None);
+    var deliveryKey = DragnetPeerStore.AttestationDeliveryKey(signed);
+    Assert.True(response.AcknowledgedEventIds.Contains(deliveryKey),
+        "valid signed attestation should be acknowledged");
+    var stored = await eventStore.GetAsync(ban.EventId, CancellationToken.None);
+    Assert.Equal(DragnetBanCoverageStatus.Enforced, stored!.BanAttestations.Single().Status,
+        "accepted attestation should update ban coverage");
+
+    var tampered = signed with
+    {
+        UpdatedAtUtc = signed.UpdatedAtUtc.AddMinutes(1),
+        Status = DragnetBanCoverageStatus.Accepted
+    };
+    response = await transport.HandleHeartbeatAsync(new DragnetHeartbeatRequest
+    {
+        Sender = sender,
+        BanAttestations = [tampered]
+    }, CancellationToken.None);
+    Assert.False(response.AcknowledgedEventIds.Contains(DragnetPeerStore.AttestationDeliveryKey(tampered)),
+        "tampered attestation must not be acknowledged");
+    stored = await eventStore.GetAsync(ban.EventId, CancellationToken.None);
+    Assert.Equal(DragnetBanCoverageStatus.Enforced, stored!.BanAttestations.Single().Status,
+        "tampered attestation must not change coverage");
+}
+
+static async Task TestPublicLedgerAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        PublicEndpoint = "https://local.example/dragnet"
+    };
+    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
+    await eventStore.LoadAsync(CancellationToken.None);
+    var ban = CreateEnvelope("origin-ledger", DragnetEventType.BanCreated) with
+    {
+        EventId = "public-ledger-ban",
+        PlayerName = "Ledger Player",
+        Reason = "Aimbot evidence",
+        EvidenceUrl = "https://youtu.be/evidence"
+    };
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = ban,
+        ReviewState = DragnetReviewState.PendingBan,
+        LocalDecisionReason = "private reviewer note",
+        BanAttestations =
+        [
+            new DragnetBanAttestation
+            {
+                AttestationId = "ledger-attestation",
+                EventId = ban.EventId,
+                NetworkOriginId = "network-id",
+                NetworkName = "Coverage Network",
+                PublicEndpoint = "https://coverage.example/dragnet",
+                NetworkPublicKeyPem = "public-key",
+                ServerCount = 3,
+                ServerNames = ["TDM", "Domination", "Hardpoint"],
+                Status = DragnetBanCoverageStatus.Enforced,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+                Signature = "signature"
+            }
+        ]
+    }, CancellationToken.None);
+    var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
+    await peerStore.LoadAsync(configuration, CancellationToken.None);
+    var ledger = new DragnetLedgerService(configuration, eventStore, peerStore, () => 2);
+    var snapshot = await ledger.GetSnapshotAsync(CancellationToken.None);
+    var ledgerBan = snapshot.Bans.Single();
+    Assert.Equal(1, ledgerBan.AcceptedNetworkCount, "ledger should count signed network coverage");
+    Assert.Equal(3, ledgerBan.EnforcedServerCount, "ledger should sum enforced server coverage");
+    var html = await ledger.RenderHtmlAsync(ban.EventId, "Ledger", CancellationToken.None);
+    Assert.Contains("Dragnet Public Ban Ledger", html, "public ledger should render its identity");
+    Assert.Contains("Ledger Player", html, "public ledger should render searchable ban details");
+    Assert.Contains("Coverage Network", html, "public ledger should identify attesting networks");
+    Assert.Contains("TDM, Domination, Hardpoint", html, "public ledger should name covered servers");
+    Assert.Contains("https://youtu.be/evidence", html, "public ledger should link HTTPS evidence");
+    Assert.False(html.Contains("private reviewer note", StringComparison.Ordinal),
+        "public ledger must not expose private local review notes");
+}
+
+static async Task TestAttestationBackfillAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        PublicEndpoint = "https://local.example/dragnet"
+    };
+    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
+    await eventStore.LoadAsync(CancellationToken.None);
+    var identityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "identity"));
+    var identity = identityService.LoadOrCreate("Local Network");
+    var localBan = CreateEnvelope(identity.OriginId, DragnetEventType.BanCreated) with
+    {
+        EventId = "existing-local-ban",
+        OriginName = identity.OriginName,
+        OriginPublicKeyPem = identity.PublicKeyPem
+    };
+    var approvedRemoteBan = CreateEnvelope("remote-origin", DragnetEventType.BanCreated) with
+    {
+        EventId = "existing-approved-remote-ban"
+    };
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = localBan,
+        ReviewState = DragnetReviewState.ApprovedBan
+    }, CancellationToken.None);
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = approvedRemoteBan,
+        ReviewState = DragnetReviewState.ApprovedBan,
+        ImportError = "Queued: awaiting player"
+    }, CancellationToken.None);
+    var service = new DragnetAttestationService(
+        configuration,
+        eventStore,
+        identity,
+        identityService,
+        () => 5,
+        () => ["TDM", "Domination", "Hardpoint", "Kill Confirmed", "Hardpoint EU"]);
+    await service.BackfillAsync(CancellationToken.None);
+
+    var storedLocal = await eventStore.GetAsync(localBan.EventId, CancellationToken.None);
+    var storedRemote = await eventStore.GetAsync(approvedRemoteBan.EventId, CancellationToken.None);
+    Assert.Equal(DragnetBanCoverageStatus.Enforced, storedLocal!.BanAttestations.Single().Status,
+        "existing local bans should backfill as enforced");
+    Assert.Equal(DragnetBanCoverageStatus.Queued, storedRemote!.BanAttestations.Single().Status,
+        "existing queued approvals should backfill as queued");
+    Assert.Equal(5, storedLocal.BanAttestations.Single().ServerCount,
+        "backfill should publish current network server coverage");
+    Assert.Equal(5, storedLocal.BanAttestations.Single().ServerNames.Count,
+        "backfill should publish covered server names");
+}
+
 static async Task TestWebfrontDashboardRendersAsync()
 {
     await using var testDir = new TestDirectory();
@@ -1408,6 +1625,21 @@ static async Task TestHeartbeatValidationAsync()
             CreateEvidenceUpdate("evidence-2", "event-2")
         ]
     }, CancellationToken.None), "evidence update limit should be enforced");
+
+    await Assert.ThrowsAsync<InvalidOperationException>(() => transport.HandleHeartbeatAsync(new DragnetHeartbeatRequest
+    {
+        Sender = new DragnetPeerInfo
+        {
+            OriginId = "remote",
+            OriginName = "Remote",
+            PublicEndpoint = "https://remote.example/dragnet"
+        },
+        BanAttestations =
+        [
+            CreateBanAttestation("attestation-1", "event-1"),
+            CreateBanAttestation("attestation-2", "event-2")
+        ]
+    }, CancellationToken.None), "ban attestation limit should be enforced");
 }
 
 static async Task TestOutboundHeartbeatErrorIncludesBodyAsync()
@@ -1603,6 +1835,20 @@ static DragnetEvidenceUpdate CreateEvidenceUpdate(string updateId, string eventI
     EvidenceUrl = "https://example.test/evidence",
     SubmittedByName = "Admin",
     CreatedAtUtc = DateTimeOffset.UtcNow,
+    Signature = "signature"
+};
+
+static DragnetBanAttestation CreateBanAttestation(string attestationId, string eventId) => new()
+{
+    AttestationId = attestationId,
+    EventId = eventId,
+    NetworkOriginId = "remote",
+    NetworkName = "Remote",
+    NetworkPublicKeyPem = "public-key",
+    ServerCount = 1,
+    ServerNames = ["Server"],
+    Status = DragnetBanCoverageStatus.Accepted,
+    UpdatedAtUtc = DateTimeOffset.UtcNow,
     Signature = "signature"
 };
 

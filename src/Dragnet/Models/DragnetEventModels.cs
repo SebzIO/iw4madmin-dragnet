@@ -30,6 +30,13 @@ public enum DragnetReviewState
     IgnoredLift
 }
 
+public enum DragnetBanCoverageStatus
+{
+    Accepted,
+    Queued,
+    Enforced
+}
+
 public sealed record DragnetEventEnvelope
 {
     public required string EventId { get; init; }
@@ -115,6 +122,8 @@ public sealed record DragnetStoredEvent
     public string? ImportError { get; set; }
 
     public DragnetEvidenceUpdate? EvidenceUpdate { get; set; }
+
+    public List<DragnetBanAttestation> BanAttestations { get; set; } = [];
 }
 
 public sealed record DragnetEvidenceUpdate
@@ -134,6 +143,34 @@ public sealed record DragnetEvidenceUpdate
     public required string SubmittedByName { get; init; }
 
     public required DateTimeOffset CreatedAtUtc { get; init; }
+
+    public required string Signature { get; init; }
+
+    public string GetSigningPayload() =>
+        JsonSerializer.Serialize(this with { Signature = "" }, DragnetJson.Options);
+}
+
+public sealed record DragnetBanAttestation
+{
+    public required string AttestationId { get; init; }
+
+    public required string EventId { get; init; }
+
+    public required string NetworkOriginId { get; init; }
+
+    public required string NetworkName { get; init; }
+
+    public string? PublicEndpoint { get; init; }
+
+    public required string NetworkPublicKeyPem { get; init; }
+
+    public required int ServerCount { get; init; }
+
+    public IReadOnlyList<string> ServerNames { get; init; } = [];
+
+    public required DragnetBanCoverageStatus Status { get; init; }
+
+    public required DateTimeOffset UpdatedAtUtc { get; init; }
 
     public required string Signature { get; init; }
 

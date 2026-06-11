@@ -128,6 +128,7 @@ public sealed class DragnetTransportService : IDisposable
             token);
         var acceptedEventIds = await ImportEventsAsync(request.Events, token);
         var acceptedEvidenceIds = await ImportEvidenceUpdatesAsync(request.EvidenceUpdates, token);
+        var acceptedAttestationIds = await ImportBanAttestationsAsync(request.BanAttestations, token);
 
         foreach (var peer in request.KnownPeers)
         {
@@ -145,6 +146,11 @@ public sealed class DragnetTransportService : IDisposable
             request.Sender.SupportsDeliveryAcknowledgements);
         var evidenceBatch = await CreateEvidenceBatchAsync(request.Sender.OriginId, request.Sender.SupportsEvidenceUpdates, token);
         await _peerStore.MarkEvidenceBatchSentAsync(request.Sender.OriginId, evidenceBatch, token);
+        var attestationBatch = await CreateAttestationBatchAsync(
+            request.Sender.OriginId,
+            request.Sender.SupportsBanAttestations,
+            token);
+        await _peerStore.MarkAttestationBatchSentAsync(request.Sender.OriginId, attestationBatch, token);
 
         return new DragnetHeartbeatResponse
         {
@@ -155,7 +161,11 @@ public sealed class DragnetTransportService : IDisposable
                 token),
             Events = eventBatch,
             EvidenceUpdates = evidenceBatch,
-            AcknowledgedEventIds = acceptedEventIds.Concat(acceptedEvidenceIds).ToList()
+            BanAttestations = attestationBatch,
+            AcknowledgedEventIds = acceptedEventIds
+                .Concat(acceptedEvidenceIds)
+                .Concat(acceptedAttestationIds)
+                .ToList()
         };
     }
 
@@ -194,6 +204,10 @@ public sealed class DragnetTransportService : IDisposable
                     peer.OriginId,
                     peer.SupportsEvidenceUpdates,
                     token);
+                var attestationBatch = await CreateAttestationBatchAsync(
+                    peer.OriginId,
+                    peer.SupportsBanAttestations,
+                    token);
                 var pendingAcknowledgements = peer.SupportsDeliveryAcknowledgements
                     ? await _peerStore.GetPendingAcknowledgementsAsync(
                         peer.OriginId,
@@ -209,6 +223,7 @@ public sealed class DragnetTransportService : IDisposable
                         token),
                     Events = eventBatch,
                     EvidenceUpdates = evidenceBatch,
+                    BanAttestations = attestationBatch,
                     AcknowledgedEventIds = pendingAcknowledgements
                 };
 
@@ -257,6 +272,9 @@ public sealed class DragnetTransportService : IDisposable
                 var receiverIdentityVerified = VerifyPeerIdentity(heartbeat.Receiver, requireFresh: true);
                 var acceptedEventIds = await ImportEventsAsync(heartbeat.Events, token);
                 var acceptedEvidenceIds = await ImportEvidenceUpdatesAsync(heartbeat.EvidenceUpdates, token);
+                var acceptedAttestationIds = await ImportBanAttestationsAsync(
+                    heartbeat.BanAttestations,
+                    token);
                 await _peerStore.MarkHeartbeatSucceededAsync(
                     peer.OriginId,
                     heartbeat.Receiver,
@@ -271,13 +289,20 @@ public sealed class DragnetTransportService : IDisposable
                     heartbeat.Receiver.OriginId,
                     evidenceBatch,
                     token);
+                await _peerStore.MarkAttestationBatchSentAsync(
+                    heartbeat.Receiver.OriginId,
+                    attestationBatch,
+                    token);
                 await _peerStore.MarkEventsAcknowledgedAsync(
                     heartbeat.Receiver.OriginId,
                     heartbeat.AcknowledgedEventIds,
                     token);
                 await _peerStore.QueueAcknowledgementsAsync(
                     heartbeat.Receiver.OriginId,
-                    acceptedEventIds.Concat(acceptedEvidenceIds).ToList(),
+                    acceptedEventIds
+                        .Concat(acceptedEvidenceIds)
+                        .Concat(acceptedAttestationIds)
+                        .ToList(),
                     token);
                 await _peerStore.MarkAcknowledgementsSentAsync(
                     heartbeat.Receiver.OriginId,
@@ -407,6 +432,53 @@ public sealed class DragnetTransportService : IDisposable
         return acceptedIds;
     }
 
+    private async Task<IReadOnlyList<string>> ImportBanAttestationsAsync(
+        IReadOnlyList<DragnetBanAttestation> attestations,
+        CancellationToken token)
+    {
+        var acceptedIds = new List<string>();
+        foreach (var attestation in attestations)
+        {
+            var storedEvent = await _eventStore.GetAsync(attestation.EventId, token);
+            var now = DateTimeOffset.UtcNow;
+            if (storedEvent?.Event.EventType is not DragnetEventType.BanCreated ||
+                attestation.ServerCount is < 0 or > 10_000 ||
+                attestation.ServerNames.Count > 100 ||
+                attestation.ServerNames.Any(name => string.IsNullOrWhiteSpace(name) || name.Length > 160) ||
+                !Enum.IsDefined(attestation.Status) ||
+                attestation.UpdatedAtUtc < storedEvent.Event.CreatedAtUtc ||
+                attestation.UpdatedAtUtc > now.AddMinutes(5) ||
+                attestation.NetworkName.Length is < 1 or > 120 ||
+                !attestation.AttestationId.Equals(
+                    DragnetAttestationService.CreateAttestationId(
+                        attestation.NetworkOriginId,
+                        attestation.EventId),
+                    StringComparison.OrdinalIgnoreCase) ||
+                !IsValidOptionalHttpsUrl(attestation.PublicEndpoint) ||
+                !string.Equals(
+                    attestation.NetworkOriginId,
+                    DragnetIdentityService.CreateOriginId(attestation.NetworkPublicKeyPem),
+                    StringComparison.OrdinalIgnoreCase) ||
+                !_identityService.Verify(
+                    attestation.NetworkOriginId,
+                    attestation.NetworkPublicKeyPem,
+                    attestation.GetSigningPayload(),
+                    attestation.Signature))
+            {
+                _logger.LogWarning(
+                    "Rejected Dragnet ban attestation {AttestationId} for event {EventId}",
+                    attestation.AttestationId,
+                    attestation.EventId);
+                continue;
+            }
+
+            await _eventStore.UpsertBanAttestationAsync(attestation, token);
+            acceptedIds.Add(DragnetPeerStore.AttestationDeliveryKey(attestation));
+        }
+
+        return acceptedIds;
+    }
+
     private void ValidateHeartbeatRequest(DragnetHeartbeatRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Sender.OriginId) ||
@@ -435,6 +507,11 @@ public sealed class DragnetTransportService : IDisposable
         if (request.EvidenceUpdates.Count > _configuration.MaxEventsPerHeartbeat)
         {
             throw new InvalidOperationException("Heartbeat contains too many evidence updates.");
+        }
+
+        if (request.BanAttestations.Count > _configuration.MaxEventsPerHeartbeat)
+        {
+            throw new InvalidOperationException("Heartbeat contains too many ban attestations.");
         }
 
         if (request.AcknowledgedEventIds.Count > _configuration.MaxEventsPerHeartbeat)
@@ -485,6 +562,7 @@ public sealed class DragnetTransportService : IDisposable
             PublicKeyPem = _identity.PublicKeyPem,
             SupportsDeliveryAcknowledgements = true,
             SupportsEvidenceUpdates = true,
+            SupportsBanAttestations = true,
             SeenAtUtc = DateTimeOffset.UtcNow
         };
         return unsigned with
@@ -519,6 +597,7 @@ public sealed class DragnetTransportService : IDisposable
                 Signature = peer.Signature,
                 SupportsDeliveryAcknowledgements = peer.SupportsDeliveryAcknowledgements,
                 SupportsEvidenceUpdates = peer.SupportsEvidenceUpdates,
+                SupportsBanAttestations = peer.SupportsBanAttestations,
                 SeenAtUtc = peer.LastSeenUtc
             })
             .ToList();
@@ -589,11 +668,46 @@ public sealed class DragnetTransportService : IDisposable
             .ToList();
     }
 
+    private async Task<IReadOnlyList<DragnetBanAttestation>> CreateAttestationBatchAsync(
+        string peerOriginId,
+        bool peerSupportsBanAttestations,
+        CancellationToken token)
+    {
+        if (!peerSupportsBanAttestations)
+        {
+            return [];
+        }
+
+        var events = await _eventStore.ListAsync(token);
+        var peer = (await _peerStore.ListAsync(token))
+            .FirstOrDefault(item => item.OriginId.Equals(peerOriginId, StringComparison.OrdinalIgnoreCase));
+        var acknowledgedIds = (peer?.EventDeliveries ?? [])
+            .Where(delivery => delivery.AcknowledgedAtUtc is not null)
+            .Select(delivery => delivery.EventId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return events
+            .Where(item => item.Event.EventType is DragnetEventType.BanCreated)
+            .SelectMany(item => item.BanAttestations ?? [])
+            .Where(attestation =>
+                !acknowledgedIds.Contains(DragnetPeerStore.AttestationDeliveryKey(attestation)))
+            .OrderBy(attestation => attestation.UpdatedAtUtc)
+            .Take(Math.Max(1, _configuration.MaxEventsPerHeartbeat))
+            .ToList();
+    }
+
     private static bool IsValidEvidenceUrl(string? value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
         uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
         !string.IsNullOrWhiteSpace(uri.Host) &&
         value!.Length <= 2048;
+
+    private static bool IsValidOptionalHttpsUrl(string? value) =>
+        string.IsNullOrWhiteSpace(value) ||
+        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+        uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(uri.Host) &&
+        value.Length <= 2048;
 
     private bool VerifyEnvelope(DragnetEventEnvelope envelope)
     {

@@ -213,6 +213,40 @@ public sealed class DragnetEventStore
         }
     }
 
+    public async Task<bool> UpsertBanAttestationAsync(
+        DragnetBanAttestation attestation,
+        CancellationToken token)
+    {
+        await _lock.WaitAsync(token);
+        try
+        {
+            if (!_events.TryGetValue(attestation.EventId, out var storedEvent) ||
+                storedEvent.Event.EventType is not DragnetEventType.BanCreated)
+            {
+                return false;
+            }
+
+            storedEvent.BanAttestations ??= [];
+            var existing = storedEvent.BanAttestations.FirstOrDefault(item =>
+                item.NetworkOriginId.Equals(attestation.NetworkOriginId, StringComparison.OrdinalIgnoreCase));
+            if (existing is not null && existing.UpdatedAtUtc >= attestation.UpdatedAtUtc)
+            {
+                return false;
+            }
+
+            storedEvent.BanAttestations.RemoveAll(item =>
+                item.NetworkOriginId.Equals(attestation.NetworkOriginId, StringComparison.OrdinalIgnoreCase));
+            storedEvent.BanAttestations.Add(attestation);
+            storedEvent.LastSeenUtc = DateTimeOffset.UtcNow;
+            await SaveUnlockedAsync(token);
+            return true;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
     private async Task SaveUnlockedAsync(CancellationToken token)
     {
         var tempPath = $"{_storePath}.tmp";

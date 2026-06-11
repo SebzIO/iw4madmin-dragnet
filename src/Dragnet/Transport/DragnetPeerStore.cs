@@ -231,6 +231,7 @@ public sealed class DragnetPeerStore
                     IdentityVerified = identityVerified,
                     SupportsDeliveryAcknowledgements = peerInfo.SupportsDeliveryAcknowledgements,
                     SupportsEvidenceUpdates = peerInfo.SupportsEvidenceUpdates,
+                    SupportsBanAttestations = peerInfo.SupportsBanAttestations,
                     LastSeenUtc = observedAtUtc
                 };
             }
@@ -411,6 +412,7 @@ public sealed class DragnetPeerStore
                 LastAdvertisedAtUtc = lastAdvertisedAtUtc,
                 SupportsDeliveryAcknowledgements = receiver.SupportsDeliveryAcknowledgements,
                 SupportsEvidenceUpdates = receiver.SupportsEvidenceUpdates,
+                SupportsBanAttestations = receiver.SupportsBanAttestations,
                 EventDeliveries = eventDeliveries,
                 PendingAcknowledgementEventIds = pendingAcknowledgements,
                 LastSyncVerifiedAtUtc = relatedRecords
@@ -558,6 +560,50 @@ public sealed class DragnetPeerStore
                         peer.EventDeliveries.Add(new DragnetEventDeliveryRecord
                         {
                             EventId = update.UpdateId
+                        });
+                    }
+                    else
+                    {
+                        delivery.LastSentAtUtc = DateTimeOffset.UtcNow;
+                        delivery.SendAttempts++;
+                    }
+                }
+
+                await SaveUnlockedAsync(token);
+            }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task MarkAttestationBatchSentAsync(
+        string originId,
+        IReadOnlyList<DragnetBanAttestation> attestations,
+        CancellationToken token)
+    {
+        if (attestations.Count == 0)
+        {
+            return;
+        }
+
+        await _lock.WaitAsync(token);
+        try
+        {
+            if (_peers.TryGetValue(originId, out var peer))
+            {
+                peer.EventDeliveries ??= [];
+                foreach (var attestation in attestations)
+                {
+                    var deliveryKey = AttestationDeliveryKey(attestation);
+                    var delivery = peer.EventDeliveries.FirstOrDefault(item =>
+                        item.EventId.Equals(deliveryKey, StringComparison.OrdinalIgnoreCase));
+                    if (delivery is null)
+                    {
+                        peer.EventDeliveries.Add(new DragnetEventDeliveryRecord
+                        {
+                            EventId = deliveryKey
                         });
                     }
                     else
@@ -807,7 +853,11 @@ public sealed class DragnetPeerStore
         record.Version = peerInfo.Version;
         record.SupportsDeliveryAcknowledgements = peerInfo.SupportsDeliveryAcknowledgements;
         record.SupportsEvidenceUpdates = peerInfo.SupportsEvidenceUpdates;
+        record.SupportsBanAttestations = peerInfo.SupportsBanAttestations;
     }
+
+    public static string AttestationDeliveryKey(DragnetBanAttestation attestation) =>
+        $"{attestation.AttestationId}:{attestation.UpdatedAtUtc.UtcTicks}";
 
     private static void ApplyIdentityProof(
         DragnetPeerRecord record,

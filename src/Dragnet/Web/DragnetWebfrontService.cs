@@ -1340,6 +1340,7 @@ public sealed class DragnetWebfrontService
         AppendGuideValue(html, "Health", endpoint is null ? "Not configured" : $"{endpoint}/health");
         AppendGuideValue(html, "Heartbeat", endpoint is null ? "Not configured" : $"{endpoint}/heartbeat");
         AppendGuideValue(html, "Directory", endpoint is null ? "Not configured" : $"{endpoint}/directory");
+        AppendGuideValue(html, "Public ledger", endpoint is null ? "Not configured" : $"{endpoint}/ledger");
         AppendGuideValue(html, "Bootstrap", DragnetConfiguration.OfficialBootstrapEndpoint);
         html.AppendLine("</div>");
         html.AppendLine("<div class=\"p-4 text-sm space-y-2\">");

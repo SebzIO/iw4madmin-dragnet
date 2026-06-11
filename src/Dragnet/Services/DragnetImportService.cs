@@ -18,16 +18,28 @@ public sealed class DragnetImportService
     private readonly DragnetEventStore _store;
     private readonly Func<IManager> _managerFactory;
     private readonly ILogger<DragnetImportService> _logger;
+    private readonly DragnetAttestationService? _attestationService;
 
     public DragnetImportService(
         DragnetConfiguration configuration,
         DragnetEventStore store,
         Func<IManager> managerFactory,
         ILogger<DragnetImportService> logger)
+        : this(configuration, store, managerFactory, null, logger)
+    {
+    }
+
+    public DragnetImportService(
+        DragnetConfiguration configuration,
+        DragnetEventStore store,
+        Func<IManager> managerFactory,
+        DragnetAttestationService? attestationService,
+        ILogger<DragnetImportService> logger)
     {
         _configuration = configuration;
         _store = store;
         _managerFactory = managerFactory;
+        _attestationService = attestationService;
         _logger = logger;
     }
 
@@ -50,6 +62,16 @@ public sealed class DragnetImportService
         {
             var message = "Queued: no local IW4MAdmin client matched the Dragnet event network id and game. Retry after the player is known locally.";
             await _store.SetImportResultAsync(storedEvent.Event.EventId, false, null, message, token);
+            if (storedEvent.Event.EventType is DragnetEventType.BanCreated)
+            {
+                if (_attestationService is not null)
+                {
+                    await _attestationService.PublishAsync(
+                    storedEvent.Event.EventId,
+                    DragnetBanCoverageStatus.Queued,
+                    token);
+                }
+            }
             return DragnetImportResult.Queued(message);
         }
 
@@ -78,6 +100,16 @@ public sealed class DragnetImportService
             }
 
             await _store.SetImportResultAsync(storedEvent.Event.EventId, true, null, null, token);
+            if (storedEvent.Event.EventType is DragnetEventType.BanCreated)
+            {
+                if (_attestationService is not null)
+                {
+                    await _attestationService.PublishAsync(
+                    storedEvent.Event.EventId,
+                    DragnetBanCoverageStatus.Enforced,
+                    token);
+                }
+            }
             return DragnetImportResult.ImportedEvent("Imported Dragnet event into IW4MAdmin.");
         }
         catch (Exception ex)
