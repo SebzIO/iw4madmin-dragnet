@@ -15,6 +15,7 @@ This repository is in the MVP testing stage. The current implementation:
 - propagates evidence as a separately signed, acknowledged amendment without changing the original ban
 - exposes an anonymous, read-only `GET /dragnet/ledger` public ban ledger on every upgraded peer
 - exposes machine-readable ledger data at `GET /dragnet/ledger/data`
+- adds a direct `Dragnet Ledger` link to IW4MAdmin's public `Main` navigation section
 - publishes signed per-network ban attestations for accepted, queued, and enforced coverage
 - signs captured events with the local origin identity
 - stores captured events in `Configuration/Dragnet/events.json`

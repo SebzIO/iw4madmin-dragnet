@@ -17,6 +17,7 @@ namespace Dragnet.Web;
 public sealed class DragnetWebfrontService
 {
     public const string NavigationInteractionId = "Webfront::Nav::Admin::Dragnet";
+    public const string LedgerNavigationInteractionId = "Webfront::Nav::Main::DragnetLedger";
     public const string ReviewInteractionId = "Dragnet::Review";
     public const string TrustInteractionId = "Dragnet::Trust";
     public const string PeerInteractionId = "Dragnet::Peer";
@@ -75,6 +76,23 @@ public sealed class DragnetWebfrontService
             InteractionType = InteractionType.TemplateContent,
             Source = "Dragnet",
             Action = async (_, _, _, meta, actionToken) => await RenderDashboardAsync(meta, actionToken)
+        };
+
+        return Task.FromResult(interaction);
+    }
+
+    public Task<IInteractionData> CreateLedgerNavigationInteractionAsync(CancellationToken token)
+    {
+        IInteractionData interaction = new InteractionData
+        {
+            Name = "Dragnet Ledger",
+            Description = "Public Dragnet ban coverage ledger",
+            DisplayMeta = "ph-list-magnifying-glass",
+            InteractionId = LedgerNavigationInteractionId,
+            MinimumPermission = EFClient.Permission.User,
+            InteractionType = InteractionType.ExternalLink,
+            ActionPath = "/dragnet/ledger",
+            Source = "Dragnet"
         };
 
         return Task.FromResult(interaction);

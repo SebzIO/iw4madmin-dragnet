@@ -1443,6 +1443,15 @@ static async Task TestWebfrontDashboardRendersAsync()
     Assert.Equal(2, (int)interaction.InteractionType, "dashboard interaction type should match IW4MAdmin script nav pages");
     Assert.Equal(EFClient.Permission.SeniorAdmin, interaction.MinimumPermission, "dashboard should use configured webfront permission");
 
+    var ledgerInteraction = await webfront.CreateLedgerNavigationInteractionAsync(CancellationToken.None);
+    Assert.Equal(
+        DragnetWebfrontService.LedgerNavigationInteractionId,
+        ledgerInteraction.InteractionId,
+        "ledger navigation should register under the main sidebar");
+    Assert.Equal(InteractionType.ExternalLink, ledgerInteraction.InteractionType, "ledger navigation should be a direct link");
+    Assert.Equal("/dragnet/ledger", ledgerInteraction.ActionPath, "ledger navigation should open the public ledger");
+    Assert.Equal(EFClient.Permission.User, ledgerInteraction.MinimumPermission, "ledger navigation should be available to users");
+
     var reviewInteraction = await webfront.CreateReviewInteractionAsync(CancellationToken.None);
     var trustInteraction = await webfront.CreateTrustInteractionAsync(CancellationToken.None);
     var peerInteraction = await webfront.CreatePeerInteractionAsync(CancellationToken.None);

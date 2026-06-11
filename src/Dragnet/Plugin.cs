@@ -153,6 +153,9 @@ public sealed class Plugin : IPluginV2
             DragnetWebfrontService.NavigationInteractionId,
             (_, _, interactionToken) => _webfrontService.CreateNavigationInteractionAsync(interactionToken));
         _interactionRegistration.RegisterInteraction(
+            DragnetWebfrontService.LedgerNavigationInteractionId,
+            (_, _, interactionToken) => _webfrontService.CreateLedgerNavigationInteractionAsync(interactionToken));
+        _interactionRegistration.RegisterInteraction(
             DragnetWebfrontService.ReviewInteractionId,
             (_, _, interactionToken) => _webfrontService.CreateReviewInteractionAsync(interactionToken));
         _interactionRegistration.RegisterInteraction(
@@ -207,6 +210,7 @@ public sealed class Plugin : IPluginV2
         IManagementEventSubscriptions.ClientStateInitialized -= _importService.RetryQueuedForClientAsync;
         IManagementEventSubscriptions.ClientStateAuthorized -= _importService.RetryQueuedForClientAsync;
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.NavigationInteractionId);
+        _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.LedgerNavigationInteractionId);
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.ReviewInteractionId);
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.TrustInteractionId);
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.PeerInteractionId);
