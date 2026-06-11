@@ -83,6 +83,7 @@ public sealed class DragnetWebfrontService
 
     public Task<IInteractionData> CreateLedgerNavigationInteractionAsync(CancellationToken token)
     {
+        var ledgerUrl = BuildLedgerUrl();
         IInteractionData interaction = new InteractionData
         {
             Name = "Dragnet Ledger",
@@ -91,7 +92,7 @@ public sealed class DragnetWebfrontService
             InteractionId = LedgerNavigationInteractionId,
             MinimumPermission = EFClient.Permission.User,
             InteractionType = InteractionType.ExternalLink,
-            ActionPath = "/dragnet/ledger",
+            ActionPath = ledgerUrl,
             Source = "Dragnet"
         };
 
@@ -1774,6 +1775,14 @@ public sealed class DragnetWebfrontService
         return string.IsNullOrWhiteSpace(eventId)
             ? uri
             : $"{uri}&eventId={Uri.EscapeDataString(eventId)}";
+    }
+
+    private string BuildLedgerUrl()
+    {
+        var endpoint = _configuration.PublicEndpoint?.TrimEnd('/');
+        return string.IsNullOrWhiteSpace(endpoint)
+            ? "/dragnet/ledger"
+            : $"{endpoint}/ledger";
     }
 
     private static string FilterLabel(DragnetEventFilter filter) => filter switch

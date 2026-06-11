@@ -1472,7 +1472,7 @@ static async Task TestWebfrontDashboardRendersAsync()
         ledgerInteraction.InteractionId,
         "ledger navigation should register under the main sidebar");
     Assert.Equal(InteractionType.ExternalLink, ledgerInteraction.InteractionType, "ledger navigation should be a direct link");
-    Assert.Equal("/dragnet/ledger", ledgerInteraction.ActionPath, "ledger navigation should open the public ledger");
+    Assert.Equal("https://local.example/dragnet/ledger", ledgerInteraction.ActionPath, "ledger navigation should open the public ledger");
     Assert.Equal(EFClient.Permission.User, ledgerInteraction.MinimumPermission, "ledger navigation should be available to users");
 
     var reviewInteraction = await webfront.CreateReviewInteractionAsync(CancellationToken.None);
