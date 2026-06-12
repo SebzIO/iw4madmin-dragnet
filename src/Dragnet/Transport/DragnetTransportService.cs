@@ -18,6 +18,7 @@ public sealed class DragnetTransportService : IDisposable
     private readonly DragnetReviewService _reviewService;
     private readonly DragnetTrustService _trustService;
     private readonly DragnetAttestationService? _attestationService;
+    private readonly DragnetNotificationService? _notificationService;
     private readonly Func<int> _localServerCount;
     private readonly ILogger<DragnetTransportService> _logger;
     private readonly HttpClient _httpClient;
@@ -35,7 +36,8 @@ public sealed class DragnetTransportService : IDisposable
         DragnetTrustService trustService,
         Func<int> localServerCount,
         ILogger<DragnetTransportService> logger,
-        DragnetAttestationService? attestationService = null)
+        DragnetAttestationService? attestationService = null,
+        DragnetNotificationService? notificationService = null)
         : this(
             configuration,
             eventStore,
@@ -48,7 +50,8 @@ public sealed class DragnetTransportService : IDisposable
             logger,
             new HttpClient(),
             ownsHttpClient: true,
-            attestationService: attestationService)
+            attestationService: attestationService,
+            notificationService: notificationService)
     {
     }
 
@@ -64,7 +67,8 @@ public sealed class DragnetTransportService : IDisposable
         ILogger<DragnetTransportService> logger,
         HttpClient httpClient,
         bool ownsHttpClient = false,
-        DragnetAttestationService? attestationService = null)
+        DragnetAttestationService? attestationService = null,
+        DragnetNotificationService? notificationService = null)
     {
         _configuration = configuration;
         _eventStore = eventStore;
@@ -74,6 +78,7 @@ public sealed class DragnetTransportService : IDisposable
         _reviewService = reviewService;
         _trustService = trustService;
         _attestationService = attestationService;
+        _notificationService = notificationService;
         _localServerCount = localServerCount;
         _logger = logger;
         _httpClient = httpClient;
@@ -407,6 +412,10 @@ public sealed class DragnetTransportService : IDisposable
                     "Imported Dragnet event {EventId} from {OriginName}",
                     envelope.EventId,
                     envelope.OriginName);
+                if (_notificationService is not null)
+                {
+                    await _notificationService.NotifyNewEventAsync(envelope, token);
+                }
             }
 
             if (inserted && trust.AutoApprove)
@@ -462,7 +471,11 @@ public sealed class DragnetTransportService : IDisposable
                 continue;
             }
 
-            await _eventStore.SetEvidenceUpdateAsync(update, token);
+            var updated = await _eventStore.SetEvidenceUpdateAsync(update, token);
+            if (updated && _notificationService is not null)
+            {
+                await _notificationService.NotifyEvidenceUpdatedAsync(update, storedEvent, token);
+            }
             acceptedIds.Add(update.UpdateId);
         }
 

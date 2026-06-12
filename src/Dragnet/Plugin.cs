@@ -26,6 +26,8 @@ public sealed class Plugin : IPluginV2
     private readonly DragnetAttestationService _attestationService;
     private readonly DragnetUpdateService _updateService;
     private readonly DragnetWebfrontService _webfrontService;
+    private readonly DragnetNotificationStore _notificationStore;
+    private readonly DragnetNotificationService _notificationService;
     private readonly IInteractionRegistration _interactionRegistration;
     private readonly DragnetConfiguration _configuration;
     private readonly DragnetIdentityDocument _identity;
@@ -48,6 +50,8 @@ public sealed class Plugin : IPluginV2
         DragnetAttestationService attestationService,
         DragnetUpdateService updateService,
         DragnetWebfrontService webfrontService,
+        DragnetNotificationStore notificationStore,
+        DragnetNotificationService notificationService,
         IInteractionRegistration interactionRegistration,
         DragnetIdentityDocument identity)
     {
@@ -62,6 +66,8 @@ public sealed class Plugin : IPluginV2
         _attestationService = attestationService;
         _updateService = updateService;
         _webfrontService = webfrontService;
+        _notificationStore = notificationStore;
+        _notificationService = notificationService;
         _interactionRegistration = interactionRegistration;
         _identity = identity;
 
@@ -104,6 +110,11 @@ public sealed class Plugin : IPluginV2
             var configuration = serviceProvider.GetRequiredService<DragnetConfiguration>();
             return new DragnetPeerStore(Path.GetFullPath(configuration.DataDirectory));
         });
+        serviceCollection.AddSingleton(serviceProvider =>
+        {
+            var configuration = serviceProvider.GetRequiredService<DragnetConfiguration>();
+            return new DragnetNotificationStore(Path.GetFullPath(configuration.DataDirectory));
+        });
         serviceCollection.AddSingleton<DragnetLocalEventService>();
         serviceCollection.AddSingleton<DragnetTrustService>();
         serviceCollection.AddSingleton<Func<IManager>>(serviceProvider =>
@@ -140,6 +151,7 @@ public sealed class Plugin : IPluginV2
         serviceCollection.AddSingleton<DragnetDirectoryService>();
         serviceCollection.AddSingleton<DragnetLedgerService>();
         serviceCollection.AddSingleton<DragnetNetworkProfileService>();
+        serviceCollection.AddSingleton<DragnetNotificationService>();
         serviceCollection.AddSingleton<DragnetWebfrontService>();
         serviceCollection.AddSingleton<IManagerCommand, DragnetCommand>();
     }
@@ -148,6 +160,7 @@ public sealed class Plugin : IPluginV2
     {
         await _eventStore.LoadAsync(token);
         await _peerStore.LoadAsync(_configuration, token);
+        await _notificationStore.LoadAsync(token);
         await _attestationService.BackfillAsync(token);
         RegisterMessageTokens(manager);
         _interactionRegistration.RegisterInteraction(
@@ -168,8 +181,12 @@ public sealed class Plugin : IPluginV2
         _interactionRegistration.RegisterInteraction(
             DragnetWebfrontService.SetupInteractionId,
             (_, _, interactionToken) => _webfrontService.CreateSetupInteractionAsync(interactionToken));
+        _interactionRegistration.RegisterInteraction(
+            DragnetWebfrontService.NotificationInteractionId,
+            (_, _, interactionToken) => _webfrontService.CreateNotificationInteractionAsync(interactionToken));
         _transportService.Start();
         _updateService.Start();
+        _notificationService.Start();
 
         _logger.LogInformation(
             "Dragnet loaded for IW4MAdmin {Version} with {ServerCount} server(s)",
@@ -216,7 +233,9 @@ public sealed class Plugin : IPluginV2
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.TrustInteractionId);
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.PeerInteractionId);
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.SetupInteractionId);
+        _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.NotificationInteractionId);
         _transportService.StopAsync().GetAwaiter().GetResult();
+        _notificationService.StopAsync().GetAwaiter().GetResult();
         _logger.LogInformation("Dragnet unloaded");
     }
 }

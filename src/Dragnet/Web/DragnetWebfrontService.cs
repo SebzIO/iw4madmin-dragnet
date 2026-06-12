@@ -22,6 +22,7 @@ public sealed class DragnetWebfrontService
     public const string TrustInteractionId = "Dragnet::Trust";
     public const string PeerInteractionId = "Dragnet::Peer";
     public const string SetupInteractionId = "Dragnet::Setup";
+    public const string NotificationInteractionId = "Dragnet::Notification";
 
     private readonly DragnetConfiguration _configuration;
     private readonly DragnetEventStore _eventStore;
@@ -35,6 +36,7 @@ public sealed class DragnetWebfrontService
     private readonly DragnetIdentityService _identityService;
     private readonly IConfigurationHandlerV2<DragnetConfiguration> _configurationHandler;
     private readonly Func<IManager> _managerFactory;
+    private readonly DragnetNotificationService? _notificationService;
 
     public DragnetWebfrontService(
         DragnetConfiguration configuration,
@@ -48,7 +50,8 @@ public sealed class DragnetWebfrontService
         DragnetIdentityDocument identity,
         DragnetIdentityService identityService,
         IConfigurationHandlerV2<DragnetConfiguration> configurationHandler,
-        Func<IManager> managerFactory)
+        Func<IManager> managerFactory,
+        DragnetNotificationService? notificationService = null)
     {
         _configuration = configuration;
         _eventStore = eventStore;
@@ -62,6 +65,7 @@ public sealed class DragnetWebfrontService
         _identityService = identityService;
         _configurationHandler = configurationHandler;
         _managerFactory = managerFactory;
+        _notificationService = notificationService;
     }
 
     public Task<IInteractionData> CreateNavigationInteractionAsync(CancellationToken token)
@@ -75,7 +79,8 @@ public sealed class DragnetWebfrontService
             MinimumPermission = _configuration.WebfrontPermission,
             InteractionType = InteractionType.TemplateContent,
             Source = "Dragnet",
-            Action = async (_, _, _, meta, actionToken) => await RenderDashboardAsync(meta, actionToken)
+            Action = async (originId, _, _, meta, actionToken) =>
+                await RenderDashboardAsync(originId, meta, actionToken)
         };
 
         return Task.FromResult(interaction);
@@ -172,7 +177,26 @@ public sealed class DragnetWebfrontService
         return Task.FromResult(interaction);
     }
 
+    public Task<IInteractionData> CreateNotificationInteractionAsync(CancellationToken token)
+    {
+        IInteractionData interaction = new InteractionData
+        {
+            Name = "Dragnet Notification",
+            Description = "Acknowledge Dragnet notification",
+            DisplayMeta = "ph-bell",
+            InteractionId = NotificationInteractionId,
+            MinimumPermission = _configuration.ReviewPermission,
+            InteractionType = InteractionType.RawContent,
+            Source = "Dragnet",
+            Action = async (originId, _, _, meta, actionToken) =>
+                await ProcessNotificationActionAsync(originId, meta, actionToken)
+        };
+
+        return Task.FromResult(interaction);
+    }
+
     private async Task<string> RenderDashboardAsync(
+        int originId,
         IDictionary<string, string>? meta,
         CancellationToken token)
     {
@@ -224,10 +248,17 @@ public sealed class DragnetWebfrontService
         var filteredEvents = FilterEvents(events, filter).Take(50).ToList();
         var bulkApprovableEvents = filteredEvents.Where(IsBulkApprovable).ToList();
         var selectedEvent = ResolveSelectedEvent(events, selectedEventId) ?? filteredEvents.FirstOrDefault();
+        IReadOnlyList<DragnetNotification> unreadNotifications = [];
+        if (_notificationService is not null)
+        {
+            await _notificationService.SyncStaleReviewsAsync(token);
+            unreadNotifications = await _notificationService.ListForClientAsync(originId, token);
+        }
 
         var html = new StringBuilder();
         html.AppendLine("<div class=\"space-y-6\">");
         AppendOperationalHeader(html, updateStatus, now);
+        AppendNotificationInbox(html, unreadNotifications, filter, now);
         AppendOnboardingPanel(html, onboarding);
         AppendDeploymentGuide(html);
         AppendDirectoryPanel(html, directory, now);
@@ -374,6 +405,42 @@ public sealed class DragnetWebfrontService
         html.AppendLine("</tbody></table></div></div>");
         html.AppendLine("</div>");
         return html.ToString();
+    }
+
+    private async Task<string> ProcessNotificationActionAsync(
+        int originId,
+        IDictionary<string, string>? meta,
+        CancellationToken token)
+    {
+        var manager = _managerFactory();
+        var origin = originId > 0 ? await manager.GetClientService().Get(originId) : null;
+        if (!HasPermission(origin, _configuration.ReviewPermission) ||
+            _notificationService is null)
+        {
+            return "You are not authorized to manage Dragnet notifications.";
+        }
+
+        if (meta is null ||
+            !meta.TryGetValue("NotificationAction", out var action))
+        {
+            return "Invalid Dragnet notification action.";
+        }
+
+        if (action.Equals("AcknowledgeAll", StringComparison.OrdinalIgnoreCase))
+        {
+            var count = await _notificationService.AcknowledgeAllAsync(originId, token);
+            return $"Acknowledged {count} Dragnet notification(s).";
+        }
+
+        if (action.Equals("Acknowledge", StringComparison.OrdinalIgnoreCase) &&
+            meta.TryGetValue("NotificationId", out var notificationId))
+        {
+            return await _notificationService.AcknowledgeAsync(notificationId, originId, token)
+                ? "Dragnet notification acknowledged."
+                : "Dragnet notification was not found.";
+        }
+
+        return "Invalid Dragnet notification action.";
     }
 
     private async Task<string> ProcessReviewActionAsync(
@@ -621,8 +688,14 @@ public sealed class DragnetWebfrontService
         meta.TryGetValue("DirectoryListingEnabled", out var directoryListingValue);
         meta.TryGetValue("DirectoryRegion", out var directoryRegion);
         meta.TryGetValue("DirectoryWebsite", out var directoryWebsite);
+        meta.TryGetValue("NotificationsEnabled", out var notificationsEnabledValue);
+        meta.TryGetValue("StalePendingReviewHours", out var staleReviewHoursValue);
+        meta.TryGetValue("InGameNotificationSummariesEnabled", out var inGameSummariesValue);
+        meta.TryGetValue("InGameNotificationSummaryMinutes", out var summaryMinutesValue);
+        meta.TryGetValue("NotificationWebhookUrl", out var notificationWebhookUrl);
         directoryRegion = directoryRegion?.Trim();
         directoryWebsite = directoryWebsite?.Trim().TrimEnd('/');
+        notificationWebhookUrl = notificationWebhookUrl?.Trim();
 
         if (string.IsNullOrWhiteSpace(originName))
         {
@@ -651,6 +724,26 @@ public sealed class DragnetWebfrontService
              directoryWebsiteUri.Scheme != Uri.UriSchemeHttps))
         {
             return "Directory website must be an absolute HTTPS URL.";
+        }
+
+        if (!int.TryParse(staleReviewHoursValue, out var staleReviewHours) ||
+            staleReviewHours is < 1 or > 8760)
+        {
+            return "Stale review threshold must be between 1 and 8760 hours.";
+        }
+
+        if (!int.TryParse(summaryMinutesValue, out var summaryMinutes) ||
+            summaryMinutes is < 1 or > 1440)
+        {
+            return "In-game notification interval must be between 1 and 1440 minutes.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(notificationWebhookUrl) &&
+            (!Uri.TryCreate(notificationWebhookUrl, UriKind.Absolute, out var webhookUri) ||
+             webhookUri.Scheme != Uri.UriSchemeHttps ||
+             notificationWebhookUrl.Length > 2048))
+        {
+            return "Notification webhook must be an absolute HTTPS URL no longer than 2048 characters.";
         }
 
         if (!string.IsNullOrWhiteSpace(bootstrapEndpoint))
@@ -684,6 +777,13 @@ public sealed class DragnetWebfrontService
         _configuration.DirectoryListingEnabled = directoryListingEnabled;
         _configuration.DirectoryRegion = string.IsNullOrWhiteSpace(directoryRegion) ? null : directoryRegion;
         _configuration.DirectoryWebsite = string.IsNullOrWhiteSpace(directoryWebsite) ? null : directoryWebsite;
+        _configuration.NotificationsEnabled = IsEnabledValue(notificationsEnabledValue);
+        _configuration.StalePendingReviewAfter = TimeSpan.FromHours(staleReviewHours);
+        _configuration.InGameNotificationSummariesEnabled = IsEnabledValue(inGameSummariesValue);
+        _configuration.InGameNotificationSummaryInterval = TimeSpan.FromMinutes(summaryMinutes);
+        _configuration.NotificationWebhookUrl = string.IsNullOrWhiteSpace(notificationWebhookUrl)
+            ? null
+            : notificationWebhookUrl;
         await _configurationHandler.Set(_configuration);
         _onboardingService.Invalidate();
         return "Dragnet configuration saved. Restart IW4MAdmin to apply the network identity and endpoint everywhere.";
@@ -957,6 +1057,105 @@ public sealed class DragnetWebfrontService
         html.Append(ReviewInteractionId);
         html.Append("',ActionButtonLabel:'Approve selected',Name:'Approve selected bans',ShouldRefresh:'true',Inputs:JSON.stringify(inputs)};var trigger=document.getElementById('dragnet-bulk-trigger');trigger.dataset.actionMeta=encodeURIComponent(JSON.stringify(meta));trigger.click();})()\"><i class=\"ph ph-checks mr-1\"></i>Approve selected</button>");
         html.Append("<button id=\"dragnet-bulk-trigger\" type=\"button\" class=\"profile-action hidden\" data-action=\"DynamicAction\" data-action-meta=\"\"></button></div>");
+    }
+
+    private static void AppendNotificationInbox(
+        StringBuilder html,
+        IReadOnlyList<DragnetNotification> notifications,
+        DragnetEventFilter filter,
+        DateTimeOffset now)
+    {
+        html.AppendLine("<div class=\"rounded-lg bg-surface/50 p-2\">");
+        html.AppendLine("<div class=\"px-3 py-2 flex flex-col gap-2 md:flex-row md:items-center md:justify-between\">");
+        html.Append("<div><h3 class=\"text-lg font-semibold\"><i class=\"ph ph-bell mr-2\"></i>Notification inbox");
+        if (notifications.Count > 0)
+        {
+            html.Append(" <span class=\"text-warning\">");
+            html.Append(notifications.Count);
+            html.Append(" unread</span>");
+        }
+        html.Append("</h3><div class=\"text-sm text-muted\">Acknowledgements are personal and do not change review decisions.</div></div>");
+        if (notifications.Count > 0)
+        {
+            AppendNotificationActionButton(html, null, "AcknowledgeAll", "Acknowledge all", "ph-checks");
+        }
+        html.AppendLine("</div>");
+
+        if (notifications.Count == 0)
+        {
+            html.AppendLine("<div class=\"rounded-md bg-surface-alt/20 px-4 py-5 text-center text-muted\">No unread Dragnet notifications.</div></div>");
+            return;
+        }
+
+        html.AppendLine("<div class=\"space-y-2\">");
+        foreach (var notification in notifications.Take(20))
+        {
+            html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 px-4 py-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between\">");
+            html.Append("<div><div class=\"font-medium\">");
+            html.Append(Encode(notification.Title));
+            html.Append("</div><div class=\"text-sm\">");
+            html.Append(Encode(notification.Message));
+            html.Append("</div><div class=\"text-xs text-muted mt-1\">");
+            html.Append(Encode(DescribeAge(now - notification.CreatedAtUtc)));
+            html.Append(" · ");
+            html.Append(Encode(notification.Type.ToString()));
+            html.Append("</div></div><div class=\"flex items-center gap-2\">");
+            html.Append("<a data-enhance-nav=\"false\" class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\" href=\"");
+            html.Append(BuildDashboardUri(filter, notification.EventId));
+            html.Append("\"><i class=\"ph ph-arrow-square-out mr-1\"></i>Open event</a>");
+            AppendNotificationActionButton(
+                html,
+                notification.NotificationId,
+                "Acknowledge",
+                "Acknowledge",
+                "ph-check");
+            html.AppendLine("</div></div>");
+        }
+        html.AppendLine("</div></div>");
+    }
+
+    private static void AppendNotificationActionButton(
+        StringBuilder html,
+        string? notificationId,
+        string action,
+        string label,
+        string icon)
+    {
+        var inputs = new List<Dictionary<string, object?>>
+        {
+            new()
+            {
+                ["Name"] = "NotificationAction",
+                ["Type"] = "hidden",
+                ["Value"] = action
+            }
+        };
+        if (!string.IsNullOrWhiteSpace(notificationId))
+        {
+            inputs.Add(new Dictionary<string, object?>
+            {
+                ["Name"] = "NotificationId",
+                ["Type"] = "hidden",
+                ["Value"] = notificationId
+            });
+        }
+
+        var meta = new Dictionary<string, string>
+        {
+            ["InteractionId"] = NotificationInteractionId,
+            ["ActionButtonLabel"] = label,
+            ["Name"] = label,
+            ["ShouldRefresh"] = "true",
+            ["Inputs"] = JsonSerializer.Serialize(inputs)
+        };
+        var encodedMeta = Uri.EscapeDataString(JsonSerializer.Serialize(meta));
+        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer\" data-action=\"DynamicAction\" data-action-meta=\"");
+        html.Append(Encode(encodedMeta));
+        html.Append("\"><span class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ");
+        html.Append(Encode(icon));
+        html.Append(" mr-1\"></i>");
+        html.Append(Encode(label));
+        html.Append("</span></button>");
     }
 
     private static void AppendEvidenceButton(StringBuilder html, DragnetStoredEvent item)
@@ -1597,6 +1796,41 @@ public sealed class DragnetWebfrontService
                 ["Label"] = "Community website (optional HTTPS)",
                 ["Value"] = _configuration.DirectoryWebsite ?? "",
                 ["Placeholder"] = "https://community.example.com"
+            },
+            new()
+            {
+                ["Name"] = "NotificationsEnabled",
+                ["Label"] = "Enable notification inbox (yes/no)",
+                ["Value"] = _configuration.NotificationsEnabled ? "yes" : "no",
+                ["Placeholder"] = "yes"
+            },
+            new()
+            {
+                ["Name"] = "StalePendingReviewHours",
+                ["Label"] = "Stale review threshold (hours)",
+                ["Value"] = Math.Max(1, (int)_configuration.StalePendingReviewAfter.TotalHours).ToString(),
+                ["Placeholder"] = "24"
+            },
+            new()
+            {
+                ["Name"] = "InGameNotificationSummariesEnabled",
+                ["Label"] = "Enable in-game admin summaries (yes/no)",
+                ["Value"] = _configuration.InGameNotificationSummariesEnabled ? "yes" : "no",
+                ["Placeholder"] = "yes"
+            },
+            new()
+            {
+                ["Name"] = "InGameNotificationSummaryMinutes",
+                ["Label"] = "In-game summary interval (minutes)",
+                ["Value"] = Math.Max(1, (int)_configuration.InGameNotificationSummaryInterval.TotalMinutes).ToString(),
+                ["Placeholder"] = "15"
+            },
+            new()
+            {
+                ["Name"] = "NotificationWebhookUrl",
+                ["Label"] = "Notification webhook (optional HTTPS)",
+                ["Value"] = _configuration.NotificationWebhookUrl ?? "",
+                ["Placeholder"] = "https://discord.com/api/webhooks/..."
             }
         });
     }

@@ -23,6 +23,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("onboarding verifies public health and readiness", TestOnboardingReadinessAsync),
     ("directory lists only opted-in healthy networks", TestDirectoryListingsAsync),
     ("network profiles summarize trust review health and coverage", TestNetworkProfileAsync),
+    ("notification inbox persists deduplicates and acknowledges per administrator", TestNotificationInboxAsync),
     ("heartbeat peer proofs reject tampering", TestHeartbeatPeerProofValidationAsync),
     ("peer capability negotiation preserves legacy identity signatures", TestLegacyPeerSignatureCompatibility),
     ("event store expires elapsed temp bans", TestEventStoreExpiresElapsedTempBansAsync),
@@ -833,6 +834,77 @@ static async Task TestNetworkProfileAsync()
         "public profile must not expose raw transport failure content");
     Assert.True(await service.GetAsync("unknown-network", CancellationToken.None) is null,
         "unknown networks should not produce profiles");
+}
+
+static async Task TestNotificationInboxAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        NotificationsEnabled = true,
+        StalePendingReviewAfter = TimeSpan.FromHours(1),
+        InGameNotificationSummariesEnabled = false
+    };
+    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
+    await eventStore.LoadAsync(CancellationToken.None);
+    var notificationPath = System.IO.Path.Combine(testDir.Path, "notifications");
+    var notificationStore = new DragnetNotificationStore(notificationPath);
+    await notificationStore.LoadAsync(CancellationToken.None);
+    var service = new DragnetNotificationService(
+        configuration,
+        notificationStore,
+        eventStore,
+        managerFactory: () => null!,
+        logger: new TestLogger<DragnetNotificationService>());
+    var envelope = CreateEnvelope("notification-origin", DragnetEventType.BanCreated) with
+    {
+        EventId = "notification-ban",
+        PlayerName = "Notification Player",
+        Reason = "Wallhack"
+    };
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = envelope,
+        ReviewState = DragnetReviewState.PendingBan,
+        FirstSeenUtc = DateTimeOffset.UtcNow.AddHours(-2)
+    }, CancellationToken.None);
+
+    await service.NotifyNewEventAsync(envelope, CancellationToken.None);
+    await service.NotifyNewEventAsync(envelope, CancellationToken.None);
+    await service.SyncStaleReviewsAsync(CancellationToken.None);
+    await service.SyncStaleReviewsAsync(CancellationToken.None);
+
+    var adminOne = await service.ListForClientAsync(101, CancellationToken.None);
+    Assert.Equal(2, adminOne.Count, "new and stale alerts should be stored once each");
+    Assert.Equal(1, adminOne.Count(item => item.Type is DragnetNotificationType.NewBan),
+        "duplicate event ingestion should not duplicate new-ban notifications");
+    Assert.Equal(1, adminOne.Count(item => item.Type is DragnetNotificationType.StaleReview),
+        "repeated stale scans should not duplicate stale notifications");
+
+    var newBan = adminOne.Single(item => item.Type is DragnetNotificationType.NewBan);
+    Assert.True(await service.AcknowledgeAsync(newBan.NotificationId, 101, CancellationToken.None),
+        "administrator should be able to acknowledge one notification");
+    Assert.Equal(1, (await service.ListForClientAsync(101, CancellationToken.None)).Count,
+        "acknowledged notification should disappear for that administrator");
+    Assert.Equal(2, (await service.ListForClientAsync(202, CancellationToken.None)).Count,
+        "one administrator's acknowledgement must not hide another administrator's alerts");
+    Assert.Equal(1, await service.AcknowledgeAllAsync(101, CancellationToken.None),
+        "acknowledge all should affect only remaining unread notifications");
+    Assert.Equal(0, (await service.ListForClientAsync(101, CancellationToken.None)).Count,
+        "administrator should have no unread alerts after acknowledging all");
+
+    var reloadedStore = new DragnetNotificationStore(notificationPath);
+    await reloadedStore.LoadAsync(CancellationToken.None);
+    var reloadedService = new DragnetNotificationService(
+        configuration,
+        reloadedStore,
+        eventStore,
+        managerFactory: () => null!,
+        logger: new TestLogger<DragnetNotificationService>());
+    Assert.Equal(0, (await reloadedService.ListForClientAsync(101, CancellationToken.None)).Count,
+        "acknowledgements should survive a plugin restart");
+    Assert.Equal(2, (await reloadedService.ListForClientAsync(202, CancellationToken.None)).Count,
+        "unread alerts for other administrators should survive a plugin restart");
 }
 
 static async Task TestHeartbeatPeerProofValidationAsync()
@@ -1827,6 +1899,16 @@ static async Task TestWebfrontDashboardRendersAsync()
         identity,
         peerStore,
         () => 1);
+    var notificationStore = new DragnetNotificationStore(
+        System.IO.Path.Combine(testDir.Path, "notifications"));
+    await notificationStore.LoadAsync(CancellationToken.None);
+    var notificationService = new DragnetNotificationService(
+        configuration,
+        notificationStore,
+        eventStore,
+        managerFactory: () => null!,
+        logger: new TestLogger<DragnetNotificationService>());
+    await notificationService.NotifyNewEventAsync(bulkEvent, CancellationToken.None);
     var webfront = new DragnetWebfrontService(
         configuration,
         eventStore,
@@ -1839,7 +1921,8 @@ static async Task TestWebfrontDashboardRendersAsync()
         identity,
         identityService,
         configurationHandler,
-        managerFactory: () => null!);
+        managerFactory: () => null!,
+        notificationService);
     var interaction = await webfront.CreateNavigationInteractionAsync(CancellationToken.None);
 
     Assert.Equal(InteractionType.TemplateContent, interaction.InteractionType, "dashboard should render as an IW4MAdmin navigation page");
@@ -1868,9 +1951,12 @@ static async Task TestWebfrontDashboardRendersAsync()
     var reviewInteraction = await webfront.CreateReviewInteractionAsync(CancellationToken.None);
     var trustInteraction = await webfront.CreateTrustInteractionAsync(CancellationToken.None);
     var peerInteraction = await webfront.CreatePeerInteractionAsync(CancellationToken.None);
+    var notificationInteraction = await webfront.CreateNotificationInteractionAsync(CancellationToken.None);
     Assert.Equal(EFClient.Permission.Owner, reviewInteraction.MinimumPermission, "review action should use configured review permission");
     Assert.Equal(EFClient.Permission.Owner, trustInteraction.MinimumPermission, "trust action should use configured trust permission");
     Assert.Equal(EFClient.Permission.SeniorAdmin, peerInteraction.MinimumPermission, "peer action should use configured peer permission");
+    Assert.Equal(EFClient.Permission.Owner, notificationInteraction.MinimumPermission,
+        "notification acknowledgement should use configured review permission");
 
     var html = await interaction.Action(0, null, null, new Dictionary<string, string>
     {
@@ -1878,6 +1964,10 @@ static async Task TestWebfrontDashboardRendersAsync()
     }, CancellationToken.None);
     Assert.Contains("Peer transport", html, "dashboard should include peer section");
     Assert.Contains("Dragnet events", html, "dashboard should include event section");
+    Assert.Contains("Notification inbox", html, "dashboard should include the notification inbox");
+    Assert.Contains("1 unread", html, "dashboard should display the administrator's unread count");
+    Assert.Contains("Acknowledgements are personal", html,
+        "dashboard should distinguish notification acknowledgement from review decisions");
     Assert.Contains("Deployment readiness", html, "dashboard should include onboarding diagnostics");
     Assert.False(
         html.Contains("px-4 py-3 border-b border-r border-line/60", StringComparison.Ordinal),

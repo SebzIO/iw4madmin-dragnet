@@ -36,6 +36,16 @@ public sealed class DragnetConfiguration
 
     public int PeerFailureThreshold { get; set; } = 3;
 
+    public bool NotificationsEnabled { get; set; } = true;
+
+    public TimeSpan StalePendingReviewAfter { get; set; } = TimeSpan.FromHours(24);
+
+    public bool InGameNotificationSummariesEnabled { get; set; } = true;
+
+    public TimeSpan InGameNotificationSummaryInterval { get; set; } = TimeSpan.FromMinutes(15);
+
+    public string? NotificationWebhookUrl { get; set; }
+
     public bool UpdateCheckEnabled { get; set; } = true;
 
     public TimeSpan UpdateCheckInterval { get; set; } = TimeSpan.FromHours(6);
