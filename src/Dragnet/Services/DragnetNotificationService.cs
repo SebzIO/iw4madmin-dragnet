@@ -4,6 +4,7 @@ using Dragnet.Configuration;
 using Dragnet.Models;
 using Dragnet.Storage;
 using Microsoft.Extensions.Logging;
+using SharedLibraryCore.Alerts;
 using SharedLibraryCore.Interfaces;
 
 namespace Dragnet.Services;
@@ -15,6 +16,7 @@ public sealed class DragnetNotificationService : IDisposable
     private readonly DragnetEventStore _eventStore;
     private readonly Func<IManager> _managerFactory;
     private readonly ILogger<DragnetNotificationService> _logger;
+    private readonly IAlertManager? _alertManager;
     private readonly HttpClient _httpClient = new()
     {
         Timeout = TimeSpan.FromSeconds(10)
@@ -29,13 +31,15 @@ public sealed class DragnetNotificationService : IDisposable
         DragnetNotificationStore store,
         DragnetEventStore eventStore,
         Func<IManager> managerFactory,
-        ILogger<DragnetNotificationService> logger)
+        ILogger<DragnetNotificationService> logger,
+        IAlertManager? alertManager = null)
     {
         _configuration = configuration;
         _store = store;
         _eventStore = eventStore;
         _managerFactory = managerFactory;
         _logger = logger;
+        _alertManager = alertManager;
     }
 
     public void Start()
@@ -121,8 +125,19 @@ public sealed class DragnetNotificationService : IDisposable
 
     public Task NotifyUpdateInstalledAsync(
         string version,
-        CancellationToken token) =>
-        AddAsync(new DragnetNotification
+        CancellationToken token)
+    {
+        _alertManager?.AddAlert(new Alert.AlertState
+        {
+            Category = Alert.AlertCategory.Warning,
+            OccuredAt = DateTime.UtcNow,
+            Message = $"Dragnet {version} was installed. Restart IW4MAdmin to load the update.",
+            Source = "Dragnet",
+            MinimumPermission = EFClient.Permission.Administrator,
+            Type = "DragnetUpdateInstalled"
+        });
+
+        return AddAsync(new DragnetNotification
         {
             NotificationId = $"{DragnetNotificationType.UpdateInstalled}:{version}",
             Type = DragnetNotificationType.UpdateInstalled,
@@ -132,6 +147,7 @@ public sealed class DragnetNotificationService : IDisposable
             OriginName = "Local Dragnet",
             CreatedAtUtc = DateTimeOffset.UtcNow
         }, token);
+    }
 
     public async Task SyncStaleReviewsAsync(CancellationToken token)
     {

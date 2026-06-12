@@ -8,6 +8,7 @@ using Dragnet.Storage;
 using Dragnet.Transport;
 using Dragnet.Web;
 using Microsoft.Extensions.Logging;
+using SharedLibraryCore.Alerts;
 using SharedLibraryCore.Interfaces;
 using System.IO.Compression;
 using System.Text.Json;
@@ -2262,12 +2263,14 @@ static async Task TestAutomaticUpdateInstallAsync()
     await notificationStore.LoadAsync(CancellationToken.None);
     var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
     await eventStore.LoadAsync(CancellationToken.None);
+    var alertManager = new RecordingAlertManager();
     using var notificationService = new DragnetNotificationService(
         configuration,
         notificationStore,
         eventStore,
         () => null!,
-        new TestLogger<DragnetNotificationService>());
+        new TestLogger<DragnetNotificationService>(),
+        alertManager);
     using var httpClient = new HttpClient(new RoutingResponseHandler(request =>
     {
         if (request.RequestUri == new Uri(configuration.ReleaseApiUrl))
@@ -2324,6 +2327,10 @@ static async Task TestAutomaticUpdateInstallAsync()
         "successful auto-update should create an administrator notification");
     Assert.Contains("Restart IW4MAdmin", notification.Message,
         "update notification should explain the required restart");
+    Assert.Equal(1, alertManager.Alerts.Count,
+        "successful auto-update should create one native IW4MAdmin alert");
+    Assert.Contains("Restart IW4MAdmin", alertManager.Alerts.Single().Message,
+        "native IW4MAdmin alert should explain the required restart");
 }
 
 static async Task TestHeartbeatValidationAsync()
@@ -2781,6 +2788,34 @@ public sealed class TestLogger<T> : ILogger<T>
         TState state,
         Exception? exception,
         Func<TState, Exception?, string> formatter)
+    {
+    }
+}
+
+public sealed class RecordingAlertManager : IAlertManager
+{
+    public List<Alert.AlertState> Alerts { get; } = [];
+
+    public EventHandler<Alert.AlertState> OnAlertConsumed { get; set; } = (_, _) => { };
+
+    public Task Initialize() => Task.CompletedTask;
+
+    public IEnumerable<Alert.AlertState> RetrieveAlerts(
+        SharedLibraryCore.Database.Models.EFClient client) =>
+        Alerts;
+
+    public void AddAlert(Alert.AlertState alert) => Alerts.Add(alert);
+
+    public void MarkAlertAsRead(Guid alertId)
+    {
+    }
+
+    public void MarkAllAlertsAsRead(int recipientId)
+    {
+    }
+
+    public void RegisterStaticAlertSource(
+        Func<Task<IEnumerable<Alert.AlertState>>> alertSource)
     {
     }
 }
