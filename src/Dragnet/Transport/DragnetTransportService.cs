@@ -129,7 +129,11 @@ public sealed class DragnetTransportService : IDisposable
 
         if (!IsLocalPeer(request.Sender))
         {
-            await _peerStore.UpsertAsync(request.Sender, token, senderIdentityVerified);
+            await _peerStore.UpsertAsync(
+                request.Sender,
+                token,
+                senderIdentityVerified,
+                clearFailureState: senderIdentityVerified);
         }
 
         await _peerStore.MarkEventsAcknowledgedAsync(
@@ -208,7 +212,9 @@ public sealed class DragnetTransportService : IDisposable
 
     private async Task SendHeartbeatsAsync(CancellationToken token)
     {
-        var peers = await _peerStore.ListAsync(token);
+        var peers = await _peerStore.SelectHeartbeatTargetsAsync(
+            _configuration.QuarantinedPeerProbeInterval,
+            token);
         foreach (var peer in peers)
         {
             if (IsLocalPeer(peer))
@@ -220,7 +226,12 @@ public sealed class DragnetTransportService : IDisposable
             {
                 if (!IsAllowedEndpoint(peer.Endpoint))
                 {
-                    await _peerStore.MarkErrorAsync(peer.OriginId, "Peer endpoint must be absolute HTTPS", token);
+                    await _peerStore.MarkErrorAsync(
+                        peer.OriginId,
+                        "Peer endpoint must be absolute HTTPS",
+                        token,
+                        _configuration.PeerFailureThreshold,
+                        _configuration.PeerQuarantineAfter);
                     continue;
                 }
 
@@ -276,7 +287,8 @@ public sealed class DragnetTransportService : IDisposable
                         peer.OriginId,
                         "Empty heartbeat response",
                         token,
-                        _configuration.PeerFailureThreshold);
+                        _configuration.PeerFailureThreshold,
+                        _configuration.PeerQuarantineAfter);
                     continue;
                 }
 
@@ -286,7 +298,9 @@ public sealed class DragnetTransportService : IDisposable
                     await _peerStore.MarkErrorAsync(
                         peer.OriginId,
                         $"Unexpected origin id {heartbeat.Receiver.OriginId}",
-                        token);
+                        token,
+                        _configuration.PeerFailureThreshold,
+                        _configuration.PeerQuarantineAfter);
                     continue;
                 }
 
@@ -361,7 +375,8 @@ public sealed class DragnetTransportService : IDisposable
                     peer.OriginId,
                     ex.Message,
                     token,
-                    _configuration.PeerFailureThreshold);
+                    _configuration.PeerFailureThreshold,
+                    _configuration.PeerQuarantineAfter);
                 _logger.LogWarning(ex, "Dragnet heartbeat to {Endpoint} failed", peer.Endpoint);
             }
         }

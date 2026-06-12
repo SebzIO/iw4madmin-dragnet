@@ -218,24 +218,37 @@ public sealed class DragnetWebfrontService
             !item.ImportError.StartsWith("Queued:", StringComparison.OrdinalIgnoreCase));
         var importedEvents = events.Count(item => item.ImportedAtUtc is not null);
         var now = DateTimeOffset.UtcNow;
-        var healthyPeers = peers.Count(peer => IsHealthyPeer(peer, now));
-        var stalePeers = peers.Count(peer => IsStalePeer(peer, now));
-        var erroredPeers = peers.Count(peer => !string.IsNullOrWhiteSpace(peer.LastError));
-        var degradedPeers = peers.Count(peer =>
-            string.IsNullOrWhiteSpace(peer.LastError) &&
-            !IsStalePeer(peer, now) &&
-            peer.ConsecutiveFailures > 0);
-        var eligibleGossipPeers = peers.Count(peer =>
-            string.IsNullOrWhiteSpace(peer.LastError) &&
-            !IsStalePeer(peer, now));
-        var recentlyAdvertisedPeers = peers.Count(peer =>
+        var activePeers = peers
+            .Where(peer => DragnetPeerHealth.IsActive(
+                peer,
+                now,
+                _configuration.PeerStaleAfter))
+            .ToList();
+        var quarantinedPeers = peers
+            .Where(DragnetPeerHealth.IsQuarantined)
+            .ToList();
+        var displayedPeers = peers
+            .Where(peer => !DragnetPeerHealth.IsQuarantined(peer))
+            .ToList();
+        var healthyPeers = activePeers.Count(peer => peer.ConsecutiveFailures == 0);
+        var stalePeers = peers.Count(peer =>
+            !DragnetPeerHealth.IsQuarantined(peer) &&
+            IsStalePeer(peer, now));
+        var erroredPeers = peers.Count(peer =>
+            !DragnetPeerHealth.IsQuarantined(peer) &&
+            !string.IsNullOrWhiteSpace(peer.LastError));
+        var degradedPeers = activePeers.Count(peer => peer.ConsecutiveFailures > 0);
+        var eligibleGossipPeers = activePeers.Count;
+        var recentlyAdvertisedPeers = activePeers.Count(peer =>
             peer.LastAdvertisedAtUtc is { } advertisedAt &&
             now - advertisedAt <= _configuration.PeerStaleAfter);
-        var verifiedPeers = peers.Count(peer => peer.IdentityVerified);
-        var legacyPeers = peers.Count(peer => !peer.IdentityVerified);
+        var verifiedPeers = activePeers.Count(peer => peer.IdentityVerified);
+        var legacyPeers = activePeers.Count(peer => !peer.IdentityVerified);
         var deliverableEvents = GetDeliverableEvents(events, now);
         var acknowledgementPeers = peers
-            .Where(peer => peer.SupportsDeliveryAcknowledgements)
+            .Where(peer =>
+                peer.SupportsDeliveryAcknowledgements &&
+                DragnetPeerHealth.IsActive(peer, now, _configuration.PeerStaleAfter))
             .ToList();
         var deliveryTargetCount = deliverableEvents.Count * acknowledgementPeers.Count;
         var acknowledgedDeliveryCount = acknowledgementPeers.Sum(peer =>
@@ -268,11 +281,12 @@ public sealed class DragnetWebfrontService
         AppendMetric(html, "Queued imports", queuedImports.ToString());
         AppendMetric(html, "Import failures", importFailures.ToString());
         AppendMetric(html, "Imported", importedEvents.ToString());
-        AppendMetric(html, "Known peers", peers.Count.ToString());
+        AppendMetric(html, "Active peers", activePeers.Count.ToString());
         AppendMetric(html, "Healthy peers", healthyPeers.ToString());
         AppendMetric(html, "Degraded peers", degradedPeers.ToString());
         AppendMetric(html, "Stale peers", stalePeers.ToString());
         AppendMetric(html, "Errored peers", erroredPeers.ToString());
+        AppendMetric(html, "Quarantined", quarantinedPeers.Count.ToString());
         AppendMetric(html, "Gossip eligible", eligibleGossipPeers.ToString());
         AppendMetric(html, "Advertised recently", recentlyAdvertisedPeers.ToString());
         AppendMetric(html, "Verified identities", verifiedPeers.ToString());
@@ -290,13 +304,13 @@ public sealed class DragnetWebfrontService
         html.AppendLine("</div>");
         html.AppendLine("<div class=\"rounded-md bg-surface-alt/20 overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted\"><tr><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Endpoint</th><th class=\"px-4 py-3\">Source</th><th class=\"px-4 py-3\">Last seen</th><th class=\"px-4 py-3\">Last advertised</th><th class=\"px-4 py-3\">Delivery</th><th class=\"px-4 py-3\">Status</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
 
-        if (peers.Count == 0)
+        if (displayedPeers.Count == 0)
         {
-            html.AppendLine("<tr><td colspan=\"8\" class=\"px-4 py-6 text-center text-muted\">No peers discovered.</td></tr>");
+            html.AppendLine("<tr><td colspan=\"8\" class=\"px-4 py-6 text-center text-muted\">No active or recovering peers.</td></tr>");
         }
         else
         {
-            foreach (var peer in peers.OrderByDescending(peer => peer.LastSeenUtc))
+            foreach (var peer in displayedPeers.OrderByDescending(peer => peer.LastSeenUtc))
             {
                 html.AppendLine("<tr class=\"hover:bg-surface-alt/30\">");
                 html.Append("<td class=\"px-4 py-3 font-medium\">");
@@ -334,6 +348,7 @@ public sealed class DragnetWebfrontService
         }
 
         html.AppendLine("</tbody></table></div></div>");
+        AppendQuarantinedPeers(html, quarantinedPeers, now);
 
         if (selectedEvent is not null)
         {
@@ -690,6 +705,8 @@ public sealed class DragnetWebfrontService
         meta.TryGetValue("DirectoryWebsite", out var directoryWebsite);
         meta.TryGetValue("NotificationsEnabled", out var notificationsEnabledValue);
         meta.TryGetValue("StalePendingReviewHours", out var staleReviewHoursValue);
+        meta.TryGetValue("PeerQuarantineMinutes", out var peerQuarantineMinutesValue);
+        meta.TryGetValue("QuarantinedPeerProbeMinutes", out var quarantinedPeerProbeMinutesValue);
         meta.TryGetValue("InGameNotificationSummariesEnabled", out var inGameSummariesValue);
         meta.TryGetValue("InGameNotificationSummaryMinutes", out var summaryMinutesValue);
         meta.TryGetValue("NotificationWebhookUrl", out var notificationWebhookUrl);
@@ -730,6 +747,18 @@ public sealed class DragnetWebfrontService
             staleReviewHours is < 1 or > 8760)
         {
             return "Stale review threshold must be between 1 and 8760 hours.";
+        }
+
+        if (!int.TryParse(peerQuarantineMinutesValue, out var peerQuarantineMinutes) ||
+            peerQuarantineMinutes is < 5 or > 10080)
+        {
+            return "Peer quarantine delay must be between 5 and 10080 minutes.";
+        }
+
+        if (!int.TryParse(quarantinedPeerProbeMinutesValue, out var quarantinedPeerProbeMinutes) ||
+            quarantinedPeerProbeMinutes is < 1 or > 1440)
+        {
+            return "Quarantined peer probe interval must be between 1 and 1440 minutes.";
         }
 
         if (!int.TryParse(summaryMinutesValue, out var summaryMinutes) ||
@@ -779,6 +808,8 @@ public sealed class DragnetWebfrontService
         _configuration.DirectoryWebsite = string.IsNullOrWhiteSpace(directoryWebsite) ? null : directoryWebsite;
         _configuration.NotificationsEnabled = IsEnabledValue(notificationsEnabledValue);
         _configuration.StalePendingReviewAfter = TimeSpan.FromHours(staleReviewHours);
+        _configuration.PeerQuarantineAfter = TimeSpan.FromMinutes(peerQuarantineMinutes);
+        _configuration.QuarantinedPeerProbeInterval = TimeSpan.FromMinutes(quarantinedPeerProbeMinutes);
         _configuration.InGameNotificationSummariesEnabled = IsEnabledValue(inGameSummariesValue);
         _configuration.InGameNotificationSummaryInterval = TimeSpan.FromMinutes(summaryMinutes);
         _configuration.NotificationWebhookUrl = string.IsNullOrWhiteSpace(notificationWebhookUrl)
@@ -1112,6 +1143,38 @@ public sealed class DragnetWebfrontService
             html.AppendLine("</div></div>");
         }
         html.AppendLine("</div></div>");
+    }
+
+    private void AppendQuarantinedPeers(
+        StringBuilder html,
+        IReadOnlyList<DragnetPeerRecord> peers,
+        DateTimeOffset now)
+    {
+        if (peers.Count == 0)
+        {
+            return;
+        }
+
+        html.AppendLine("<details class=\"rounded-lg bg-surface/50 p-2\">");
+        html.Append("<summary class=\"px-3 py-2 cursor-pointer font-semibold text-muted\">Quarantined peers (");
+        html.Append(peers.Count);
+        html.AppendLine(")</summary><div class=\"space-y-2 p-2\">");
+        foreach (var peer in peers.OrderByDescending(item => item.QuarantinedAtUtc))
+        {
+            html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 px-4 py-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between\">");
+            html.Append("<div><div class=\"font-medium\">");
+            html.Append(Encode(peer.OriginName));
+            html.Append("</div><div class=\"text-xs text-muted\">Quarantined ");
+            html.Append(Encode(DescribeAge(now - peer.QuarantinedAtUtc!.Value)));
+            html.Append(" · recovery probe ");
+            html.Append(peer.LastRecoveryProbeAtUtc is null
+                ? "pending"
+                : Encode(DescribeAge(now - peer.LastRecoveryProbeAtUtc.Value)));
+            html.Append("</div></div><div class=\"text-sm text-muted\">");
+            html.Append(peer.IsBootstrap ? "Bootstrap seed · " : "");
+            html.Append("automatically restores after a valid signed heartbeat</div></div>");
+        }
+        html.AppendLine("</div></details>");
     }
 
     private static void AppendNotificationActionButton(
@@ -1810,6 +1873,20 @@ public sealed class DragnetWebfrontService
                 ["Label"] = "Stale review threshold (hours)",
                 ["Value"] = Math.Max(1, (int)_configuration.StalePendingReviewAfter.TotalHours).ToString(),
                 ["Placeholder"] = "24"
+            },
+            new()
+            {
+                ["Name"] = "PeerQuarantineMinutes",
+                ["Label"] = "Quarantine continuously failing peers after (minutes)",
+                ["Value"] = Math.Max(5, (int)_configuration.PeerQuarantineAfter.TotalMinutes).ToString(),
+                ["Placeholder"] = "30"
+            },
+            new()
+            {
+                ["Name"] = "QuarantinedPeerProbeMinutes",
+                ["Label"] = "Probe quarantined peers every (minutes)",
+                ["Value"] = Math.Max(1, (int)_configuration.QuarantinedPeerProbeInterval.TotalMinutes).ToString(),
+                ["Placeholder"] = "10"
             },
             new()
             {

@@ -51,8 +51,7 @@ public sealed class DragnetDirectoryService
         entries.AddRange(peers
             .Where(peer =>
                 peer.DirectoryListed &&
-                string.IsNullOrWhiteSpace(peer.LastError) &&
-                now - peer.LastSeenUtc <= _configuration.PeerStaleAfter &&
+                DragnetPeerHealth.IsActive(peer, now, _configuration.PeerStaleAfter) &&
                 IsHttpsUrl(peer.Endpoint))
             .Select(peer => new DragnetDirectoryEntry
             {

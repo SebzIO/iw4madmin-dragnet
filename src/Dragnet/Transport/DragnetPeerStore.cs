@@ -58,7 +58,6 @@ public sealed class DragnetPeerStore
                 {
                     existing.Endpoint = peer.Endpoint.TrimEnd('/');
                     existing.IsBootstrap = true;
-                    ClearFailureState(existing);
                 }
                 else
                 {
@@ -95,6 +94,42 @@ public sealed class DragnetPeerStore
         }
     }
 
+    public async Task<IReadOnlyList<DragnetPeerRecord>> SelectHeartbeatTargetsAsync(
+        TimeSpan recoveryProbeInterval,
+        CancellationToken token)
+    {
+        await _lock.WaitAsync(token);
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var targets = _peers.Values
+                .Where(peer =>
+                    peer.QuarantinedAtUtc is null ||
+                    peer.LastRecoveryProbeAtUtc is null ||
+                    now - peer.LastRecoveryProbeAtUtc >= recoveryProbeInterval)
+                .OrderBy(peer => peer.QuarantinedAtUtc is not null)
+                .ThenByDescending(peer => peer.IsBootstrap)
+                .ThenBy(peer => peer.LastRecoveryProbeAtUtc)
+                .ToList();
+
+            foreach (var peer in targets.Where(peer => peer.QuarantinedAtUtc is not null))
+            {
+                peer.LastRecoveryProbeAtUtc = now;
+            }
+
+            if (targets.Any(peer => peer.QuarantinedAtUtc is not null))
+            {
+                await SaveUnlockedAsync(token);
+            }
+
+            return targets;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
     public async Task<IReadOnlyList<DragnetPeerRecord>> SelectForGossipAsync(
         int maximumPeers,
         TimeSpan staleAfter,
@@ -114,6 +149,7 @@ public sealed class DragnetPeerStore
             var normalizedExcludedEndpoint = excludedEndpoint?.TrimEnd('/');
             var selected = _peers.Values
                 .Where(peer =>
+                    peer.QuarantinedAtUtc is null &&
                     string.IsNullOrWhiteSpace(peer.LastError) &&
                     now - peer.LastSeenUtc <= staleAfter &&
                     !string.Equals(peer.OriginId, excludedOriginId, StringComparison.OrdinalIgnoreCase) &&
@@ -290,19 +326,29 @@ public sealed class DragnetPeerStore
         string originId,
         string error,
         CancellationToken token,
-        int failureThreshold = 1)
+        int failureThreshold = 1,
+        TimeSpan? quarantineAfter = null)
     {
         await _lock.WaitAsync(token);
         try
         {
             if (_peers.TryGetValue(originId, out var existing))
             {
+                var now = DateTimeOffset.UtcNow;
                 existing.ConsecutiveFailures++;
-                existing.LastFailureAtUtc = DateTimeOffset.UtcNow;
+                existing.FirstFailureAtUtc ??= now;
+                existing.LastFailureAtUtc = now;
                 existing.LastFailureMessage = error;
                 existing.LastError = existing.ConsecutiveFailures >= Math.Max(1, failureThreshold)
                     ? error
                     : null;
+                if (existing.LastError is not null &&
+                    quarantineAfter is { } quarantineDuration &&
+                    quarantineDuration > TimeSpan.Zero &&
+                    now - existing.FirstFailureAtUtc.Value >= quarantineDuration)
+                {
+                    existing.QuarantinedAtUtc ??= now;
+                }
                 await SaveUnlockedAsync(token);
             }
         }
@@ -930,8 +976,11 @@ public sealed class DragnetPeerStore
     {
         peer.LastError = null;
         peer.ConsecutiveFailures = 0;
+        peer.FirstFailureAtUtc = null;
         peer.LastFailureAtUtc = null;
         peer.LastFailureMessage = null;
+        peer.QuarantinedAtUtc = null;
+        peer.LastRecoveryProbeAtUtc = null;
     }
 
     private static void ApplyDirectoryMetadata(DragnetPeerRecord record, DragnetPeerInfo peerInfo)

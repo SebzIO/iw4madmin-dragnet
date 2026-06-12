@@ -113,6 +113,8 @@ Example configuration:
   "PeerHeartbeatInterval": "00:01:00",
   "PeerStaleAfter": "00:10:00",
   "PeerFailureThreshold": 3,
+  "PeerQuarantineAfter": "00:30:00",
+  "QuarantinedPeerProbeInterval": "00:10:00",
   "UpdateCheckEnabled": true,
   "UpdateCheckInterval": "06:00:00",
   "PageLoadUpdateCheckMaxAge": "00:05:00",
@@ -158,7 +160,7 @@ Administrators can use **Refresh coverage** on a capable peer from the Dragnet d
 
 The public ledger does not expose IP addresses, local trust settings, reviewer identities, private decision notes, denial reasons, ignored decisions, private keys, or IW4MAdmin authentication data. Player names, game network IDs, public ban reasons, origins, evidence URLs, and signed acceptance/enforcement statements are public.
 
-`PeerFailureThreshold` controls how many consecutive heartbeat failures are required before a peer is shown as errored. A successful heartbeat clears the failure count and visible error automatically.
+`PeerFailureThreshold` controls how many consecutive heartbeat failures are required before a peer is shown as errored. `PeerQuarantineAfter` removes a continuously failing peer from active network counts, gossip, directory listings, delivery coverage, and ledger coverage after the configured duration. Quarantined records are retained rather than deleted and are retried at `QuarantinedPeerProbeInterval`; a valid signed heartbeat automatically restores the peer. Bootstrap peers use the same quarantine and recovery path, so an unavailable bootstrap cannot prevent communication through healthy discovered peers. A successful inbound or outbound signed heartbeat clears all failure and quarantine state.
 
 Current Dragnet peers acknowledge each valid event by event ID. The sender retains per-peer delivery state and replays unacknowledged active events, including events that share the same creation timestamp. The dashboard reports acknowledged and pending delivery coverage and provides per-peer **Verify sync** and **Resync** actions. Resync clears only that peer's delivery cursor and causes active approved events to be offered again; it does not change trust, review, or import decisions.
 

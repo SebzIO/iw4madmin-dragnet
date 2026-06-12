@@ -168,7 +168,9 @@ public sealed class DragnetCommand : Command
 
         foreach (var peer in peers)
         {
-            var state = string.IsNullOrWhiteSpace(peer.LastError)
+            var state = peer.QuarantinedAtUtc is not null
+                ? $"quarantined; recovery probes active: {peer.LastError}"
+                : string.IsNullOrWhiteSpace(peer.LastError)
                 ? "ok"
                 : $"error: {peer.LastError}";
             gameEvent.Origin.Tell(

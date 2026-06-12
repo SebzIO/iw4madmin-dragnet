@@ -197,6 +197,8 @@ public sealed class DragnetController : ControllerBase
         var events = await _eventStore.ListAsync(token);
         var peers = await _peerStore.ListAsync(token);
         var now = DateTimeOffset.UtcNow;
+        var activePeers = peers.Where(peer =>
+            DragnetPeerHealth.IsActive(peer, now, _configuration.PeerStaleAfter)).ToList();
         var update = _updateService.Status;
         var deliverableEventIds = events
             .Where(item => item.ReviewState is DragnetReviewState.ApprovedBan or DragnetReviewState.ApprovedLift)
@@ -204,7 +206,9 @@ public sealed class DragnetController : ControllerBase
             .Select(item => item.Event.EventId)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var acknowledgementPeers = peers
-            .Where(peer => peer.SupportsDeliveryAcknowledgements)
+            .Where(peer =>
+                peer.SupportsDeliveryAcknowledgements &&
+                DragnetPeerHealth.IsActive(peer, now, _configuration.PeerStaleAfter))
             .ToList();
         var acknowledgedDeliveries = acknowledgementPeers.Sum(peer =>
             (peer.EventDeliveries ?? []).Count(delivery =>
@@ -223,25 +227,22 @@ public sealed class DragnetController : ControllerBase
             UpdateCheckedAtUtc = update.CheckedAtUtc,
             UpdateCheckError = update.CheckError,
             PublicEndpoint = _configuration.PublicEndpoint,
-            PeerCount = peers.Count,
-            HealthyPeerCount = peers.Count(peer =>
-                string.IsNullOrWhiteSpace(peer.LastError) &&
-                peer.ConsecutiveFailures == 0 &&
-                now - peer.LastSeenUtc <= _configuration.PeerStaleAfter),
-            DegradedPeerCount = peers.Count(peer =>
-                string.IsNullOrWhiteSpace(peer.LastError) &&
-                peer.ConsecutiveFailures > 0 &&
-                now - peer.LastSeenUtc <= _configuration.PeerStaleAfter),
-            StalePeerCount = peers.Count(peer => now - peer.LastSeenUtc > _configuration.PeerStaleAfter),
-            ErroredPeerCount = peers.Count(peer => !string.IsNullOrWhiteSpace(peer.LastError)),
-            GossipEligiblePeerCount = peers.Count(peer =>
-                string.IsNullOrWhiteSpace(peer.LastError) &&
-                now - peer.LastSeenUtc <= _configuration.PeerStaleAfter),
-            RecentlyAdvertisedPeerCount = peers.Count(peer =>
+            PeerCount = activePeers.Count,
+            HealthyPeerCount = activePeers.Count(peer => peer.ConsecutiveFailures == 0),
+            DegradedPeerCount = activePeers.Count(peer => peer.ConsecutiveFailures > 0),
+            StalePeerCount = peers.Count(peer =>
+                !DragnetPeerHealth.IsQuarantined(peer) &&
+                now - peer.LastSeenUtc > _configuration.PeerStaleAfter),
+            ErroredPeerCount = peers.Count(peer =>
+                !DragnetPeerHealth.IsQuarantined(peer) &&
+                !string.IsNullOrWhiteSpace(peer.LastError)),
+            QuarantinedPeerCount = peers.Count(DragnetPeerHealth.IsQuarantined),
+            GossipEligiblePeerCount = activePeers.Count,
+            RecentlyAdvertisedPeerCount = activePeers.Count(peer =>
                 peer.LastAdvertisedAtUtc is { } advertisedAt &&
                 now - advertisedAt <= _configuration.PeerStaleAfter),
-            VerifiedIdentityPeerCount = peers.Count(peer => peer.IdentityVerified),
-            LegacyIdentityPeerCount = peers.Count(peer => !peer.IdentityVerified),
+            VerifiedIdentityPeerCount = activePeers.Count(peer => peer.IdentityVerified),
+            LegacyIdentityPeerCount = activePeers.Count(peer => !peer.IdentityVerified),
             DeliveryAcknowledgementPeerCount = acknowledgementPeers.Count,
             DeliverableEventCount = deliverableEventIds.Count,
             AcknowledgedDeliveryCount = acknowledgedDeliveries,
@@ -331,6 +332,8 @@ public sealed record DragnetStatusResponse
     public required int StalePeerCount { get; init; }
 
     public required int ErroredPeerCount { get; init; }
+
+    public required int QuarantinedPeerCount { get; init; }
 
     public required int GossipEligiblePeerCount { get; init; }
 

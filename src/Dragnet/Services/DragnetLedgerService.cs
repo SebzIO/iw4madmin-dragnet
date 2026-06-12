@@ -178,17 +178,10 @@ public sealed class DragnetLedgerService
         IReadOnlyList<DragnetStoredEvent> events,
         DateTimeOffset now)
     {
-        var attestationNetworks = events
-            .SelectMany(item => item.BanAttestations ?? [])
-            .Select(attestation => new DragnetLedgerNetwork(
-                attestation.NetworkOriginId,
-                attestation.NetworkName,
-                attestation.PublicEndpoint,
-                attestation.ServerCount,
-                "Unavailable",
-                null));
         var roster = peers
-            .Where(peer => !string.IsNullOrWhiteSpace(peer.OriginId))
+            .Where(peer =>
+                !string.IsNullOrWhiteSpace(peer.OriginId) &&
+                DragnetPeerHealth.IsActive(peer, now, _configuration.PeerStaleAfter))
             .Select(peer => new DragnetLedgerNetwork(
                 peer.OriginId,
                 peer.OriginName,
@@ -207,7 +200,6 @@ public sealed class DragnetLedgerService
                 Math.Max(0, _localServerCount()),
                 "Healthy",
                 now))
-            .Concat(attestationNetworks)
             .GroupBy(network => network.OriginId, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.OrderBy(network => network.Availability == "Unavailable").First())
             .ToList();

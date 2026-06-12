@@ -401,6 +401,53 @@ static async Task TestPeerStoreAsync()
         .Single(peer => peer.OriginId == "discovered-origin");
     Assert.Equal("sustained", discovered.LastError, "threshold failure should become visible");
 
+    discovered.FirstFailureAtUtc = DateTimeOffset.UtcNow.AddHours(-1);
+    await store.MarkErrorAsync(
+        "discovered-origin",
+        "still unavailable",
+        CancellationToken.None,
+        failureThreshold: 3,
+        quarantineAfter: TimeSpan.FromMinutes(30));
+    discovered = (await store.ListAsync(CancellationToken.None))
+        .Single(peer => peer.OriginId == "discovered-origin");
+    Assert.True(discovered.QuarantinedAtUtc is not null,
+        "sustained failures should quarantine a peer");
+    Assert.False((await store.SelectForGossipAsync(
+            10,
+            TimeSpan.FromHours(2),
+            null,
+            null,
+            CancellationToken.None))
+        .Any(peer => peer.OriginId == "discovered-origin"),
+        "quarantined peers should not be advertised through gossip");
+    var firstRecoveryTargets = await store.SelectHeartbeatTargetsAsync(
+        TimeSpan.FromMinutes(10),
+        CancellationToken.None);
+    Assert.True(firstRecoveryTargets.Any(peer => peer.OriginId == "discovered-origin"),
+        "a quarantined peer should receive a recovery probe");
+    var immediateRecoveryTargets = await store.SelectHeartbeatTargetsAsync(
+        TimeSpan.FromMinutes(10),
+        CancellationToken.None);
+    Assert.False(immediateRecoveryTargets.Any(peer => peer.OriginId == "discovered-origin"),
+        "quarantined peers should not be probed every heartbeat");
+    Assert.True(immediateRecoveryTargets.Any(peer => peer.OriginId == "bootstrap-origin"),
+        "a failed peer should not prevent another bootstrap or discovered peer from being contacted");
+
+    bootstrap = (await store.ListAsync(CancellationToken.None))
+        .Single(peer => peer.OriginId == "bootstrap-origin");
+    bootstrap.FirstFailureAtUtc = DateTimeOffset.UtcNow.AddHours(-1);
+    await store.MarkErrorAsync(
+        "bootstrap-origin",
+        "bootstrap unavailable",
+        CancellationToken.None,
+        quarantineAfter: TimeSpan.FromMinutes(30));
+    await store.LoadAsync(configuration, CancellationToken.None);
+    bootstrap = (await store.ListAsync(CancellationToken.None))
+        .Single(peer => peer.OriginId == "bootstrap-origin");
+    Assert.True(bootstrap.IsBootstrap, "configured bootstrap role should survive reload");
+    Assert.True(bootstrap.QuarantinedAtUtc is not null,
+        "reloading configured bootstrap peers should preserve quarantine state");
+
     await store.MarkHeartbeatSucceededAsync("discovered-origin", new DragnetPeerInfo
     {
         OriginId = "canonical-origin",
@@ -414,6 +461,8 @@ static async Task TestPeerStoreAsync()
     var canonical = reconciledPeers.Single(peer => peer.OriginId == "canonical-origin");
     Assert.Null(canonical.LastError, "successful heartbeat should clear visible errors");
     Assert.Equal(0, canonical.ConsecutiveFailures, "successful heartbeat should reset failure count");
+    Assert.Null(canonical.QuarantinedAtUtc, "successful heartbeat should restore a quarantined peer");
+    Assert.Null(canonical.LastRecoveryProbeAtUtc, "successful heartbeat should clear recovery probe state");
     Assert.Equal(4, canonical.ServerCount, "successful heartbeat should retain advertised server count");
 
     var sentEvent = CreateEnvelope(originId: "local", eventType: DragnetEventType.BanCreated) with
@@ -449,6 +498,22 @@ static async Task TestStatisticsAsync()
         "https://remote.example/dragnet",
         "https://remote.example/dragnet",
         CancellationToken.None);
+    await peerStore.UpsertAsync(new DragnetPeerInfo
+    {
+        OriginId = "quarantined",
+        OriginName = "Quarantined",
+        PublicEndpoint = "https://quarantined.example/dragnet",
+        ServerCount = 9
+    }, CancellationToken.None);
+    await peerStore.MarkErrorAsync("quarantined", "offline", CancellationToken.None);
+    var quarantined = (await peerStore.ListAsync(CancellationToken.None))
+        .Single(peer => peer.OriginId == "quarantined");
+    quarantined.FirstFailureAtUtc = DateTimeOffset.UtcNow.AddHours(-1);
+    await peerStore.MarkErrorAsync(
+        "quarantined",
+        "offline",
+        CancellationToken.None,
+        quarantineAfter: TimeSpan.FromMinutes(30));
     await eventStore.UpsertAsync(new DragnetStoredEvent
     {
         Event = CreateEnvelope("local", DragnetEventType.BanCreated),
@@ -465,7 +530,7 @@ static async Task TestStatisticsAsync()
         ReviewState = DragnetReviewState.PendingLift
     }, CancellationToken.None);
 
-    var service = new DragnetStatisticsService(eventStore, peerStore, () => 5);
+    var service = new DragnetStatisticsService(eventStore, peerStore, () => 5, configuration);
     var statistics = await service.GetAsync(CancellationToken.None);
 
     Assert.Equal(8, statistics.ParticipatingServerCount, "statistics should deduplicate server counts by endpoint");
@@ -1708,9 +1773,9 @@ static async Task TestPublicLedgerAsync()
     Assert.Equal(1, ledgerBan.DuplicateEventCount, "ledger should consolidate duplicate penalty events");
     Assert.Equal(2, ledgerBan.AcceptedNetworkCount, "ledger should count signed network coverage");
     Assert.Equal(3, ledgerBan.EnforcedServerCount, "ledger should sum enforced server coverage");
-    Assert.Equal(3, ledgerBan.Attestations.Count, "ledger should include every eligible network");
-    Assert.Equal(1, ledgerBan.UnreportedNetworkCount, "ledger should distinguish missing reports");
-    Assert.Equal(1, ledgerBan.UnavailableNetworkCount, "ledger should distinguish unavailable networks");
+    Assert.Equal(2, ledgerBan.Attestations.Count, "ledger should include every active eligible network");
+    Assert.Equal(0, ledgerBan.UnreportedNetworkCount, "inactive networks should not skew missing report counts");
+    Assert.Equal(0, ledgerBan.UnavailableNetworkCount, "inactive networks should not skew unavailable counts");
     Assert.Equal(1, ledgerBan.StaleReportCount, "ledger should flag stale non-enforced reports");
     Assert.Equal("Needs attention", ledgerBan.ReconciliationStatus,
         "stale or unavailable coverage should require attention");
@@ -1727,8 +1792,10 @@ static async Task TestPublicLedgerAsync()
     Assert.Contains("Ledger Player", html, "public ledger should render searchable ban details");
     Assert.Contains("Coverage Network", html, "public ledger should identify attesting networks");
     Assert.Contains("Stale Queue Network", html, "public ledger should identify stale queued reports");
-    Assert.Contains("Unavailable Network", html, "public ledger should identify unavailable networks");
-    Assert.Contains("Never reported", html, "public ledger should distinguish networks with no report");
+    Assert.False(html.Contains("Unavailable Network", StringComparison.Ordinal),
+        "public ledger should omit inactive networks from current coverage");
+    Assert.False(html.Contains("Never reported", StringComparison.Ordinal),
+        "inactive networks should not create missing coverage reports");
     Assert.Contains("Consolidated events", html, "public ledger should disclose duplicate consolidation");
     Assert.False(html.Contains("Origin Server", StringComparison.Ordinal),
         "public ledger should not repeat implicit origin enforcement");

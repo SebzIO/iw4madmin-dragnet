@@ -143,7 +143,8 @@ public sealed class Plugin : IPluginV2
             return new DragnetStatisticsService(
                 eventStore,
                 peerStore,
-                localServerCount);
+                localServerCount,
+                serviceProvider.GetRequiredService<DragnetConfiguration>());
         });
         serviceCollection.AddSingleton<DragnetTransportService>();
         serviceCollection.AddSingleton<DragnetUpdateService>();

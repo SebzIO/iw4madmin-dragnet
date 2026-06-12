@@ -36,6 +36,10 @@ public sealed class DragnetConfiguration
 
     public int PeerFailureThreshold { get; set; } = 3;
 
+    public TimeSpan PeerQuarantineAfter { get; set; } = TimeSpan.FromMinutes(30);
+
+    public TimeSpan QuarantinedPeerProbeInterval { get; set; } = TimeSpan.FromMinutes(10);
+
     public bool NotificationsEnabled { get; set; } = true;
 
     public TimeSpan StalePendingReviewAfter { get; set; } = TimeSpan.FromHours(24);

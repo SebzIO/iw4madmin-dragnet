@@ -108,7 +108,13 @@ public sealed record DragnetPeerRecord
 
     public DateTimeOffset? LastFailureAtUtc { get; set; }
 
+    public DateTimeOffset? FirstFailureAtUtc { get; set; }
+
     public string? LastFailureMessage { get; set; }
+
+    public DateTimeOffset? QuarantinedAtUtc { get; set; }
+
+    public DateTimeOffset? LastRecoveryProbeAtUtc { get; set; }
 
     public int ServerCount { get; set; }
 
