@@ -1687,6 +1687,7 @@ static async Task TestPublicLedgerAsync()
         EventId = "public-ledger-ban",
         PlayerName = "Ledger Player",
         Reason = "Aimbot evidence",
+        AdminName = "Ledger Admin",
         EvidenceUrl = "https://youtu.be/evidence"
     };
     await eventStore.UpsertAsync(new DragnetStoredEvent
@@ -1790,6 +1791,10 @@ static async Task TestPublicLedgerAsync()
         html,
         "public ledger should provide a direct route back to the IW4MAdmin webfront");
     Assert.Contains("Ledger Player", html, "public ledger should render searchable ban details");
+    Assert.Contains("issued by Ledger Admin", html,
+        "public ledger should identify the administrator who issued the punishment");
+    Assert.Contains("<label>Issued by</label><div>Ledger Admin</div>", html,
+        "expanded ledger details should identify the issuing administrator");
     Assert.Contains("Coverage Network", html, "public ledger should identify attesting networks");
     Assert.Contains("Stale Queue Network", html, "public ledger should identify stale queued reports");
     Assert.False(html.Contains("Unavailable Network", StringComparison.Ordinal),
@@ -1816,6 +1821,8 @@ static async Task TestPublicLedgerAsync()
         "selected ban details should not render below the entire ledger table");
     Assert.False(html.Contains("private reviewer note", StringComparison.Ordinal),
         "public ledger must not expose private local review notes");
+    Assert.Equal("Ledger Admin", ledgerBan.AdminName,
+        "ledger JSON projection should include the issuing administrator");
 
     var controller = new DragnetController(
         null!,

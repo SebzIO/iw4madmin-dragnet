@@ -70,6 +70,11 @@ public sealed class DragnetLedgerService
             .ThenByDescending(item => item.LastSeenUtc)
             .First();
         var envelope = newest.Event;
+        var adminName = groupedEvents
+            .OrderByDescending(item => item.Event.CreatedAtUtc)
+            .ThenByDescending(item => item.LastSeenUtc)
+            .Select(item => item.Event.AdminName?.Trim())
+            .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name));
         var lifted = groupedEvents.Any(item => lifts.Any(lift =>
             lift.OriginId.Equals(item.Event.OriginId, StringComparison.OrdinalIgnoreCase) &&
             lift.Iw4mAdminPenaltyId == item.Event.Iw4mAdminPenaltyId &&
@@ -152,6 +157,7 @@ public sealed class DragnetLedgerService
             Reason = envelope.Reason,
             OriginName = envelope.OriginName,
             OriginServerName = envelope.OriginServerName,
+            AdminName = adminName,
             PenaltyKind = envelope.PenaltyKind.ToString(),
             CreatedAtUtc = groupedEvents.Min(item => item.Event.CreatedAtUtc),
             ExpiresAtUtc = groupedEvents.Any(item => item.Event.ExpiresAtUtc is null)
@@ -237,7 +243,8 @@ public sealed class DragnetLedgerService
                     ban.PlayerName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
                     ban.PlayerNetworkId.Contains(search, StringComparison.OrdinalIgnoreCase) ||
                     ban.Reason.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                    ban.OriginName.Contains(search, StringComparison.OrdinalIgnoreCase))
+                    ban.OriginName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+                    ban.AdminName?.Contains(search, StringComparison.OrdinalIgnoreCase) == true)
                 .ToList();
         var selected = !string.IsNullOrWhiteSpace(selectedEventId)
             ? snapshot.Bans.FirstOrDefault(ban =>
@@ -257,7 +264,7 @@ public sealed class DragnetLedgerService
         html.Append("</div><a class=\"webfront-link\" href=\"/\" aria-label=\"Return to IW4MAdmin webfront\">Back to IW4MAdmin</a></div></header>");
         html.Append("<form class=\"tools\" method=\"get\" action=\"/dragnet/ledger\"><input name=\"q\" value=\"");
         html.Append(Encode(search));
-        html.Append("\" placeholder=\"Search player, network ID, reason, or origin\"><button type=\"submit\">Search</button></form>");
+        html.Append("\" placeholder=\"Search player, admin, network ID, reason, or origin\"><button type=\"submit\">Search</button></form>");
         html.AppendLine("<div class=\"table\"><table><thead><tr><th>Player</th><th>Origin</th><th>Type</th><th>Status</th><th>Reconciliation</th><th>Accepted</th><th>Enforced servers</th><th>Issued</th></tr></thead><tbody>");
         foreach (var ban in filtered)
         {
@@ -282,6 +289,8 @@ public sealed class DragnetLedgerService
             html.Append(Encode(ban.OriginName));
             html.Append("<div class=\"muted\">");
             html.Append(Encode(ban.OriginServerName));
+            html.Append(" · issued by ");
+            html.Append(Encode(ban.AdminName ?? "Unknown"));
             html.Append("</div></td><td>");
             html.Append(Encode(ban.PenaltyKind));
             html.Append("</td><td class=\"status ");
@@ -331,6 +340,7 @@ public sealed class DragnetLedgerService
         AppendField(html, "Reason", ban.Reason);
         AppendField(html, "Network ID", $"{ban.PlayerNetworkId} {ban.PlayerGame}".Trim());
         AppendField(html, "Origin", $"{ban.OriginName} / {ban.OriginServerName}");
+        AppendField(html, "Issued by", ban.AdminName ?? "Unknown");
         AppendField(html, "Status", ban.Status);
         AppendField(html, "Reconciliation", ban.ReconciliationStatus);
         AppendField(html, "Peer acceptance", $"{ban.AcceptedNetworkCount} of {ban.EligibleNetworkCount} known peer networks");
@@ -458,6 +468,7 @@ public sealed record DragnetLedgerBan
     public required string Reason { get; init; }
     public required string OriginName { get; init; }
     public required string OriginServerName { get; init; }
+    public string? AdminName { get; init; }
     public required string PenaltyKind { get; init; }
     public required DateTimeOffset CreatedAtUtc { get; init; }
     public DateTimeOffset? ExpiresAtUtc { get; init; }
