@@ -5,7 +5,8 @@ public enum DragnetNotificationType
     NewBan,
     NewLift,
     EvidenceUpdated,
-    StaleReview
+    StaleReview,
+    UpdateInstalled
 }
 
 public sealed record DragnetNotification

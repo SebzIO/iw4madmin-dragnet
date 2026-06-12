@@ -707,6 +707,7 @@ public sealed class DragnetWebfrontService
         meta.TryGetValue("StalePendingReviewHours", out var staleReviewHoursValue);
         meta.TryGetValue("PeerQuarantineMinutes", out var peerQuarantineMinutesValue);
         meta.TryGetValue("QuarantinedPeerProbeMinutes", out var quarantinedPeerProbeMinutesValue);
+        meta.TryGetValue("AutoUpdateEnabled", out var autoUpdateEnabledValue);
         meta.TryGetValue("InGameNotificationSummariesEnabled", out var inGameSummariesValue);
         meta.TryGetValue("InGameNotificationSummaryMinutes", out var summaryMinutesValue);
         meta.TryGetValue("NotificationWebhookUrl", out var notificationWebhookUrl);
@@ -810,6 +811,7 @@ public sealed class DragnetWebfrontService
         _configuration.StalePendingReviewAfter = TimeSpan.FromHours(staleReviewHours);
         _configuration.PeerQuarantineAfter = TimeSpan.FromMinutes(peerQuarantineMinutes);
         _configuration.QuarantinedPeerProbeInterval = TimeSpan.FromMinutes(quarantinedPeerProbeMinutes);
+        _configuration.AutoUpdateEnabled = IsEnabledValue(autoUpdateEnabledValue);
         _configuration.InGameNotificationSummariesEnabled = IsEnabledValue(inGameSummariesValue);
         _configuration.InGameNotificationSummaryInterval = TimeSpan.FromMinutes(summaryMinutes);
         _configuration.NotificationWebhookUrl = string.IsNullOrWhiteSpace(notificationWebhookUrl)
@@ -1131,9 +1133,12 @@ public sealed class DragnetWebfrontService
             html.Append(" · ");
             html.Append(Encode(notification.Type.ToString()));
             html.Append("</div></div><div class=\"flex items-center gap-2\">");
-            html.Append("<a data-enhance-nav=\"false\" class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\" href=\"");
-            html.Append(BuildDashboardUri(filter, notification.EventId));
-            html.Append("\"><i class=\"ph ph-arrow-square-out mr-1\"></i>Open event</a>");
+            if (!string.IsNullOrWhiteSpace(notification.EventId))
+            {
+                html.Append("<a data-enhance-nav=\"false\" class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\" href=\"");
+                html.Append(BuildDashboardUri(filter, notification.EventId));
+                html.Append("\"><i class=\"ph ph-arrow-square-out mr-1\"></i>Open event</a>");
+            }
             AppendNotificationActionButton(
                 html,
                 notification.NotificationId,
@@ -1869,6 +1874,13 @@ public sealed class DragnetWebfrontService
             },
             new()
             {
+                ["Name"] = "AutoUpdateEnabled",
+                ["Label"] = "Automatically install official Dragnet updates (yes/no)",
+                ["Value"] = _configuration.AutoUpdateEnabled ? "yes" : "no",
+                ["Placeholder"] = "yes"
+            },
+            new()
+            {
                 ["Name"] = "StalePendingReviewHours",
                 ["Label"] = "Stale review threshold (hours)",
                 ["Value"] = Math.Max(1, (int)_configuration.StalePendingReviewAfter.TotalHours).ToString(),
@@ -1990,7 +2002,13 @@ public sealed class DragnetWebfrontService
 
         html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 px-4 py-3\">");
         html.Append("<div class=\"text-xs text-muted\">Release status</div><div class=\"mt-1 font-medium\">");
-        if (update.UpdateAvailable)
+        if (update.RestartRequired)
+        {
+            html.Append("<span class=\"text-warning\">Installed ");
+            html.Append(Encode(update.InstalledVersion ?? "update"));
+            html.Append("; restart required</span>");
+        }
+        else if (update.UpdateAvailable)
         {
             html.Append("<span class=\"text-warning\">Update available: ");
             html.Append(Encode(update.LatestVersion ?? "new release"));
@@ -2026,10 +2044,19 @@ public sealed class DragnetWebfrontService
             html.Append(Encode(Shorten(update.CheckError, 120)));
             html.Append("</div>");
         }
+        if (!string.IsNullOrWhiteSpace(update.InstallError))
+        {
+            html.Append("<div class=\"mt-1 text-xs text-warning break-words\">Auto-update failed: ");
+            html.Append(Encode(Shorten(update.InstallError, 120)));
+            html.Append("</div>");
+        }
 
         html.AppendLine("</div></div>");
         html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 px-4 py-3 flex flex-col justify-center\">");
         html.AppendLine("<div class=\"text-xs text-muted\">Release channel</div>");
+        html.Append("<div class=\"mt-1 text-xs text-muted\">Auto-update ");
+        html.Append(update.AutoUpdateEnabled ? "enabled" : "disabled");
+        html.AppendLine("</div>");
         if (update.UpdateAvailable && !string.IsNullOrWhiteSpace(update.ReleaseUrl))
         {
             html.Append("<a class=\"mt-1 text-primary hover:underline break-words\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"");

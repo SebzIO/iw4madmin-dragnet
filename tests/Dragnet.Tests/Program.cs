@@ -9,6 +9,7 @@ using Dragnet.Transport;
 using Dragnet.Web;
 using Microsoft.Extensions.Logging;
 using SharedLibraryCore.Interfaces;
+using System.IO.Compression;
 using System.Text.Json;
 
 var tests = new (string Name, Func<Task> Test)[]
@@ -42,7 +43,8 @@ var tests = new (string Name, Func<Task> Test)[]
     ("update service compares release versions", TestUpdateVersionComparisonAsync),
     ("update service reads GitHub release metadata", TestUpdateReleaseMetadataAsync),
     ("update service falls back to GitHub release feed", TestUpdateReleaseFeedFallbackAsync),
-    ("update service refreshes stale dashboard loads once", TestUpdatePageLoadRefreshAsync)
+    ("update service refreshes stale dashboard loads once", TestUpdatePageLoadRefreshAsync),
+    ("update service safely stages official releases and notifies administrators", TestAutomaticUpdateInstallAsync)
 };
 
 var failed = 0;
@@ -2130,6 +2132,7 @@ static async Task TestUpdateReleaseMetadataAsync()
     var configuration = new DragnetConfiguration
     {
         UpdateCheckEnabled = true,
+        AutoUpdateEnabled = false,
         ReleaseApiUrl = "https://api.example.test/releases/latest"
     };
     using var httpClient = new HttpClient(new StaticResponseHandler(
@@ -2165,6 +2168,7 @@ static async Task TestUpdateReleaseFeedFallbackAsync()
     var configuration = new DragnetConfiguration
     {
         UpdateCheckEnabled = true,
+        AutoUpdateEnabled = false,
         ReleaseApiUrl = "https://api.example.test/releases/latest",
         ReleaseFeedUrl = "https://example.test/releases.atom"
     };
@@ -2211,6 +2215,7 @@ static async Task TestUpdatePageLoadRefreshAsync()
     var configuration = new DragnetConfiguration
     {
         UpdateCheckEnabled = true,
+        AutoUpdateEnabled = false,
         PageLoadUpdateCheckMaxAge = TimeSpan.FromMinutes(5),
         ReleaseApiUrl = "https://api.example.test/releases/latest"
     };
@@ -2234,6 +2239,91 @@ static async Task TestUpdatePageLoadRefreshAsync()
 
     Assert.Equal(1, handler.RequestCount, "concurrent and recent page loads should share the cached update check");
     Assert.Equal("0.2.0", updateService.Status.LatestVersion, "page-load refresh should populate release metadata");
+}
+
+static async Task TestAutomaticUpdateInstallAsync()
+{
+    await using var testDir = new TestDirectory();
+    var deployedPath = System.IO.Path.Combine(testDir.Path, "Dragnet.dll");
+    File.Copy(typeof(DragnetUpdateService).Assembly.Location, deployedPath);
+    var version = DragnetBuildInfo.Version;
+    var tag = $"v{version}";
+    var assetUrl =
+        $"https://github.com/SebzIO/iw4madmin-dragnet/releases/download/{tag}/" +
+        $"Dragnet.IW4MAdmin.Plugin-{tag}.zip";
+    var packageBytes = CreateReleasePackage(tag, typeof(DragnetUpdateService).Assembly.Location);
+    var configuration = new DragnetConfiguration
+    {
+        UpdateCheckEnabled = true,
+        AutoUpdateEnabled = true,
+        ReleaseApiUrl = "https://api.example.test/releases/latest"
+    };
+    var notificationStore = new DragnetNotificationStore(System.IO.Path.Combine(testDir.Path, "notifications"));
+    await notificationStore.LoadAsync(CancellationToken.None);
+    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
+    await eventStore.LoadAsync(CancellationToken.None);
+    using var notificationService = new DragnetNotificationService(
+        configuration,
+        notificationStore,
+        eventStore,
+        () => null!,
+        new TestLogger<DragnetNotificationService>());
+    using var httpClient = new HttpClient(new RoutingResponseHandler(request =>
+    {
+        if (request.RequestUri == new Uri(configuration.ReleaseApiUrl))
+        {
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    $$"""
+                    {
+                      "tag_name": "{{tag}}",
+                      "html_url": "https://github.com/SebzIO/iw4madmin-dragnet/releases/tag/{{tag}}",
+                      "assets": [
+                        {
+                          "name": "Dragnet.IW4MAdmin.Plugin-{{tag}}.zip",
+                          "browser_download_url": "{{assetUrl}}"
+                        }
+                      ]
+                    }
+                    """)
+            };
+        }
+
+        return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(packageBytes)
+        };
+    }));
+    using var updateService = new DragnetUpdateService(
+        configuration,
+        new TestLogger<DragnetUpdateService>(),
+        httpClient,
+        notificationService: notificationService,
+        pluginPath: deployedPath,
+        currentVersion: "0.1.0-beta.1");
+
+    await updateService.RefreshForPageLoadAsync(CancellationToken.None);
+
+    Assert.Equal(version, updateService.Status.InstalledVersion,
+        "auto-update should stage the advertised DLL version");
+    Assert.True(updateService.Status.RestartRequired,
+        "staged update should require an IW4MAdmin restart");
+    Assert.Null(updateService.Status.InstallError,
+        "valid official package should install without an error");
+    Assert.True(File.Exists(System.IO.Path.Combine(testDir.Path, "Dragnet.dll.bak-0.1.0-beta.1")),
+        "auto-update should back up the deployed DLL");
+    var deployedVersion = System.Diagnostics.FileVersionInfo
+        .GetVersionInfo(deployedPath)
+        .ProductVersion?
+        .Split('+', 2)[0];
+    Assert.Equal(version, deployedVersion,
+        "deployed DLL should match the release version");
+    var notification = (await notificationStore.ListAsync(CancellationToken.None)).Single();
+    Assert.Equal(DragnetNotificationType.UpdateInstalled, notification.Type,
+        "successful auto-update should create an administrator notification");
+    Assert.Contains("Restart IW4MAdmin", notification.Message,
+        "update notification should explain the required restart");
 }
 
 static async Task TestHeartbeatValidationAsync()
@@ -2471,6 +2561,22 @@ static DragnetHeartbeatRequest CreateHeartbeatRequest(string originId) => new()
         PublicEndpoint = $"https://{originId}.example/dragnet"
     }
 };
+
+static byte[] CreateReleasePackage(string tag, string pluginPath)
+{
+    using var stream = new MemoryStream();
+    using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
+    {
+        var entry = archive.CreateEntry(
+            $"Dragnet.IW4MAdmin.Plugin-{tag}/Plugins/Dragnet.dll",
+            CompressionLevel.NoCompression);
+        using var destination = entry.Open();
+        using var source = File.OpenRead(pluginPath);
+        source.CopyTo(destination);
+    }
+
+    return stream.ToArray();
+}
 
 static DragnetPeerInfo CreateSignedPeerInfo(
     DragnetIdentityService identityService,

@@ -116,6 +116,7 @@ Example configuration:
   "PeerQuarantineAfter": "00:30:00",
   "QuarantinedPeerProbeInterval": "00:10:00",
   "UpdateCheckEnabled": true,
+  "AutoUpdateEnabled": true,
   "UpdateCheckInterval": "06:00:00",
   "PageLoadUpdateCheckMaxAge": "00:05:00",
   "ReleaseApiUrl": "https://api.github.com/repos/SebzIO/iw4madmin-dragnet/releases/latest",
@@ -175,6 +176,8 @@ For a locally originated ban, administrators with `ReviewPermission` can use **A
 `MaxKnownPeersPerHeartbeat` limits the number of peer advertisements carried in one heartbeat, not the total number of peers Dragnet can store or contact. Eligible peers are rotated using their persisted `LastAdvertisedAtUtc` timestamp. Never-advertised peers go first, then the least recently advertised peers; verified and fully healthy peers break otherwise equal ties. Stale peers, visibly errored peers, and the heartbeat counterpart are omitted. This keeps heartbeat payloads bounded while ensuring networks beyond the configured limit still receive discovery exposure.
 
 The dashboard checks the official GitHub releases API in the background and caches the result. Opening the Dragnet dashboard refreshes release information when the cached check is older than `PageLoadUpdateCheckMaxAge` (five minutes by default). Concurrent page loads share the same check. If the API is unavailable or rate-limited, Dragnet falls back to the repository's public Atom release feed. `UpdateCheckEnabled` disables outbound checks, while `UpdateCheckInterval` controls the background refresh interval.
+
+When `AutoUpdateEnabled` is enabled, Dragnet downloads only the expected release ZIP from the official `SebzIO/iw4madmin-dragnet` GitHub release, validates the packaged DLL name and version, backs up the currently deployed DLL, and atomically stages the replacement. Dragnet does not restart IW4MAdmin automatically. Administrators receive a persistent notification that the update was installed and that IW4MAdmin must be restarted. A failed validation or installation leaves the running and deployed DLL unchanged.
 
 ## Automatic message tokens
 

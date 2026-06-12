@@ -119,6 +119,20 @@ public sealed class DragnetNotificationService : IDisposable
         }, token);
     }
 
+    public Task NotifyUpdateInstalledAsync(
+        string version,
+        CancellationToken token) =>
+        AddAsync(new DragnetNotification
+        {
+            NotificationId = $"{DragnetNotificationType.UpdateInstalled}:{version}",
+            Type = DragnetNotificationType.UpdateInstalled,
+            EventId = "",
+            Title = $"Dragnet {version} update installed",
+            Message = "The new plugin DLL is staged. Restart IW4MAdmin to load this update.",
+            OriginName = "Local Dragnet",
+            CreatedAtUtc = DateTimeOffset.UtcNow
+        }, token);
+
     public async Task SyncStaleReviewsAsync(CancellationToken token)
     {
         if (!_configuration.NotificationsEnabled ||
@@ -219,9 +233,10 @@ public sealed class DragnetNotificationService : IDisposable
             var lifts = unread.Count(item => item.Type is DragnetNotificationType.NewLift);
             var evidence = unread.Count(item => item.Type is DragnetNotificationType.EvidenceUpdated);
             var stale = unread.Count(item => item.Type is DragnetNotificationType.StaleReview);
+            var updates = unread.Count(item => item.Type is DragnetNotificationType.UpdateInstalled);
             client.Tell(
                 $"^5Dragnet:^7 {unread.Count} unread alert(s): {bans} ban(s), {lifts} lift(s), " +
-                $"{evidence} evidence update(s), {stale} stale review(s).");
+                $"{evidence} evidence update(s), {stale} stale review(s), {updates} installed update(s).");
             _lastInGameSummary[client.ClientId] = now;
         }
     }

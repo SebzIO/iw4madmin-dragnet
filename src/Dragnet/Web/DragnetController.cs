@@ -226,6 +226,11 @@ public sealed class DragnetController : ControllerBase
             UpdateCheckEnabled = update.CheckEnabled,
             UpdateCheckedAtUtc = update.CheckedAtUtc,
             UpdateCheckError = update.CheckError,
+            AutoUpdateEnabled = update.AutoUpdateEnabled,
+            InstalledUpdateVersion = update.InstalledVersion,
+            UpdateInstalledAtUtc = update.InstalledAtUtc,
+            RestartRequired = update.RestartRequired,
+            UpdateInstallError = update.InstallError,
             PublicEndpoint = _configuration.PublicEndpoint,
             PeerCount = activePeers.Count,
             HealthyPeerCount = activePeers.Count(peer => peer.ConsecutiveFailures == 0),
@@ -320,6 +325,16 @@ public sealed record DragnetStatusResponse
     public DateTimeOffset? UpdateCheckedAtUtc { get; init; }
 
     public string? UpdateCheckError { get; init; }
+
+    public required bool AutoUpdateEnabled { get; init; }
+
+    public string? InstalledUpdateVersion { get; init; }
+
+    public DateTimeOffset? UpdateInstalledAtUtc { get; init; }
+
+    public required bool RestartRequired { get; init; }
+
+    public string? UpdateInstallError { get; init; }
 
     public string? PublicEndpoint { get; init; }
 

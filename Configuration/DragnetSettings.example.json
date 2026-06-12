@@ -15,6 +15,7 @@
   "peerStaleAfter": "00:10:00",
   "peerFailureThreshold": 3,
   "updateCheckEnabled": true,
+  "autoUpdateEnabled": true,
   "updateCheckInterval": "06:00:00",
   "pageLoadUpdateCheckMaxAge": "00:05:00",
   "releaseApiUrl": "https://api.github.com/repos/SebzIO/iw4madmin-dragnet/releases/latest",
