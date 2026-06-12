@@ -897,8 +897,8 @@ static async Task TestNetworkProfileAsync()
     Assert.Contains("This instance's trust and review history", html!,
         "profile should label local review metrics");
     Assert.Contains("Approved Player", html!, "profile should list recent submitted bans");
-    Assert.Contains("/dragnet/ledger?id=profile-approved", html!,
-        "profile ban rows should link to ledger details");
+    Assert.False(html!.Contains("/dragnet/ledger", StringComparison.OrdinalIgnoreCase),
+        "network profile HTML should not link to removed standalone ledger routes");
     Assert.False(html!.Contains("private proxy response body", StringComparison.Ordinal),
         "public profile must not expose raw transport failure content");
     Assert.True(await service.GetAsync("unknown-network", CancellationToken.None) is null,
@@ -1031,7 +1031,7 @@ static async Task TestNotificationWebhookAsync()
             .GetArrayLength(),
         "Discord webhook should suppress accidental mentions");
 
-    await service.NotifyUpdateInstalledAsync("0.1.0-beta.20", CancellationToken.None);
+    await service.NotifyUpdateInstalledAsync("0.1.0-beta.21", CancellationToken.None);
 
     Assert.Equal(2, handler.RequestCount,
         "update notification creation should complete one webhook request before returning");
@@ -1854,6 +1854,21 @@ static async Task TestPublicLedgerAsync()
         },
         ReviewState = DragnetReviewState.PendingLift
     }, CancellationToken.None);
+    for (var index = 0; index < 9; index++)
+    {
+        await eventStore.UpsertAsync(new DragnetStoredEvent
+        {
+            Event = CreateEnvelope($"page-origin-{index}", DragnetEventType.BanCreated) with
+            {
+                EventId = $"public-ledger-page-ban-{index}",
+                PlayerName = $"Paged Player {index}",
+                Iw4mAdminPenaltyId = 200 + index,
+                CreatedAtUtc = ban.CreatedAtUtc.AddMinutes(10 + index)
+            },
+            ReviewState = DragnetReviewState.PendingBan
+        }, CancellationToken.None);
+    }
+
     var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
     await peerStore.LoadAsync(configuration, CancellationToken.None);
     await peerStore.UpsertAsync(new DragnetPeerInfo
@@ -1892,67 +1907,20 @@ static async Task TestPublicLedgerAsync()
         ledgerBan.Attestations.Any(attestation =>
             attestation.NetworkOriginId.Equals(ban.OriginId, StringComparison.OrdinalIgnoreCase)),
         "ledger should expose only peer propagation attestations");
-    var html = await ledger.RenderHtmlAsync(ban.EventId, "Ledger", CancellationToken.None);
-    Assert.Contains("Dragnet Public Ban Ledger", html, "public ledger should render its identity");
-    Assert.Contains(
-        "href=\"/\" aria-label=\"Return to IW4MAdmin webfront\">Back to IW4MAdmin</a>",
-        html,
-        "public ledger should provide a direct route back to the IW4MAdmin webfront");
-    Assert.Contains("Ledger Player", html, "public ledger should render searchable ban details");
-    Assert.Contains("<th>Platform</th>", html,
-        "public ledger should include a dedicated platform column");
-    Assert.Contains("<td>IW4</td><td>origin-ledger", html,
-        "public ledger should show the platform beside each ban row");
-    Assert.Contains("<label>Platform</label><div>IW4</div>", html,
-        "expanded ledger details should identify the platform");
-    Assert.Contains("issued by Ledger Admin", html,
-        "public ledger should identify the administrator who issued the punishment");
-    Assert.Contains("<label>Issued by</label><div>Ledger Admin</div>", html,
-        "expanded ledger details should identify the issuing administrator");
-    Assert.Contains("Coverage Network", html, "public ledger should identify attesting networks");
-    Assert.Contains("Stale Queue Network", html, "public ledger should identify stale queued reports");
-    Assert.False(html.Contains("Unavailable Network", StringComparison.Ordinal),
-        "public ledger should omit inactive networks from current coverage");
-    Assert.False(html.Contains("Never reported", StringComparison.Ordinal),
-        "inactive networks should not create missing coverage reports");
-    Assert.Contains("Consolidated events", html, "public ledger should disclose duplicate consolidation");
-    Assert.False(html.Contains("Origin Server", StringComparison.Ordinal),
-        "public ledger should not repeat implicit origin enforcement");
-    Assert.Contains("Peer network acceptance and enforcement", html,
-        "public ledger should describe attestations as peer propagation");
-    Assert.Contains("TDM, Domination, Hardpoint", html, "public ledger should name covered servers");
-    Assert.Contains("https://youtu.be/evidence", html, "public ledger should link HTTPS evidence");
-    var normalizedHtml = html.ReplaceLineEndings("\n");
-    Assert.Contains(
-        "</td></tr>\n<tr class=\"detail-row\"><td colspan=\"9\"><section class=\"detail\">",
-        normalizedHtml,
-        "selected ban details should expand directly beneath the ban row");
-    Assert.Contains(
-        $"/dragnet/ledger?id={ledgerBan.EventId}&amp;q=Ledger#ban-{ledgerBan.EventId}",
-        html,
-        "ledger selection links should preserve search and return to the expanded row");
-    Assert.False(
-        html.Contains("</tbody></table></div><section class=\"detail\">", StringComparison.Ordinal),
-        "selected ban details should not render below the entire ledger table");
-    Assert.False(html.Contains("private reviewer note", StringComparison.Ordinal),
-        "public ledger must not expose private local review notes");
+    Assert.Equal("IW4", ledgerBan.PlayerGame!, "ledger JSON projection should identify the player platform");
+    Assert.Equal("https://youtu.be/evidence", ledgerBan.EvidenceUrl!, "ledger JSON projection should expose public HTTPS evidence");
+    Assert.True(ledgerBan.Attestations.Any(attestation => attestation.NetworkName == "Coverage Network"),
+        "ledger JSON projection should identify attesting networks");
+    Assert.True(ledgerBan.Attestations.Any(attestation => attestation.NetworkName == "Stale Queue Network"),
+        "ledger JSON projection should identify stale queued reports");
+    Assert.False(ledgerBan.Attestations.Any(attestation => attestation.NetworkName == "Unavailable Network"),
+        "ledger JSON projection should omit inactive networks from current coverage");
+    Assert.True(ledgerBan.Attestations.Any(attestation =>
+            attestation.ServerNames.SequenceEqual(["TDM", "Domination", "Hardpoint"])),
+        "ledger JSON projection should name covered servers");
     Assert.Equal("Ledger Admin", ledgerBan.AdminName,
         "ledger JSON projection should include the issuing administrator");
-
-    var controller = new DragnetController(
-        null!,
-        null!,
-        null!,
-        null!,
-        null!,
-        null!,
-        null!,
-        null!,
-        null!,
-        null!,
-        null!);
-    var redirect = controller.LedgerNavigation();
-    Assert.Equal("/dragnet/ledger", redirect.Url, "ledger interaction route should redirect to the public ledger");
+    Assert.Equal(11, snapshot.Bans.Count, "ledger module should have enough rows to paginate at eight per page");
 }
 
 static async Task TestAttestationBackfillAsync()
@@ -2088,6 +2056,18 @@ static async Task TestWebfrontDashboardRendersAsync()
         identity,
         peerStore,
         () => 1);
+    var ledgerService = new DragnetLedgerService(
+        configuration,
+        eventStore,
+        peerStore,
+        () => 1,
+        identity);
+    var networkProfileService = new DragnetNetworkProfileService(
+        configuration,
+        eventStore,
+        peerStore,
+        identity,
+        () => 1);
     var notificationStore = new DragnetNotificationStore(
         System.IO.Path.Combine(testDir.Path, "notifications"));
     await notificationStore.LoadAsync(CancellationToken.None);
@@ -2107,6 +2087,8 @@ static async Task TestWebfrontDashboardRendersAsync()
         updateService,
         onboardingService,
         directoryService,
+        ledgerService,
+        networkProfileService,
         identity,
         identityService,
         configurationHandler,
@@ -2117,25 +2099,6 @@ static async Task TestWebfrontDashboardRendersAsync()
     Assert.Equal(InteractionType.TemplateContent, interaction.InteractionType, "dashboard should render as an IW4MAdmin navigation page");
     Assert.Equal(2, (int)interaction.InteractionType, "dashboard interaction type should match IW4MAdmin script nav pages");
     Assert.Equal(EFClient.Permission.SeniorAdmin, interaction.MinimumPermission, "dashboard should use configured webfront permission");
-
-    var ledgerInteraction = await webfront.CreateLedgerNavigationInteractionAsync(CancellationToken.None);
-    Assert.Equal(
-        DragnetWebfrontService.LedgerNavigationInteractionId,
-        ledgerInteraction.InteractionId,
-        "ledger navigation should register under the main sidebar");
-    Assert.Equal(InteractionType.RawContent, ledgerInteraction.InteractionType, "ledger navigation should render a redirect fallback");
-    Assert.Equal("https://local.example/dragnet/ledger", ledgerInteraction.ActionPath, "ledger navigation should open the public ledger");
-    Assert.Equal(EFClient.Permission.User, ledgerInteraction.MinimumPermission, "ledger navigation should be available to users");
-    var ledgerRedirect = await ledgerInteraction.Action(
-        0,
-        null,
-        null,
-        new Dictionary<string, string>(),
-        CancellationToken.None);
-    Assert.Contains(
-        "url=https://local.example/dragnet/ledger",
-        ledgerRedirect,
-        "ledger navigation fallback should redirect to the public ledger");
 
     var reviewInteraction = await webfront.CreateReviewInteractionAsync(CancellationToken.None);
     var trustInteraction = await webfront.CreateTrustInteractionAsync(CancellationToken.None);
@@ -2153,10 +2116,17 @@ static async Task TestWebfrontDashboardRendersAsync()
     }, CancellationToken.None);
     Assert.Contains("Peer transport", html, "dashboard should include peer section");
     Assert.Contains("Dragnet events", html, "dashboard should include event section");
+    Assert.Contains("aria-label=\"Dragnet navigation\"", html, "dashboard should include an in-page Dragnet nav menu");
+    Assert.Contains("dragnet-ledger-modal", html, "dashboard nav should open the public ledger module");
+    Assert.Contains("network-profile-", html, "dashboard should render network profile modules");
+    Assert.False(html.Contains("/dragnet/network?id=", StringComparison.OrdinalIgnoreCase),
+        "dashboard should not link to removed network profile pages");
     Assert.Contains("Notification inbox", html, "dashboard should include the notification inbox");
-    Assert.Contains("1 unread", html, "dashboard should display the administrator's unread count");
-    Assert.Contains("Acknowledgements are personal", html,
-        "dashboard should distinguish notification acknowledgement from review decisions");
+    Assert.Contains("data-tip=\"Notifications\"", html, "dashboard should expose notifications as an icon tooltip");
+    Assert.Contains("<span class=\"rounded-full bg-surface-alt px-1.5 text-xs text-muted\">1</span>", html,
+        "dashboard should display the administrator's unread count as an icon badge");
+    Assert.False(html.Contains("Acknowledgements are personal", StringComparison.Ordinal),
+        "notification module should not render the old explanatory copy");
     Assert.Contains("Deployment readiness", html, "dashboard should include onboarding diagnostics");
     Assert.False(
         html.Contains("px-4 py-3 border-b border-r border-line/60", StringComparison.Ordinal),

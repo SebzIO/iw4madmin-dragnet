@@ -22,6 +22,7 @@ public sealed class DragnetController : ControllerBase
     private readonly DragnetUpdateService _updateService;
     private readonly DragnetDirectoryService _directoryService;
     private readonly DragnetLedgerService _ledgerService;
+    private readonly DragnetWebfrontService _webfrontService;
     private readonly DragnetNetworkProfileService _networkProfileService;
     private readonly DragnetIdentityDocument _identity;
     private readonly DragnetIdentityService _identityService;
@@ -35,6 +36,7 @@ public sealed class DragnetController : ControllerBase
         DragnetUpdateService updateService,
         DragnetDirectoryService directoryService,
         DragnetLedgerService ledgerService,
+        DragnetWebfrontService webfrontService,
         DragnetNetworkProfileService networkProfileService,
         DragnetIdentityDocument identity,
         DragnetIdentityService identityService,
@@ -47,6 +49,7 @@ public sealed class DragnetController : ControllerBase
         _updateService = updateService;
         _directoryService = directoryService;
         _ledgerService = ledgerService;
+        _webfrontService = webfrontService;
         _networkProfileService = networkProfileService;
         _identity = identity;
         _identityService = identityService;
@@ -84,34 +87,20 @@ public sealed class DragnetController : ControllerBase
     [AllowAnonymous]
     [HttpGet("/dragnet/ledger")]
     [Produces("text/html")]
-    public async Task<ContentResult> Ledger(
-        [FromQuery] string? id,
-        [FromQuery] string? q,
-        CancellationToken token) =>
-        Content(await _ledgerService.RenderHtmlAsync(id, q, token), "text/html; charset=utf-8");
+    public async Task<ContentResult> Ledger(CancellationToken token) =>
+        Content(await _webfrontService.RenderPublicLedgerAsync(token), "text/html; charset=utf-8");
 
     [AllowAnonymous]
     [HttpGet("/Interaction/Render/Webfront::Nav::Main::DragnetLedger")]
-    public RedirectResult LedgerNavigation() => Redirect("/dragnet/ledger");
+    [Produces("text/html")]
+    public async Task<ContentResult> LedgerNavigation(CancellationToken token) =>
+        Content(await _webfrontService.RenderPublicLedgerAsync(token), "text/html; charset=utf-8");
 
     [AllowAnonymous]
     [HttpGet("/dragnet/ledger/data")]
     [ProducesResponseType<DragnetLedgerSnapshot>(StatusCodes.Status200OK)]
     public async Task<ActionResult<DragnetLedgerSnapshot>> LedgerData(CancellationToken token) =>
         Ok(await _ledgerService.GetSnapshotAsync(token));
-
-    [AllowAnonymous]
-    [HttpGet("/dragnet/network")]
-    [Produces("text/html")]
-    public async Task<IActionResult> NetworkProfile(
-        [FromQuery] string id,
-        CancellationToken token)
-    {
-        var html = await _networkProfileService.RenderHtmlAsync(id, token);
-        return html is null
-            ? NotFound()
-            : Content(html, "text/html; charset=utf-8");
-    }
 
     [AllowAnonymous]
     [HttpGet("/dragnet/network/data")]

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -32,6 +33,8 @@ public sealed class DragnetWebfrontService
     private readonly DragnetUpdateService _updateService;
     private readonly DragnetOnboardingService _onboardingService;
     private readonly DragnetDirectoryService _directoryService;
+    private readonly DragnetLedgerService _ledgerService;
+    private readonly DragnetNetworkProfileService _networkProfileService;
     private readonly DragnetIdentityDocument _identity;
     private readonly DragnetIdentityService _identityService;
     private readonly IConfigurationHandlerV2<DragnetConfiguration> _configurationHandler;
@@ -47,6 +50,8 @@ public sealed class DragnetWebfrontService
         DragnetUpdateService updateService,
         DragnetOnboardingService onboardingService,
         DragnetDirectoryService directoryService,
+        DragnetLedgerService ledgerService,
+        DragnetNetworkProfileService networkProfileService,
         DragnetIdentityDocument identity,
         DragnetIdentityService identityService,
         IConfigurationHandlerV2<DragnetConfiguration> configurationHandler,
@@ -61,6 +66,8 @@ public sealed class DragnetWebfrontService
         _updateService = updateService;
         _onboardingService = onboardingService;
         _directoryService = directoryService;
+        _ledgerService = ledgerService;
+        _networkProfileService = networkProfileService;
         _identity = identity;
         _identityService = identityService;
         _configurationHandler = configurationHandler;
@@ -81,25 +88,6 @@ public sealed class DragnetWebfrontService
             Source = "Dragnet",
             Action = async (originId, _, _, meta, actionToken) =>
                 await RenderDashboardAsync(originId, meta, actionToken)
-        };
-
-        return Task.FromResult(interaction);
-    }
-
-    public Task<IInteractionData> CreateLedgerNavigationInteractionAsync(CancellationToken token)
-    {
-        var ledgerUrl = BuildLedgerUrl();
-        IInteractionData interaction = new InteractionData
-        {
-            Name = "Dragnet Ledger",
-            Description = "Public Dragnet ban coverage ledger",
-            DisplayMeta = "ph-list-magnifying-glass",
-            InteractionId = LedgerNavigationInteractionId,
-            MinimumPermission = EFClient.Permission.User,
-            InteractionType = InteractionType.RawContent,
-            ActionPath = ledgerUrl,
-            Source = "Dragnet",
-            Action = (_, _, _, _, _) => Task.FromResult(RenderLedgerRedirect(ledgerUrl))
         };
 
         return Task.FromResult(interaction);
@@ -195,6 +183,66 @@ public sealed class DragnetWebfrontService
         return Task.FromResult(interaction);
     }
 
+    public Task<IInteractionData> CreateLedgerNavigationInteractionAsync(CancellationToken token)
+    {
+        IInteractionData interaction = new InteractionData
+        {
+            Name = "Dragnet Ledger",
+            Description = "Dragnet Ledger",
+            DisplayMeta = "ph-list-magnifying-glass",
+            InteractionId = LedgerNavigationInteractionId,
+            MinimumPermission = _configuration.WebfrontPermission,
+            InteractionType = InteractionType.TemplateContent,
+            Source = "Dragnet",
+            Action = async (originId, _, _, meta, actionToken) =>
+            {
+                var mergedMeta = meta is null
+                    ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    : new Dictionary<string, string>(meta, StringComparer.OrdinalIgnoreCase);
+                mergedMeta["module"] = "ledger";
+                return await RenderDashboardAsync(originId, mergedMeta, actionToken);
+            }
+        };
+
+        return Task.FromResult(interaction);
+    }
+
+    public async Task<string> RenderPublicLedgerAsync(CancellationToken token)
+    {
+        var snapshot = await _ledgerService.GetSnapshotAsync(token);
+        var html = new StringBuilder();
+        html.AppendLine("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Dragnet Public Ledger</title>");
+        html.AppendLine("<link rel=\"stylesheet\" href=\"https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css\">");
+        AppendDashboardStyles(html);
+        html.AppendLine("""
+<style>
+body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-ui,sans-serif;letter-spacing:0}
+.dragnet-public *{box-sizing:border-box}
+.dragnet-public button{font:inherit;color:inherit;background:transparent}
+.dragnet-public a{color:#f72585;text-decoration:none}.dragnet-public a:hover{text-decoration:underline}
+.dragnet-public-shell{min-height:100vh;padding:34px 24px}
+.dragnet-public-card{box-shadow:0 24px 80px rgba(0,0,0,.32)}
+.dragnet-public-title{font-size:30px;line-height:1.1;margin:0 0 8px}
+.dragnet-public-sub{color:#c7bdd0}
+.dragnet-public .dragnet-modal{background:#17111d}
+.dragnet-public table{min-width:1040px}
+.dragnet-public th{color:#bfb2cb;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.dragnet-public td,.dragnet-public th{vertical-align:middle}
+</style>
+""");
+        html.AppendLine("</head><body class=\"dragnet-public\"><main class=\"dragnet-public-shell\">");
+        html.AppendLine("<div class=\"max-w-6xl mx-auto\"><div class=\"mb-4 flex flex-col gap-2 md:flex-row md:items-end md:justify-between\"><div><h1 class=\"dragnet-public-title\">Dragnet Public Ledger</h1><div class=\"dragnet-public-sub\">Public peer moderation records from this Dragnet network.</div></div><a class=\"inline-flex items-center rounded-md border border-line px-3 py-1.5 hover:bg-surface-hover\" href=\"/\"><i class=\"ph ph-arrow-left mr-1\"></i>Back to IW4MAdmin</a></div>");
+        html.AppendLine("<div class=\"dragnet-public-card rounded-lg border border-line bg-surface/50 p-3\">");
+        html.AppendLine("<div class=\"flex items-center justify-between gap-3 pb-3\"><h2 class=\"text-lg font-semibold\"><i class=\"ph ph-list-magnifying-glass mr-2\"></i>Public ledger</h2>");
+        html.Append(BuildLedgerModuleControls(snapshot, 1));
+        html.AppendLine("</div>");
+        AppendLedgerModule(html, snapshot, 1);
+        html.AppendLine("</div></div>");
+        AppendLedgerDetailModals(html, snapshot);
+        html.AppendLine("</main></body></html>");
+        return html.ToString();
+    }
+
     private async Task<string> RenderDashboardAsync(
         int originId,
         IDictionary<string, string>? meta,
@@ -209,6 +257,11 @@ public sealed class DragnetWebfrontService
         var selectedEventId = meta is not null && meta.TryGetValue("eventId", out var eventId)
             ? eventId
             : null;
+        var ledgerPage = meta is not null &&
+                         meta.TryGetValue("ledgerPage", out var ledgerPageValue) &&
+                         int.TryParse(ledgerPageValue, out var parsedLedgerPage)
+            ? Math.Max(1, parsedLedgerPage)
+            : 1;
         var pendingBans = events.Count(item => item.ReviewState is DragnetReviewState.PendingBan);
         var pendingLifts = events.Count(item => item.ReviewState is DragnetReviewState.PendingLift);
         var queuedImports = events.Count(item =>
@@ -229,6 +282,11 @@ public sealed class DragnetWebfrontService
             .ToList();
         var displayedPeers = peers
             .Where(peer => !DragnetPeerHealth.IsQuarantined(peer))
+            .ToList();
+        var peerTableRows = displayedPeers
+            .Concat(quarantinedPeers)
+            .GroupBy(peer => peer.OriginId, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
             .ToList();
         var healthyPeers = activePeers.Count(peer => peer.ConsecutiveFailures == 0);
         var stalePeers = peers.Count(peer =>
@@ -259,6 +317,7 @@ public sealed class DragnetWebfrontService
         var pendingDeliveryCount = Math.Max(0, deliveryTargetCount - acknowledgedDeliveryCount);
         var updateStatus = _updateService.Status;
         var filteredEvents = FilterEvents(events, filter).Take(50).ToList();
+        var eventRows = events.Take(50).ToList();
         var bulkApprovableEvents = filteredEvents.Where(IsBulkApprovable).ToList();
         var selectedEvent = ResolveSelectedEvent(events, selectedEventId) ?? filteredEvents.FirstOrDefault();
         IReadOnlyList<DragnetNotification> unreadNotifications = [];
@@ -267,14 +326,31 @@ public sealed class DragnetWebfrontService
             await _notificationService.SyncStaleReviewsAsync(token);
             unreadNotifications = await _notificationService.ListForClientAsync(originId, token);
         }
+        var networkProfileIds = directory
+            .Select(entry => entry.OriginId)
+            .Concat(displayedPeers.Select(peer => peer.OriginId))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var networkProfiles = new List<DragnetNetworkProfile>();
+        foreach (var profileId in networkProfileIds)
+        {
+            if (await _networkProfileService.GetAsync(profileId, token) is { } profile)
+            {
+                networkProfiles.Add(profile);
+            }
+        }
 
         var html = new StringBuilder();
         html.AppendLine("<div class=\"space-y-6\">");
+        AppendDashboardStyles(html);
+        AppendDashboardNavigation(
+            html,
+            unreadNotifications.Count,
+            directory.Count,
+            peerTableRows.Count,
+            filteredEvents.Count);
         AppendOperationalHeader(html, updateStatus, now);
-        AppendNotificationInbox(html, unreadNotifications, filter, now);
         AppendOnboardingPanel(html, onboarding);
-        AppendDeploymentGuide(html);
-        AppendDirectoryPanel(html, directory, now);
         html.AppendLine("<div class=\"grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-4\">");
         AppendMetric(html, "Pending bans", pendingBans.ToString());
         AppendMetric(html, "Pending lifts", pendingLifts.ToString());
@@ -295,129 +371,180 @@ public sealed class DragnetWebfrontService
         AppendMetric(html, "Pending deliveries", pendingDeliveryCount.ToString());
         html.AppendLine("</div>");
 
-        html.AppendLine("<div class=\"rounded-lg bg-surface/50 p-2\">");
-        html.AppendLine("<div class=\"px-3 py-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2\">");
-        html.AppendLine("<h3 class=\"text-lg font-semibold\">Peer transport</h3>");
-        html.Append("<span class=\"text-sm text-muted\">Endpoint: ");
-        html.Append(Encode(_configuration.PublicEndpoint ?? "not configured"));
-        html.AppendLine("</span>");
-        html.AppendLine("</div>");
-        html.AppendLine("<div class=\"rounded-md bg-surface-alt/20 overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted\"><tr><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Endpoint</th><th class=\"px-4 py-3\">Source</th><th class=\"px-4 py-3\">Last seen</th><th class=\"px-4 py-3\">Last advertised</th><th class=\"px-4 py-3\">Delivery</th><th class=\"px-4 py-3\">Status</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
-
-        if (displayedPeers.Count == 0)
-        {
-            html.AppendLine("<tr><td colspan=\"8\" class=\"px-4 py-6 text-center text-muted\">No active or recovering peers.</td></tr>");
-        }
-        else
-        {
-            foreach (var peer in displayedPeers.OrderByDescending(peer => peer.LastSeenUtc))
-            {
-                html.AppendLine("<tr class=\"hover:bg-surface-alt/30\">");
-                html.Append("<td class=\"px-4 py-3 font-medium\">");
-                html.Append("<a class=\"text-primary hover:underline\" href=\"/dragnet/network?id=");
-                html.Append(Uri.EscapeDataString(peer.OriginId));
-                html.Append("\">");
-                html.Append(Encode(peer.OriginName));
-                html.Append("</a>");
-                html.AppendLine("</td>");
-                html.Append("<td class=\"px-4 py-3 text-muted\">");
-                html.Append(Encode(peer.Endpoint));
-                html.AppendLine("</td>");
-                html.Append("<td class=\"px-4 py-3 text-muted\">");
-                html.Append(peer.IsBootstrap ? "Bootstrap" : "Discovered");
-                html.AppendLine("</td>");
-                html.Append("<td class=\"px-4 py-3 text-muted\">");
-                html.Append(Encode(DescribeAge(now - peer.LastSeenUtc)));
-                html.AppendLine("</td>");
-                html.Append("<td class=\"px-4 py-3 text-muted\">");
-                html.Append(peer.LastAdvertisedAtUtc is null
-                    ? "Never"
-                    : Encode(DescribeAge(now - peer.LastAdvertisedAtUtc.Value)));
-                html.AppendLine("</td>");
-                html.Append("<td class=\"px-4 py-3 text-muted\">");
-                AppendDeliveryStatus(html, peer, deliverableEvents, now);
-                html.AppendLine("</td>");
-                html.Append("<td class=\"px-4 py-3\">");
-                AppendPeerStatus(html, peer, now);
-                html.AppendLine("</td>");
-                html.Append("<td class=\"px-4 py-3 text-right\">");
-                AppendPeerButtons(html, peer);
-                html.AppendLine("</td>");
-                html.AppendLine("</tr>");
-            }
-        }
-
-        html.AppendLine("</tbody></table></div></div>");
-        AppendQuarantinedPeers(html, quarantinedPeers, now);
-
         if (selectedEvent is not null)
         {
             AppendEventDetail(html, selectedEvent, now);
         }
 
-        html.AppendLine("<div class=\"rounded-lg bg-surface/50 p-2\">");
-        html.AppendLine("<div class=\"px-3 py-2 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between\">");
-        html.AppendLine("<h3 class=\"text-lg font-semibold\">Dragnet events</h3>");
-        AppendBulkReviewControls(html, bulkApprovableEvents.Count);
-        AppendFilterLinks(html, filter);
-        html.AppendLine("</div>");
-        html.AppendLine("<div class=\"rounded-md bg-surface-alt/20 overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted\"><tr><th class=\"px-4 py-3 w-10\"><input type=\"checkbox\" aria-label=\"Select all eligible bans\" onclick=\"document.querySelectorAll('.dragnet-bulk-ban').forEach(function(c){c.checked=this.checked;},this)\"></th><th class=\"px-4 py-3\">Player</th><th class=\"px-4 py-3\">Origin</th><th class=\"px-4 py-3\">Trust</th><th class=\"px-4 py-3\">Type</th><th class=\"px-4 py-3\">State</th><th class=\"px-4 py-3\">Import</th><th class=\"px-4 py-3\">Created</th><th class=\"px-4 py-3 text-right\">Actions</th></tr></thead><tbody>");
+        AppendModalStart(
+            html,
+            "dragnet-notification-modal",
+            "Notification inbox",
+            "ph-bell",
+            BuildNotificationModuleControls(unreadNotifications));
+        AppendNotificationInbox(html, unreadNotifications, filter, now);
+        AppendModalEnd(html);
+        AppendModalStart(html, "dragnet-guide-modal", "Deployment guide", "ph-clipboard-text");
+        AppendDeploymentGuide(html);
+        AppendModalEnd(html);
+        AppendModalStart(
+            html,
+            "dragnet-directory-modal",
+            "Community directory",
+            "ph-address-book");
+        AppendDirectoryPanel(html, directory, now);
+        AppendModalEnd(html);
+        AppendNetworkProfileModals(html, networkProfiles);
+        var ledgerSnapshot = await _ledgerService.GetSnapshotAsync(token);
+        AppendModalStart(
+            html,
+            "dragnet-ledger-modal",
+            "Public ledger",
+            "ph-list-magnifying-glass",
+            BuildLedgerModuleControls(ledgerSnapshot, ledgerPage));
+        AppendLedgerModule(html, ledgerSnapshot, ledgerPage);
+        AppendModalEnd(html);
+        AppendLedgerDetailModals(html, ledgerSnapshot);
 
-        foreach (var item in filteredEvents)
+        AppendModalStart(html, "dragnet-peer-modal", "Peer transport", "ph-plugs");
+        html.AppendLine("<div id=\"peer-transport\">");
+        html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/20 overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted\"><tr><th class=\"px-4 py-2\">Origin</th><th class=\"px-4 py-2\">Endpoint</th><th class=\"px-4 py-2\">Source</th><th class=\"px-4 py-2\">Last seen</th><th class=\"px-4 py-2\">Last advertised</th><th class=\"px-4 py-2\">Delivery</th><th class=\"px-4 py-2\">Status</th><th class=\"px-4 py-2 text-right\">Actions</th></tr></thead><tbody>");
+
+        if (peerTableRows.Count == 0)
         {
-            html.AppendLine("<tr class=\"hover:bg-surface-alt/30\">");
-            html.Append("<td class=\"px-4 py-3\">");
+            html.AppendLine("<tr><td colspan=\"8\" class=\"px-4 py-6 text-center text-muted\">No active or recovering peers.</td></tr>");
+        }
+        else
+        {
+            foreach (var peer in peerTableRows
+                         .OrderBy(peer => DragnetPeerHealth.IsQuarantined(peer) ? 1 : 0)
+                         .ThenByDescending(peer => peer.LastSeenUtc))
+            {
+                var quarantined = DragnetPeerHealth.IsQuarantined(peer);
+                html.Append("<tr id=\"peer-row-");
+                html.Append(Encode(peer.OriginId));
+                html.AppendLine("\" class=\"hover:bg-surface-alt/30\">");
+                html.Append("<td class=\"px-4 py-2 font-medium\">");
+                if (quarantined)
+                {
+                    html.Append(Encode(peer.OriginName));
+                    html.Append("<div class=\"text-xs text-muted\">Recovery probe ");
+                    html.Append(peer.LastRecoveryProbeAtUtc is null
+                        ? "pending"
+                        : Encode(DescribeAge(now - peer.LastRecoveryProbeAtUtc.Value)));
+                    html.Append("</div>");
+                }
+                else
+                {
+                    html.Append("<button type=\"button\" class=\"inline-flex items-center gap-2 text-primary hover:underline\" onclick=\"(function(row,icon){var open=row.classList.toggle('open');if(icon)icon.classList.toggle('open',open);})(document.getElementById('peer-row-");
+                    html.Append(Encode(peer.OriginId));
+                    html.Append("'),this.querySelector('.dragnet-chevron'))\"><span>");
+                    html.Append(Encode(peer.OriginName));
+                    html.Append("</span><span class=\"dragnet-chevron\" aria-hidden=\"true\"></span></button>");
+                }
+                html.AppendLine("</td>");
+                html.Append("<td class=\"px-4 py-2 text-muted\">");
+                html.Append(Encode(peer.Endpoint));
+                html.AppendLine("</td>");
+                html.Append("<td class=\"px-4 py-2 text-muted\">");
+                html.Append(quarantined ? "Quarantined" : peer.IsBootstrap ? "Bootstrap" : "Discovered");
+                html.AppendLine("</td>");
+                html.Append("<td class=\"px-4 py-2 text-muted\">");
+                html.Append(quarantined && peer.QuarantinedAtUtc is not null
+                    ? Encode($"Quarantined {DescribeAge(now - peer.QuarantinedAtUtc.Value)}")
+                    : Encode(DescribeAge(now - peer.LastSeenUtc)));
+                html.AppendLine("</td>");
+                html.Append("<td class=\"px-4 py-2 text-muted\">");
+                html.Append(peer.LastAdvertisedAtUtc is null
+                    ? "Never"
+                    : Encode(DescribeAge(now - peer.LastAdvertisedAtUtc.Value)));
+                html.AppendLine("</td>");
+                html.Append("<td class=\"px-4 py-2 text-muted\">");
+                AppendDeliveryStatus(html, peer, deliverableEvents, now);
+                html.AppendLine("</td>");
+                html.Append("<td class=\"px-4 py-2\">");
+                if (quarantined)
+                {
+                    AppendPeerStatusBadge(html, "Quarantined", "ph-lock-key", "text-warning", "Peer is held until it sends a valid signed heartbeat.");
+                }
+                else
+                {
+                    AppendPeerStatus(html, peer, now);
+                }
+                html.AppendLine("</td>");
+                html.Append("<td class=\"px-4 py-2 text-right whitespace-nowrap\"><div class=\"inline-flex items-center justify-end gap-1\">");
+                AppendPeerButtons(html, peer);
+                html.AppendLine("</div></td>");
+                html.AppendLine("</tr>");
+                if (!quarantined)
+                {
+                    AppendPeerGraphRow(html, peer, deliverableEvents, now);
+                }
+            }
+        }
+
+        html.AppendLine("</tbody></table></div>");
+        html.AppendLine("</div>");
+        AppendModalEnd(html);
+
+        var eventControls = new StringBuilder();
+        AppendBulkReviewControls(eventControls, bulkApprovableEvents.Count);
+        AppendFilterLinks(eventControls, filter);
+        AppendModalStart(html, "dragnet-events-modal", "Dragnet events", "ph-list-checks", eventControls.ToString());
+        html.AppendLine("<div id=\"dragnet-events\" class=\"space-y-3\">");
+        html.AppendLine("<div class=\"flex justify-end\"><label class=\"inline-flex items-center gap-2 text-xs text-muted\"><input type=\"checkbox\" aria-label=\"Select all eligible bans\" onclick=\"document.querySelectorAll('.dragnet-bulk-ban').forEach(function(c){c.checked=this.checked;},this)\">Select eligible</label></div>");
+        html.AppendLine("<div class=\"space-y-2\">");
+
+        foreach (var item in eventRows)
+        {
+            html.Append("<div class=\"rounded-md border border-line bg-surface-alt/20 px-3 py-2 hover:bg-surface-alt/30\" data-event-filters=\"");
+            html.Append(Encode(GetEventFilterClasses(item)));
+            html.Append("\"");
+            if (!EventMatchesFilter(item, filter))
+            {
+                html.Append(" hidden");
+            }
+            html.AppendLine("><div class=\"flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between\">");
+            html.Append("<div class=\"flex items-start gap-3 min-w-0\">");
             if (IsBulkApprovable(item))
             {
-                html.Append("<input type=\"checkbox\" class=\"dragnet-bulk-ban\" aria-label=\"Select ban for ");
+                html.Append("<input type=\"checkbox\" class=\"dragnet-bulk-ban mt-1\" aria-label=\"Select ban for ");
                 html.Append(Encode(item.Event.PlayerName));
                 html.Append("\" value=\"");
                 html.Append(Encode(item.Event.EventId));
                 html.Append("\">");
             }
 
-            html.AppendLine("</td>");
-            html.Append("<td class=\"px-4 py-3 font-medium\">");
+            html.Append("<div class=\"min-w-0\"><div class=\"font-medium truncate\">");
             AppendEventLink(html, item.Event.EventId, item.Event.PlayerName, filter);
-            html.AppendLine("</td>");
-            html.Append("<td class=\"px-4 py-3 text-muted\">");
+            html.Append("</div><div class=\"mt-1 text-xs text-muted truncate\">");
             html.Append(Encode(IsLocalEvent(item.Event) ? "Local" : item.Event.OriginName));
-            html.AppendLine("</td>");
-            html.Append("<td class=\"px-4 py-3\">");
-            AppendTrustStatus(html, item.Event);
-            html.AppendLine("</td>");
-            html.Append("<td class=\"px-4 py-3\">");
-            html.Append(Encode(item.Event.EventType.ToString()));
-            html.AppendLine("</td>");
-            html.Append("<td class=\"px-4 py-3\">");
-            html.Append(Encode(item.ReviewState.ToString()));
-            html.AppendLine("</td>");
-            html.Append("<td class=\"px-4 py-3\">");
-            AppendImportStatus(html, item, IsLocalEvent(item.Event));
-            html.AppendLine("</td>");
-            html.Append("<td class=\"px-4 py-3 text-muted\">");
+            html.Append(" · ");
             html.Append(Encode(DescribeEventAge(item.Event, now)));
             if (item.ReviewedAtUtc is not null)
             {
-                html.Append("<div class=\"text-xs text-muted\">Reviewed by ");
+                html.Append(" · reviewed by ");
                 html.Append(Encode(item.ReviewedByName ?? "Unknown"));
-                html.Append("</div>");
             }
-
-            html.AppendLine("</td>");
-            html.Append("<td class=\"px-4 py-3 text-right\">");
+            html.Append("</div></div></div>");
+            html.Append("<div class=\"flex flex-wrap items-center gap-2 lg:justify-center\">");
+            AppendEventTypeBadge(html, item.Event.EventType);
+            AppendReviewStateBadge(html, item.ReviewState);
+            AppendImportStatus(html, item, IsLocalEvent(item.Event));
+            html.Append("</div><div class=\"flex items-center justify-end gap-1 whitespace-nowrap\">");
             AppendTrustButtons(html, item.Event);
             AppendReviewButtons(html, item);
-            html.AppendLine("</td>");
-            html.AppendLine("</tr>");
+            html.AppendLine("</div></div></div>");
         }
 
         if (filteredEvents.Count == 0)
         {
-            html.AppendLine("<tr><td colspan=\"9\" class=\"px-4 py-6 text-center text-muted\">No Dragnet events stored.</td></tr>");
+            html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/20 px-4 py-6 text-center text-muted\">No Dragnet events stored.</div>");
         }
 
-        html.AppendLine("</tbody></table></div></div>");
+        html.AppendLine("</div></div>");
+        AppendModalEnd(html);
+        AppendRequestedModuleScript(html, meta);
         html.AppendLine("</div>");
         return html.ToString();
     }
@@ -828,7 +955,7 @@ public sealed class DragnetWebfrontService
         DateTimeOffset now)
     {
         var envelope = item.Event;
-        html.AppendLine("<div class=\"rounded-lg bg-surface/50 p-2\">");
+        html.AppendLine("<div class=\"rounded-lg border border-line bg-surface/50 p-2\">");
         html.AppendLine("<div class=\"px-3 py-2 flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between\">");
         html.AppendLine("<div>");
         html.Append("<h3 class=\"text-lg font-semibold\">");
@@ -971,7 +1098,7 @@ public sealed class DragnetWebfrontService
 
     private static void AppendDetailCell(StringBuilder html, string label, string value)
     {
-        html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 p-4\">");
+        html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/30 p-4\">");
         html.Append("<div class=\"text-sm text-muted\">");
         html.Append(Encode(label));
         html.AppendLine("</div>");
@@ -1066,7 +1193,7 @@ public sealed class DragnetWebfrontService
             ["InteractionId"] = ReviewInteractionId,
             ["ActionButtonLabel"] = "Retry import",
             ["Name"] = "Retry import",
-            ["ShouldRefresh"] = "true",
+            ["ShouldRefresh"] = "false",
             ["Inputs"] = BuildReviewInputs(eventId, "RetryImport", includeReason: false)
         };
 
@@ -1088,7 +1215,7 @@ public sealed class DragnetWebfrontService
         html.Append("</span><button type=\"button\" class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\" onclick=\"document.querySelectorAll('.dragnet-bulk-ban').forEach(function(c){c.checked=true;})\"><i class=\"ph ph-check-square mr-1\"></i>Select all</button>");
         html.Append("<button type=\"button\" class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-action-primary bg-action-primary text-foreground text-sm\" onclick=\"(function(){var ids=Array.from(document.querySelectorAll('.dragnet-bulk-ban:checked')).map(function(c){return c.value;});if(ids.length===0){alert('Select at least one trusted pending ban.');return;}var inputs=[{Name:'ReviewAction',Type:'hidden',Value:'BulkApproveBan'},{Name:'EventIds',Type:'hidden',Value:JSON.stringify(ids)}];var meta={InteractionId:'");
         html.Append(ReviewInteractionId);
-        html.Append("',ActionButtonLabel:'Approve selected',Name:'Approve selected bans',ShouldRefresh:'true',Inputs:JSON.stringify(inputs)};var trigger=document.getElementById('dragnet-bulk-trigger');trigger.dataset.actionMeta=encodeURIComponent(JSON.stringify(meta));trigger.click();})()\"><i class=\"ph ph-checks mr-1\"></i>Approve selected</button>");
+        html.Append("',ActionButtonLabel:'Approve selected',Name:'Approve selected bans',ShouldRefresh:'false',Inputs:JSON.stringify(inputs)};var trigger=document.getElementById('dragnet-bulk-trigger');trigger.dataset.actionMeta=encodeURIComponent(JSON.stringify(meta));trigger.click();})()\"><i class=\"ph ph-checks mr-1\"></i>Approve selected</button>");
         html.Append("<button id=\"dragnet-bulk-trigger\" type=\"button\" class=\"profile-action hidden\" data-action=\"DynamicAction\" data-action-meta=\"\"></button></div>");
     }
 
@@ -1098,32 +1225,16 @@ public sealed class DragnetWebfrontService
         DragnetEventFilter filter,
         DateTimeOffset now)
     {
-        html.AppendLine("<div class=\"rounded-lg bg-surface/50 p-2\">");
-        html.AppendLine("<div class=\"px-3 py-2 flex flex-col gap-2 md:flex-row md:items-center md:justify-between\">");
-        html.Append("<div><h3 class=\"text-lg font-semibold\"><i class=\"ph ph-bell mr-2\"></i>Notification inbox");
-        if (notifications.Count > 0)
-        {
-            html.Append(" <span class=\"text-warning\">");
-            html.Append(notifications.Count);
-            html.Append(" unread</span>");
-        }
-        html.Append("</h3><div class=\"text-sm text-muted\">Acknowledgements are personal and do not change review decisions.</div></div>");
-        if (notifications.Count > 0)
-        {
-            AppendNotificationActionButton(html, null, "AcknowledgeAll", "Acknowledge all", "ph-checks");
-        }
-        html.AppendLine("</div>");
-
         if (notifications.Count == 0)
         {
-            html.AppendLine("<div class=\"rounded-md bg-surface-alt/20 px-4 py-5 text-center text-muted\">No unread Dragnet notifications.</div></div>");
+            html.AppendLine("<div class=\"rounded-md bg-surface-alt/20 px-4 py-5 text-center text-muted\">No unread Dragnet notifications.</div>");
             return;
         }
 
         html.AppendLine("<div class=\"space-y-2\">");
         foreach (var notification in notifications.Take(20))
         {
-            html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 px-4 py-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between\">");
+            html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/30 px-4 py-2 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between\">");
             html.Append("<div><div class=\"font-medium\">");
             html.Append(Encode(notification.Title));
             html.Append("</div><div class=\"text-sm\">");
@@ -1135,9 +1246,7 @@ public sealed class DragnetWebfrontService
             html.Append("</div></div><div class=\"flex items-center gap-2\">");
             if (!string.IsNullOrWhiteSpace(notification.EventId))
             {
-                html.Append("<a data-enhance-nav=\"false\" class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\" href=\"");
-                html.Append(BuildDashboardUri(filter, notification.EventId));
-                html.Append("\"><i class=\"ph ph-arrow-square-out mr-1\"></i>Open event</a>");
+                html.Append("<button type=\"button\" class=\"inline-flex items-center justify-center w-10 px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\" title=\"Open events\" aria-label=\"Open events\" onclick=\"dragnetOpenModal('dragnet-events-modal')\"><i class=\"ph ph-arrow-square-out\"></i></button>");
             }
             AppendNotificationActionButton(
                 html,
@@ -1147,39 +1256,84 @@ public sealed class DragnetWebfrontService
                 "ph-check");
             html.AppendLine("</div></div>");
         }
-        html.AppendLine("</div></div>");
+        html.AppendLine("</div>");
     }
 
-    private void AppendQuarantinedPeers(
-        StringBuilder html,
-        IReadOnlyList<DragnetPeerRecord> peers,
-        DateTimeOffset now)
+    private static string BuildNotificationModuleControls(IReadOnlyList<DragnetNotification> notifications)
     {
-        if (peers.Count == 0)
+        if (notifications.Count == 0)
         {
-            return;
+            return "";
         }
 
-        html.AppendLine("<details class=\"rounded-lg bg-surface/50 p-2\">");
-        html.Append("<summary class=\"px-3 py-2 cursor-pointer font-semibold text-muted\">Quarantined peers (");
-        html.Append(peers.Count);
-        html.AppendLine(")</summary><div class=\"space-y-2 p-2\">");
-        foreach (var peer in peers.OrderByDescending(item => item.QuarantinedAtUtc))
-        {
-            html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 px-4 py-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between\">");
-            html.Append("<div><div class=\"font-medium\">");
-            html.Append(Encode(peer.OriginName));
-            html.Append("</div><div class=\"text-xs text-muted\">Quarantined ");
-            html.Append(Encode(DescribeAge(now - peer.QuarantinedAtUtc!.Value)));
-            html.Append(" · recovery probe ");
-            html.Append(peer.LastRecoveryProbeAtUtc is null
-                ? "pending"
-                : Encode(DescribeAge(now - peer.LastRecoveryProbeAtUtc.Value)));
-            html.Append("</div></div><div class=\"text-sm text-muted\">");
-            html.Append(peer.IsBootstrap ? "Bootstrap seed · " : "");
-            html.Append("automatically restores after a valid signed heartbeat</div></div>");
-        }
-        html.AppendLine("</div></details>");
+        var html = new StringBuilder();
+        AppendNotificationActionButton(html, null, "AcknowledgeAll", "Acknowledge all", "ph-checks");
+        return html.ToString();
+    }
+
+    private static void AppendPeerGraphRow(
+        StringBuilder html,
+        DragnetPeerRecord peer,
+        IReadOnlyList<DragnetStoredEvent> deliverableEvents,
+        DateTimeOffset now)
+    {
+        var acknowledged = peer.EventDeliveries?.Count(delivery =>
+            delivery.AcknowledgedAtUtc is not null &&
+            deliverableEvents.Any(item =>
+                item.Event.EventId.Equals(delivery.EventId, StringComparison.OrdinalIgnoreCase))) ?? 0;
+        var pending = Math.Max(0, deliverableEvents.Count - acknowledged);
+        var sentPending = CountSentPendingDeliveries(peer, deliverableEvents);
+        var acknowledgementPercent = deliverableEvents.Count == 0
+            ? 100
+            : (int)Math.Round(acknowledged * 100d / deliverableEvents.Count);
+        var healthPhase = peer.ConsecutiveFailures == 0
+            ? 0
+            : Math.Min(18, peer.ConsecutiveFailures * 3);
+
+        html.AppendLine("<tr><td colspan=\"8\" class=\"p-0 bg-surface-alt/10\"><div class=\"dragnet-peer-detail\">");
+        html.AppendLine("<div class=\"p-4\">");
+        html.AppendLine("<div class=\"rounded-md p-3\" style=\"background:linear-gradient(135deg,rgba(69,163,255,.16),rgba(82,210,115,.10) 46%,rgba(240,184,75,.10));border:1px solid rgba(143,199,255,.28)\">");
+        html.AppendLine("<div class=\"flex flex-col gap-2 md:flex-row md:items-center md:justify-between text-xs text-muted\"><span>Heartbeat, delivery acknowledgement, and retry pressure</span><span>live peer signal</span></div>");
+        html.AppendLine("<div class=\"mt-2 flex flex-wrap gap-2 text-xs\"><span class=\"inline-flex items-center gap-1\"><span style=\"width:10px;height:10px;border-radius:999px;background:#45a3ff\"></span>Heartbeat</span><span class=\"inline-flex items-center gap-1\"><span style=\"width:10px;height:10px;border-radius:999px;background:#52d273\"></span>Acknowledged</span><span class=\"inline-flex items-center gap-1\"><span style=\"width:10px;height:10px;border-radius:999px;background:#f0b84b\"></span>Pending</span><span class=\"inline-flex items-center gap-1\"><span style=\"width:10px;height:10px;border-radius:999px;background:#ff6b6b\"></span>Failure pressure</span></div>");
+        html.AppendLine("<svg class=\"dragnet-sine\" viewBox=\"0 0 420 74\" role=\"img\" aria-label=\"Peer activity wave\">");
+        html.AppendLine("<path d=\"M0 61 H420 M0 37 H420 M0 13 H420\" stroke=\"currentColor\" stroke-opacity=\"0.08\" stroke-width=\"1\"/>");
+        html.AppendLine("<path d=\"M0 37 C 35 12, 70 12, 105 37 S 175 62, 210 37 S 280 12, 315 37 S 385 62, 420 37\" fill=\"none\" stroke=\"#45a3ff\" stroke-opacity=\"0.30\" stroke-width=\"3\"/>");
+        html.AppendLine("<path d=\"M0 54 C 35 44, 70 44, 105 54 S 175 64, 210 54 S 280 44, 315 54 S 385 64, 420 54\" fill=\"none\" stroke=\"#52d273\" stroke-opacity=\"0.70\" stroke-width=\"2\"/>");
+        html.Append("<path d=\"M0 ");
+        html.Append(37 + healthPhase);
+        html.Append(" C 35 ");
+        html.Append(12 + healthPhase);
+        html.Append(", 70 ");
+        html.Append(12 + healthPhase);
+        html.Append(", 105 ");
+        html.Append(37 + healthPhase);
+        html.Append(" S 175 ");
+        html.Append(62 - healthPhase);
+        html.Append(", 210 37 S 280 ");
+        html.Append(12 + healthPhase);
+        html.Append(", 315 37 S 385 ");
+        html.Append(62 - healthPhase);
+        html.AppendLine(", 420 37\" fill=\"none\" stroke=\"#f0b84b\" stroke-width=\"3\"/>");
+        html.AppendLine("</svg>");
+        html.Append("<div class=\"grid grid-cols-2 md:grid-cols-5 gap-2 text-xs\"><div><span class=\"text-muted\">Ack</span><div class=\"font-semibold\">");
+        html.Append(acknowledged);
+        html.Append(" / ");
+        html.Append(deliverableEvents.Count);
+        html.Append("</div></div><div><span class=\"text-muted\">Reliability</span><div class=\"font-semibold\">");
+        html.Append(acknowledgementPercent);
+        html.Append("%</div></div><div><span class=\"text-muted\">Sent pending</span><div class=\"font-semibold\">");
+        html.Append(sentPending);
+        html.Append("</div></div><div><span class=\"text-muted\">Pending</span><div class=\"font-semibold\">");
+        html.Append(pending);
+        html.Append("</div></div><div><span class=\"text-muted\">Servers</span><div class=\"font-semibold\">");
+        html.Append(peer.ServerCount);
+        html.Append("</div></div><div><span class=\"text-muted\">Failures</span><div class=\"font-semibold\">");
+        html.Append(peer.ConsecutiveFailures);
+        html.AppendLine("</div></div></div>");
+        html.Append("<div class=\"mt-2\"><button type=\"button\" class=\"text-primary hover:underline\" onclick=\"dragnetOpenModal('network-profile-");
+        html.Append(Encode(peer.OriginId));
+        html.Append("')\">Open network profile</button></div>");
+        html.AppendLine("</div></div></div></td></tr>");
     }
 
     private static void AppendNotificationActionButton(
@@ -1213,7 +1367,7 @@ public sealed class DragnetWebfrontService
             ["InteractionId"] = NotificationInteractionId,
             ["ActionButtonLabel"] = label,
             ["Name"] = label,
-            ["ShouldRefresh"] = "true",
+            ["ShouldRefresh"] = "false",
             ["Inputs"] = JsonSerializer.Serialize(inputs)
         };
         var encodedMeta = Uri.EscapeDataString(JsonSerializer.Serialize(meta));
@@ -1258,7 +1412,7 @@ public sealed class DragnetWebfrontService
             ["InteractionId"] = ReviewInteractionId,
             ["ActionButtonLabel"] = label,
             ["Name"] = label,
-            ["ShouldRefresh"] = "true",
+            ["ShouldRefresh"] = "false",
             ["Inputs"] = JsonSerializer.Serialize(inputs)
         };
 
@@ -1354,18 +1508,20 @@ public sealed class DragnetWebfrontService
             ["InteractionId"] = TrustInteractionId,
             ["ActionButtonLabel"] = label,
             ["Name"] = label,
-            ["ShouldRefresh"] = "true",
+            ["ShouldRefresh"] = "false",
             ["Inputs"] = BuildTrustInputs(envelope, trustAction)
         };
 
         var encodedMeta = Uri.EscapeDataString(JsonSerializer.Serialize(meta));
-        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer ml-2\" data-action=\"DynamicAction\" data-action-meta=\"");
-        html.Append(Encode(encodedMeta));
-        html.Append("\"><span class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ");
-        html.Append(Encode(icon));
-        html.Append(" mr-1\"></i>");
+        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer\" title=\"");
         html.Append(Encode(label));
-        html.Append("</span></button>");
+        html.Append("\" aria-label=\"");
+        html.Append(Encode(label));
+        html.Append("\" data-action=\"DynamicAction\" data-action-meta=\"");
+        html.Append(Encode(encodedMeta));
+        html.Append("\"><span class=\"inline-flex items-center justify-center w-10 px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ");
+        html.Append(Encode(icon));
+        html.Append("\"></i></span></button>");
     }
 
     private void AppendPeerButtons(StringBuilder html, DragnetPeerRecord peer)
@@ -1466,18 +1622,20 @@ public sealed class DragnetWebfrontService
             ["InteractionId"] = PeerInteractionId,
             ["ActionButtonLabel"] = label,
             ["Name"] = label,
-            ["ShouldRefresh"] = "true",
+            ["ShouldRefresh"] = "false",
             ["Inputs"] = BuildPeerInputs(peer, peerAction)
         };
 
         var encodedMeta = Uri.EscapeDataString(JsonSerializer.Serialize(meta));
-        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer ml-2\" data-action=\"DynamicAction\" data-action-meta=\"");
-        html.Append(Encode(encodedMeta));
-        html.Append("\"><span class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ");
-        html.Append(Encode(icon));
-        html.Append(" mr-1\"></i>");
+        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer ml-2\" title=\"");
         html.Append(Encode(label));
-        html.Append("</span></button>");
+        html.Append("\" aria-label=\"");
+        html.Append(Encode(label));
+        html.Append("\" data-action=\"DynamicAction\" data-action-meta=\"");
+        html.Append(Encode(encodedMeta));
+        html.Append("\"><span class=\"inline-flex items-center justify-center w-10 px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ");
+        html.Append(Encode(icon));
+        html.Append("\"></i></span></button>");
     }
 
     private void AppendPeerStatus(
@@ -1487,51 +1645,65 @@ public sealed class DragnetWebfrontService
     {
         if (!string.IsNullOrWhiteSpace(peer.LastError))
         {
-            html.Append("<span class=\"text-danger\">");
-            html.Append(Encode(peer.LastError));
-            html.Append("</span>");
+            AppendPeerStatusBadge(html, "Errored", "ph-x-circle", "text-danger", Shorten(peer.LastError, 120));
             return;
         }
 
         if (IsStalePeer(peer, now))
         {
-            html.Append("<span class=\"text-warning\">Stale</span>");
+            AppendPeerStatusBadge(html, "Stale", "ph-clock-counter-clockwise", "text-warning", "Last heartbeat is older than the configured stale window.");
             return;
         }
 
         if (peer.ConsecutiveFailures > 0)
         {
-            html.Append("<span class=\"text-warning\">Retrying (");
-            html.Append(Encode($"{peer.ConsecutiveFailures}/{Math.Max(1, _configuration.PeerFailureThreshold)}"));
-            html.Append(")</span>");
+            AppendPeerStatusBadge(html, $"Retrying {peer.ConsecutiveFailures}/{Math.Max(1, _configuration.PeerFailureThreshold)}", "ph-warning-circle", "text-warning", "Peer has recent transport failures but is still being probed.");
             return;
         }
 
-        html.Append("<span class=\"text-success\">Healthy</span>");
+        AppendPeerStatusBadge(html, "Healthy", "ph-check-circle", "text-success", "Peer heartbeat and transport state are healthy.");
+    }
+
+    private static void AppendPeerStatusBadge(
+        StringBuilder html,
+        string label,
+        string icon,
+        string css,
+        string title)
+    {
+        html.Append("<span class=\"dragnet-status-badge ");
+        html.Append(css);
+        html.Append("\" title=\"");
+        html.Append(Encode(title));
+        html.Append("\"><i class=\"ph ");
+        html.Append(icon);
+        html.Append("\"></i><span>");
+        html.Append(Encode(label));
+        html.Append("</span></span>");
     }
 
     private void AppendTrustStatus(StringBuilder html, DragnetEventEnvelope envelope)
     {
         if (IsLocalEvent(envelope))
         {
-            html.Append("<span class=\"text-primary\">Local</span>");
+            AppendCompactBadge(html, "Local", "ph-house", "text-primary", "Local outbound event");
             return;
         }
 
         var trust = _trustService.Evaluate(envelope);
         if (!trust.IsTrusted)
         {
-            html.Append("<span class=\"text-danger\">Untrusted</span>");
+            AppendCompactBadge(html, "Untrusted", "ph-shield-warning", "text-danger", "This origin is not trusted by this network.");
             return;
         }
 
         if (trust.AutoApprove)
         {
-            html.Append("<span class=\"text-success\">Trusted + auto</span>");
+            AppendCompactBadge(html, "Auto", "ph-shield-check", "text-success", "Trusted origin with automatic approval enabled.");
             return;
         }
 
-        html.Append("<span class=\"text-success\">Trusted</span>");
+        AppendCompactBadge(html, "Trusted", "ph-shield-check", "text-success", "Trusted origin.");
     }
 
     private static void AppendImportStatus(
@@ -1541,13 +1713,13 @@ public sealed class DragnetWebfrontService
     {
         if (isLocal)
         {
-            html.Append("<span class=\"text-primary\">Outbound</span>");
+            AppendCompactBadge(html, "Outbound", "ph-arrow-square-out", "text-primary", "Local event sent to peers.");
             return;
         }
 
         if (item.ImportedAtUtc is not null)
         {
-            html.Append("<span class=\"text-success\">Imported</span>");
+            AppendCompactBadge(html, "Imported", "ph-check-circle", "text-success", "Imported into local IW4MAdmin state.");
             return;
         }
 
@@ -1555,17 +1727,72 @@ public sealed class DragnetWebfrontService
         {
             if (item.ImportError.StartsWith("Queued:", StringComparison.OrdinalIgnoreCase))
             {
-                html.Append("<span class=\"text-warning\">Queued</span>");
+                AppendCompactBadge(html, "Queued", "ph-clock", "text-warning", "Import is queued.");
                 return;
             }
 
-            html.Append("<span class=\"text-danger\">");
-            html.Append(Encode(item.ImportError));
-            html.Append("</span>");
+            AppendCompactBadge(html, "Failed", "ph-x-circle", "text-danger", Shorten(item.ImportError, 120));
             return;
         }
 
-        html.Append("<span class=\"text-muted\">Pending</span>");
+        AppendCompactBadge(html, "Pending", "ph-hourglass", "text-muted", "Awaiting import.");
+    }
+
+    private static void AppendEventTypeBadge(StringBuilder html, DragnetEventType eventType)
+    {
+        var (label, icon, css, title) = eventType switch
+        {
+            DragnetEventType.BanCreated => ("Ban", "ph-gavel", "text-danger", "Ban issued by an origin network."),
+            DragnetEventType.BanLifted => ("Lift", "ph-arrow-u-up-left", "text-success", "Ban lift issued by an origin network."),
+            _ => (eventType.ToString(), "ph-dot-outline", "text-muted", eventType.ToString())
+        };
+        AppendCompactBadge(html, label, icon, css, title);
+    }
+
+    private static void AppendReviewStateBadge(StringBuilder html, DragnetReviewState state)
+    {
+        var (icon, css, title) = state switch
+        {
+            DragnetReviewState.PendingBan or DragnetReviewState.PendingLift => ("ph-hourglass", "text-warning", "Needs local review."),
+            DragnetReviewState.ApprovedBan or DragnetReviewState.ApprovedLift => ("ph-check-circle", "text-success", "Approved locally."),
+            DragnetReviewState.DeniedBan or DragnetReviewState.DeniedLift => ("ph-x-circle", "text-danger", "Denied locally."),
+            DragnetReviewState.IgnoredBan or DragnetReviewState.IgnoredLift => ("ph-eye-slash", "text-muted", "Ignored locally."),
+            DragnetReviewState.ExpiredBan => ("ph-clock-counter-clockwise", "text-muted", "Expired before review."),
+            _ => ("ph-dot-outline", "text-muted", state.ToString())
+        };
+        AppendCompactBadge(html, ShortReviewState(state), icon, css, title);
+    }
+
+    private static string ShortReviewState(DragnetReviewState state) => state switch
+    {
+        DragnetReviewState.PendingBan => "Pending ban",
+        DragnetReviewState.PendingLift => "Pending lift",
+        DragnetReviewState.ApprovedBan => "Approved ban",
+        DragnetReviewState.ApprovedLift => "Approved lift",
+        DragnetReviewState.DeniedBan => "Denied ban",
+        DragnetReviewState.DeniedLift => "Denied lift",
+        DragnetReviewState.IgnoredBan => "Ignored ban",
+        DragnetReviewState.IgnoredLift => "Ignored lift",
+        DragnetReviewState.ExpiredBan => "Expired ban",
+        _ => state.ToString()
+    };
+
+    private static void AppendCompactBadge(
+        StringBuilder html,
+        string label,
+        string icon,
+        string css,
+        string title)
+    {
+        html.Append("<span class=\"dragnet-status-badge ");
+        html.Append(css);
+        html.Append("\" title=\"");
+        html.Append(Encode(title));
+        html.Append("\"><i class=\"ph ");
+        html.Append(Encode(icon));
+        html.Append("\"></i><span>");
+        html.Append(Encode(label));
+        html.Append("</span></span>");
     }
 
     private static void AppendActionButton(
@@ -1581,18 +1808,20 @@ public sealed class DragnetWebfrontService
             ["InteractionId"] = ReviewInteractionId,
             ["ActionButtonLabel"] = label,
             ["Name"] = label,
-            ["ShouldRefresh"] = "true",
+            ["ShouldRefresh"] = "false",
             ["Inputs"] = BuildReviewInputs(eventId, action, includeReason)
         };
 
         var encodedMeta = Uri.EscapeDataString(JsonSerializer.Serialize(meta));
-        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer ml-2\" data-action=\"DynamicAction\" data-action-meta=\"");
-        html.Append(Encode(encodedMeta));
-        html.Append("\"><span class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ");
-        html.Append(Encode(icon));
-        html.Append(" mr-1\"></i>");
+        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer ml-2\" title=\"");
         html.Append(Encode(label));
-        html.Append("</span></button>");
+        html.Append("\" aria-label=\"");
+        html.Append(Encode(label));
+        html.Append("\" data-action=\"DynamicAction\" data-action-meta=\"");
+        html.Append(Encode(encodedMeta));
+        html.Append("\"><span class=\"inline-flex items-center justify-center w-10 px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ");
+        html.Append(Encode(icon));
+        html.Append("\"></i></span></button>");
     }
 
     private static string BuildReviewInputs(
@@ -1696,11 +1925,389 @@ public sealed class DragnetWebfrontService
         html.AppendLine("</div></div>");
     }
 
+    private static void AppendEventMetric(StringBuilder html, string label, int value, string icon)
+    {
+        html.Append("<div class=\"rounded-md border border-line bg-surface-alt/30 px-3 py-2\"><div class=\"flex items-center gap-2 text-xs text-muted\"><i class=\"ph ");
+        html.Append(Encode(icon));
+        html.Append("\"></i>");
+        html.Append(Encode(label));
+        html.Append("</div><div class=\"mt-1 text-xl font-semibold\">");
+        html.Append(value);
+        html.AppendLine("</div></div>");
+    }
+
+    private static void AppendDashboardStyles(StringBuilder html)
+    {
+        html.AppendLine("""
+<style>
+:root{color-scheme:dark;--color-line:#3a3042;--color-muted:#a9a1b5;--color-foreground:#f6f2fb}
+.mx-auto{margin-left:auto;margin-right:auto}.mb-4{margin-bottom:1rem}.mr-1{margin-right:.25rem}.mr-2{margin-right:.5rem}.mt-1{margin-top:.25rem}.mt-2{margin-top:.5rem}.p-3{padding:.75rem}.p-4{padding:1rem}.px-2{padding-left:.5rem;padding-right:.5rem}.px-3{padding-left:.75rem;padding-right:.75rem}.px-4{padding-left:1rem;padding-right:1rem}.py-1\.5{padding-top:.375rem;padding-bottom:.375rem}.py-2{padding-top:.5rem;padding-bottom:.5rem}.py-6{padding-top:1.5rem;padding-bottom:1.5rem}.pb-3{padding-bottom:.75rem}
+.flex{display:flex}.inline-flex{display:inline-flex}.grid{display:grid}.hidden{display:none}.items-center{align-items:center}.items-start{align-items:flex-start}.items-end{align-items:flex-end}.justify-between{justify-content:space-between}.justify-end{justify-content:flex-end}.justify-center{justify-content:center}.gap-1{gap:.25rem}.gap-2{gap:.5rem}.gap-3{gap:.75rem}.space-y-2>*+*{margin-top:.5rem}.space-y-3>*+*{margin-top:.75rem}.space-y-4>*+*{margin-top:1rem}.flex-col{flex-direction:column}.flex-wrap{flex-wrap:wrap}
+.w-full{width:100%}.w-10{width:2.5rem}.max-w-5xl{max-width:64rem}.max-w-6xl{max-width:72rem}.min-w-0{min-width:0}.overflow-x-auto{overflow-x:auto}.truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.break-all{word-break:break-all}.whitespace-nowrap{white-space:nowrap}.whitespace-pre-wrap{white-space:pre-wrap}
+.rounded-md{border-radius:6px}.rounded-lg{border-radius:8px}.rounded-full{border-radius:999px}.border{border-width:1px;border-style:solid}.border-line{border-color:var(--color-line,#3a3042)}.bg-surface\/50{background:rgba(255,255,255,.035)}.bg-surface-alt\/20{background:rgba(255,255,255,.025)}.bg-surface-alt\/30{background:rgba(255,255,255,.04)}.hover\:bg-surface-hover:hover,.hover\:bg-surface-alt\/30:hover{background:rgba(255,255,255,.06)}
+.text-left{text-align:left}.text-center{text-align:center}.text-right{text-align:right}.text-xs{font-size:12px}.text-sm{font-size:14px}.text-base{font-size:16px}.text-lg{font-size:18px}.text-2xl{font-size:24px}.font-medium{font-weight:600}.font-semibold{font-weight:700}.uppercase{text-transform:uppercase}.tracking-wide{letter-spacing:.04em}.text-muted{color:var(--color-muted,#a9a1b5)}.text-foreground{color:var(--color-foreground,#f6f2fb)}.text-primary{color:#f72585}.text-success{color:#52d273}.text-warning{color:#f0b84b}.text-danger{color:#ff6b6b}.text-info{color:#45a3ff}.hover\:underline:hover{text-decoration:underline}table{border-collapse:collapse}
+@media(min-width:768px){.md\:flex-row{flex-direction:row}.md\:items-end{align-items:flex-end}.md\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(min-width:1024px){.lg\:flex-row{flex-direction:row}.lg\:items-center{align-items:center}.lg\:justify-between{justify-content:space-between}.lg\:justify-center{justify-content:center}.lg\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(min-width:1280px){.xl\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}.xl\:col-span-3{grid-column:span 3/span 3}}
+.dragnet-top-nav{position:sticky;top:0;z-index:20}
+.dragnet-modal{position:fixed;inset:0;margin:auto;width:fit-content;min-width:min(620px,calc(100vw - 32px));max-width:min(1120px,calc(100vw - 32px));max-height:86vh;overflow:visible;border:1px solid var(--color-line,#3a3042);border-radius:12px;background:#17111d;color:inherit;padding:0;opacity:0;transform:scale(.94);transition:opacity .16s ease,transform .16s ease,width .18s ease,max-height .22s ease}
+.dragnet-modal[open]{opacity:1;transform:scale(1);animation:dragnetZoomIn .16s ease}
+.dragnet-modal.closing{opacity:0;transform:scale(.94)}
+.dragnet-modal::backdrop{background:rgba(0,0,0,.66)}
+.dragnet-modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--color-line,#3a3042);cursor:move;user-select:none}
+.dragnet-modal-body{padding:16px;overflow:auto;max-height:calc(86vh - 58px)}
+.dragnet-modal-close{border:1px solid var(--color-line,#3a3042);border-radius:8px;padding:6px 10px}
+.dragnet-icon-button{position:relative;width:38px;height:34px;justify-content:center}
+.dragnet-icon-button[data-tip]:hover:after{content:attr(data-tip);position:absolute;right:0;top:calc(100% + 8px);z-index:30;white-space:nowrap;border:1px solid var(--color-line,#3a3042);border-radius:6px;background:#0b0d10;color:inherit;padding:5px 8px;font-size:12px}
+.dragnet-modal table tbody tr{border-bottom:1px solid rgba(255,255,255,.08)}
+.dragnet-modal table tbody tr:last-child{border-bottom:0}
+.dragnet-modal table th,.dragnet-modal table td{border-right:1px solid rgba(255,255,255,.07)}
+.dragnet-modal table th:last-child,.dragnet-modal table td:last-child{border-right:0}
+.dragnet-status-badge{display:inline-flex;align-items:center;gap:6px;border:1px solid currentColor;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700;white-space:nowrap}
+.dragnet-detail-card{border:1px solid var(--color-line,#3a3042);border-radius:8px;background:rgba(255,255,255,.035);padding:12px}
+.dragnet-detail-label{display:flex;align-items:center;gap:6px;color:var(--color-muted,#a9a1b5);font-size:12px}
+.dragnet-detail-value{margin-top:6px;color:var(--color-foreground,#f6f2fb);font-weight:600;line-height:1.35;word-break:break-word}
+.dragnet-chevron{display:inline-block;width:8px;height:8px;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(-135deg);transition:transform .18s ease}
+details[open] > summary .dragnet-chevron,.dragnet-chevron.open{transform:rotate(45deg)}
+.dragnet-peer-detail{max-height:0;overflow:hidden;transition:max-height .24s ease}
+tr.open + tr .dragnet-peer-detail{max-height:760px}
+.dragnet-sine{width:100%;height:74px}
+@keyframes dragnetZoomIn{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:scale(1)}}
+</style>
+<script>
+function dragnetOpenModal(id){var d=document.getElementById(id);if(!d)return;d.classList.remove('closing');if(d.showModal)d.showModal();else d.setAttribute('open','open');}
+function dragnetCloseDialog(d){if(!d)return;d.classList.add('closing');setTimeout(function(){if(d.close)d.close();else d.removeAttribute('open');d.classList.remove('closing');d.style.left='';d.style.top='';d.style.margin='auto';},160);}
+function dragnetCloseModal(button){dragnetCloseDialog(button.closest('dialog'));}
+function dragnetLedgerPage(page){document.querySelectorAll('[data-ledger-page]').forEach(function(row){row.hidden=row.getAttribute('data-ledger-page')!==String(page);});document.querySelectorAll('[data-ledger-current]').forEach(function(el){el.textContent=page;});}
+function dragnetFilterEvents(filter){document.querySelectorAll('[data-event-filters]').forEach(function(row){var filters=row.getAttribute('data-event-filters').split(' ');row.hidden=filters.indexOf(filter)<0;});document.querySelectorAll('[data-dragnet-filter]').forEach(function(btn){var active=btn.getAttribute('data-dragnet-filter')===filter;btn.classList.toggle('bg-action-primary',active);btn.classList.toggle('text-foreground',active);btn.classList.toggle('border-action-primary',active);btn.classList.toggle('text-muted',!active);});}
+document.addEventListener('mousedown',function(e){var head=e.target.closest('.dragnet-modal-head');if(!head||e.target.closest('button'))return;var d=head.closest('dialog');if(!d)return;var r=d.getBoundingClientRect();var x=e.clientX-r.left;var y=e.clientY-r.top;d.style.margin='0';d.style.left=r.left+'px';d.style.top=r.top+'px';function move(ev){d.style.left=Math.max(8,Math.min(window.innerWidth-r.width-8,ev.clientX-x))+'px';d.style.top=Math.max(8,Math.min(window.innerHeight-r.height-8,ev.clientY-y))+'px';}function up(){document.removeEventListener('mousemove',move);document.removeEventListener('mouseup',up);}document.addEventListener('mousemove',move);document.addEventListener('mouseup',up);});
+document.addEventListener('click',function(e){var d=e.target;if(d instanceof HTMLDialogElement&&d.classList.contains('dragnet-modal'))dragnetCloseDialog(d);});
+</script>
+""");
+    }
+
+    private static void AppendModalStart(
+        StringBuilder html,
+        string id,
+        string title,
+        string icon,
+        string? controls = null)
+    {
+        html.Append("<dialog id=\"");
+        html.Append(Encode(id));
+        html.Append("\" class=\"dragnet-modal\"><div class=\"dragnet-modal-head\"><h3 class=\"text-lg font-semibold\"><i class=\"ph ");
+        html.Append(Encode(icon));
+        html.Append(" mr-2\"></i>");
+        html.Append(Encode(title));
+        html.Append("</h3><div class=\"flex flex-wrap items-center gap-2\">");
+        if (!string.IsNullOrWhiteSpace(controls))
+        {
+            html.Append(controls);
+        }
+        html.Append("<button type=\"button\" class=\"dragnet-modal-close\" onclick=\"dragnetCloseModal(this)\">Close</button></div></div><div class=\"dragnet-modal-body\">");
+    }
+
+    private static void AppendModalEnd(StringBuilder html)
+    {
+        html.AppendLine("</div></dialog>");
+    }
+
+    private static string BuildLedgerModuleControls(DragnetLedgerSnapshot snapshot, int page)
+    {
+        const int pageSize = 8;
+        var pageCount = Math.Max(1, (int)Math.Ceiling(snapshot.Bans.Count / (double)pageSize));
+        page = Math.Clamp(page, 1, pageCount);
+        var html = new StringBuilder();
+        html.Append("<div class=\"inline-flex items-center gap-1 text-sm\"><button type=\"button\" class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover\" onclick=\"dragnetLedgerPage(Math.max(1,parseInt(document.querySelector('[data-ledger-current]').textContent)-1))\">Prev</button><span class=\"text-muted px-2\"><span data-ledger-current>");
+        html.Append(page);
+        html.Append("</span> / ");
+        html.Append(pageCount);
+        html.Append("</span><button type=\"button\" class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover\" onclick=\"dragnetLedgerPage(Math.min(");
+        html.Append(pageCount);
+        html.Append(",parseInt(document.querySelector('[data-ledger-current]').textContent)+1))\">Next</button></div>");
+        return html.ToString();
+    }
+
+    private static void AppendLedgerModule(StringBuilder html, DragnetLedgerSnapshot snapshot, int page)
+    {
+        const int pageSize = 8;
+        var pageCount = Math.Max(1, (int)Math.Ceiling(snapshot.Bans.Count / (double)pageSize));
+        page = Math.Clamp(page, 1, pageCount);
+        html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/20 overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted\"><tr><th class=\"px-4 py-2\">Player</th><th class=\"px-4 py-2\">Origin</th><th class=\"px-4 py-2\">Type</th><th class=\"px-4 py-2\">Platform</th><th class=\"px-4 py-2\">Status</th><th class=\"px-4 py-2\">Accepted</th><th class=\"px-4 py-2\">Servers</th><th class=\"px-4 py-2\">Issued</th></tr></thead><tbody>");
+        var index = 0;
+        foreach (var ban in snapshot.Bans)
+        {
+            var rowPage = index++ / pageSize + 1;
+            html.Append("<tr class=\"hover:bg-surface-alt/30\" data-ledger-page=\"");
+            html.Append(rowPage);
+            html.Append("\"");
+            if (rowPage != page)
+            {
+                html.Append(" hidden");
+            }
+            html.Append("><td class=\"px-4 py-2 font-medium\"><button type=\"button\" class=\"text-primary hover:underline\" onclick=\"dragnetOpenModal('ledger-detail-");
+            html.Append(Encode(ban.EventId));
+            html.Append("')\">");
+            html.Append(Encode(ban.PlayerName));
+            html.Append("</button><div class=\"text-xs text-muted\">");
+            html.Append(Encode(ban.PlayerNetworkId));
+            html.Append("</div></td><td class=\"px-4 py-2\">");
+            html.Append("<div class=\"font-medium text-foreground\"><i class=\"ph ph-globe mr-1 text-muted\"></i>");
+            html.Append(Encode(ban.OriginName));
+            html.Append("</div><div class=\"mt-1 text-xs text-muted\"><i class=\"ph ph-server mr-1\"></i>");
+            html.Append(Encode(ban.OriginServerName));
+            html.Append("</div></td><td class=\"px-4 py-2\">");
+            html.Append(Encode(ban.PenaltyKind));
+            html.Append("</td><td class=\"px-4 py-2\">");
+            html.Append(Encode(string.IsNullOrWhiteSpace(ban.PlayerGame) ? "Unknown" : ban.PlayerGame));
+            html.Append("</td><td class=\"px-4 py-2\">");
+            AppendLedgerStatusIcon(html, ban.Status);
+            html.Append("</td><td class=\"px-4 py-2\">");
+            html.Append(Encode($"{ban.AcceptedNetworkCount} / {ban.EligibleNetworkCount}"));
+            html.Append("</td><td class=\"px-4 py-2\">");
+            html.Append(ban.EnforcedServerCount);
+            html.Append("</td><td class=\"px-4 py-2 text-muted\">");
+            html.Append(Encode(FormatLedgerIssuedTime(ban.CreatedAtUtc)));
+            html.AppendLine("</td></tr>");
+        }
+        if (snapshot.Bans.Count == 0)
+        {
+            html.AppendLine("<tr><td colspan=\"8\" class=\"px-4 py-6 text-center text-muted\">No bans in the public ledger.</td></tr>");
+        }
+        html.AppendLine("</tbody></table></div>");
+    }
+
+    private static void AppendLedgerDetailModals(StringBuilder html, DragnetLedgerSnapshot snapshot)
+    {
+        foreach (var ban in snapshot.Bans)
+        {
+            AppendLedgerDetailModal(html, ban);
+        }
+    }
+
+    private static void AppendLedgerStatusIcon(StringBuilder html, string status)
+    {
+        var (icon, label, css, description) = status switch
+        {
+            "Active" => ("ph-check-circle", "Active", "text-success", "Ban is currently active in the public ledger."),
+            "Lifted" => ("ph-arrow-u-up-left", "Lifted", "text-info", "Ban has been lifted by the origin network."),
+            "Expired" => ("ph-clock-counter-clockwise", "Expired", "text-warning", "Temporary ban has elapsed."),
+            _ => ("ph-question", string.IsNullOrWhiteSpace(status) ? "Unknown" : status, "text-muted", "Ledger status is unknown.")
+        };
+        html.Append("<span title=\"");
+        html.Append(Encode(description));
+        html.Append("\" aria-label=\"");
+        html.Append(Encode(label));
+        html.Append("\" class=\"dragnet-status-badge ");
+        html.Append(css);
+        html.Append("\"><i class=\"ph ");
+        html.Append(icon);
+        html.Append("\"></i><span>");
+        html.Append(Encode(label));
+        html.Append("</span></span>");
+    }
+
+    private static void AppendLedgerDetailModal(StringBuilder html, DragnetLedgerBan ban)
+    {
+        AppendModalStart(html, $"ledger-detail-{ban.EventId}", "Ledger ban details", "ph-identification-card");
+        html.AppendLine("<div class=\"space-y-4 max-w-5xl\">");
+        html.Append("<div class=\"flex flex-col gap-3 md:flex-row md:items-start md:justify-between\"><div><div class=\"text-xs uppercase tracking-wide text-muted\">Banned player</div><div class=\"text-2xl font-semibold text-foreground\">");
+        html.Append(Encode(ban.PlayerName));
+        html.Append("</div><div class=\"mt-1 text-sm text-muted\">");
+        html.Append(Encode(ban.PlayerNetworkId));
+        html.Append("</div></div><div>");
+        AppendLedgerStatusIcon(html, ban.Status);
+        html.Append("</div></div>");
+        html.Append("<div class=\"rounded-md border border-line bg-surface-alt/20 p-4\"><div class=\"flex items-center gap-2 text-sm text-muted\"><i class=\"ph ph-warning-circle\"></i>Ban reason</div><div class=\"mt-2 text-base text-foreground\">");
+        html.Append(Encode(ban.Reason));
+        html.Append("</div></div>");
+        html.AppendLine("<div class=\"grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3\">");
+        AppendLedgerDetailField(html, "ph-game-controller", "Platform", string.IsNullOrWhiteSpace(ban.PlayerGame) ? "Unknown game platform" : ban.PlayerGame, "The game platform this ledger entry was issued against.");
+        AppendLedgerDetailField(html, "ph-globe", "Origin network", ban.OriginName, "The Dragnet network that created the ban.");
+        AppendLedgerDetailField(html, "ph-server", "Origin server", ban.OriginServerName, "The server that first reported this penalty.");
+        AppendLedgerDetailField(html, "ph-user-gear", "Issued by", ban.AdminName ?? "Unknown administrator", "The administrator name supplied by the origin network.");
+        AppendLedgerDetailField(html, "ph-shield-check", "Reconciliation", ban.ReconciliationStatus, "How this node matched the ban against local records.");
+        AppendLedgerDetailField(html, "ph-users-three", "Peer acceptance", $"{ban.AcceptedNetworkCount} of {ban.EligibleNetworkCount} networks", "How many eligible peers have reported compatible coverage.");
+        AppendLedgerDetailField(html, "ph-hard-drives", "Enforced servers", $"{ban.EnforcedServerCount} servers", "Number of servers currently reporting enforcement.");
+        AppendLedgerDetailField(html, "ph-calendar-plus", "Created", FormatLedgerDetailTime(ban.CreatedAtUtc), "When the origin network issued this ledger event.");
+        AppendLedgerDetailField(html, "ph-calendar-x", "Expires", ban.ExpiresAtUtc is null ? "Permanent ban" : FormatLedgerDetailTime(ban.ExpiresAtUtc.Value), "When the ban expires, if it is temporary.");
+        if (!string.IsNullOrWhiteSpace(ban.EvidenceUrl))
+        {
+            html.Append("<div class=\"dragnet-detail-card xl:col-span-3\"><div class=\"dragnet-detail-label\"><i class=\"ph ph-link\"></i>Evidence</div><a class=\"dragnet-detail-value text-primary hover:underline break-all\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"");
+            html.Append(Encode(ban.EvidenceUrl));
+            html.Append("\">");
+            html.Append(Encode(ban.EvidenceUrl));
+            html.AppendLine("</a></div>");
+        }
+        html.AppendLine("</div>");
+        AppendModalEnd(html);
+    }
+
+    private static string FormatLedgerDetailTime(DateTimeOffset value) =>
+        value.ToString("MMMM d, 'at' HH:mm:ss 'UTC'", CultureInfo.InvariantCulture);
+
+    private static string FormatLedgerIssuedTime(DateTimeOffset value) =>
+        value.ToString("ddd, MMMM ", CultureInfo.InvariantCulture) +
+        value.Day +
+        OrdinalSuffix(value.Day) +
+        value.ToString(" 'at' HH:mm 'UTC'", CultureInfo.InvariantCulture);
+
+    private static string OrdinalSuffix(int day)
+    {
+        if (day % 100 is >= 11 and <= 13)
+        {
+            return "th";
+        }
+
+        return (day % 10) switch
+        {
+            1 => "st",
+            2 => "nd",
+            3 => "rd",
+            _ => "th"
+        };
+    }
+
+    private static void AppendLedgerDetailField(
+        StringBuilder html,
+        string icon,
+        string label,
+        string value,
+        string description)
+    {
+        html.Append("<div class=\"dragnet-detail-card\"><div class=\"dragnet-detail-label\"><i class=\"ph ");
+        html.Append(Encode(icon));
+        html.Append("\"></i>");
+        html.Append(Encode(label));
+        html.Append("</div><div class=\"dragnet-detail-value\">");
+        html.Append(Encode(value));
+        html.Append("</div><div class=\"mt-2 text-xs text-muted\">");
+        html.Append(Encode(description));
+        html.AppendLine("</div></div>");
+    }
+
+    private static void AppendRequestedModuleScript(
+        StringBuilder html,
+        IDictionary<string, string>? meta)
+    {
+        if (meta is null ||
+            !meta.TryGetValue("module", out var module))
+        {
+            return;
+        }
+
+        var id = module.ToLowerInvariant() switch
+        {
+            "events" => "dragnet-events-modal",
+            "peers" => "dragnet-peer-modal",
+            "notifications" => "dragnet-notification-modal",
+            "guide" => "dragnet-guide-modal",
+            "directory" => "dragnet-directory-modal",
+            "ledger" => "dragnet-ledger-modal",
+            _ => null
+        };
+        if (id is null)
+        {
+            return;
+        }
+
+        html.Append("<script>setTimeout(function(){dragnetOpenModal('");
+        html.Append(Encode(id));
+        html.AppendLine("')},0);</script>");
+    }
+
+    private void AppendDashboardNavigation(
+        StringBuilder html,
+        int notificationCount,
+        int directoryCount,
+        int peerCount,
+        int eventCount)
+    {
+        html.AppendLine("<nav class=\"dragnet-top-nav rounded-lg bg-surface/90 p-3\" aria-label=\"Dragnet navigation\">");
+        html.AppendLine("<div class=\"flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between\">");
+        html.AppendLine("<div class=\"flex flex-wrap items-center gap-2\">");
+        AppendNavLink(html, "Back", "/", "ph-arrow-left");
+        AppendScrollButton(html, "Dashboard", "dragnet-status", "ph-gauge");
+        AppendScrollButton(html, "Readiness", "deployment-readiness", "ph-check-circle");
+        html.AppendLine("</div><div class=\"flex flex-wrap items-center gap-2 lg:justify-end\">");
+        AppendModalButton(html, "Public ledger", "dragnet-ledger-modal", "ph-list-magnifying-glass");
+        AppendModalButton(html, "Notifications", "dragnet-notification-modal", "ph-bell", notificationCount);
+        AppendModalButton(html, "Guide", "dragnet-guide-modal", "ph-clipboard-text");
+        AppendModalButton(html, "Directory", "dragnet-directory-modal", "ph-address-book", directoryCount);
+        AppendModalButton(html, "Peers", "dragnet-peer-modal", "ph-plugs", peerCount);
+        AppendModalButton(html, "Events", "dragnet-events-modal", "ph-list-checks", eventCount);
+
+        html.AppendLine("</div></div></nav>");
+    }
+
+    private static void AppendModalButton(
+        StringBuilder html,
+        string label,
+        string targetId,
+        string icon,
+        int? count = null)
+    {
+        html.Append("<button type=\"button\" class=\"dragnet-icon-button inline-flex items-center rounded-md border border-line text-sm hover:bg-surface-hover\" title=\"");
+        html.Append(Encode(label));
+        html.Append("\" aria-label=\"");
+        html.Append(Encode(label));
+        html.Append("\" data-tip=\"");
+        html.Append(Encode(label));
+        html.Append("\" onclick=\"dragnetOpenModal('");
+        html.Append(Encode(targetId));
+        html.Append("')\"><i class=\"ph ");
+        html.Append(Encode(icon));
+        html.Append("\"></i>");
+        if (count is not null)
+        {
+            html.Append("<span class=\"rounded-full bg-surface-alt px-1.5 text-xs text-muted\">");
+            html.Append(count.Value);
+            html.Append("</span>");
+        }
+        html.AppendLine("</button>");
+    }
+
+    private static void AppendNavLink(
+        StringBuilder html,
+        string label,
+        string href,
+        string icon,
+        bool external = false)
+    {
+        html.Append("<a class=\"inline-flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-sm hover:bg-surface-hover\" href=\"");
+        html.Append(Encode(href));
+        html.Append("\"");
+        if (external)
+        {
+            html.Append(" target=\"_blank\" rel=\"noopener noreferrer\"");
+        }
+        html.Append("><i class=\"ph ");
+        html.Append(Encode(icon));
+        html.Append("\"></i><span>");
+        html.Append(Encode(label));
+        html.AppendLine("</span></a>");
+    }
+
+    private static void AppendScrollButton(
+        StringBuilder html,
+        string label,
+        string targetId,
+        string icon)
+    {
+        html.Append("<button type=\"button\" class=\"inline-flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-sm hover:bg-surface-hover\" onclick=\"document.getElementById('");
+        html.Append(Encode(targetId));
+        html.Append("')?.scrollIntoView({block:'start',behavior:'smooth'})\"><i class=\"ph ");
+        html.Append(Encode(icon));
+        html.Append("\"></i><span>");
+        html.Append(Encode(label));
+        html.AppendLine("</span></button>");
+    }
+
     private void AppendOnboardingPanel(
         StringBuilder html,
         DragnetOnboardingStatus status)
     {
-        html.AppendLine("<div class=\"rounded-lg bg-surface/50 p-2\">");
+        html.AppendLine("<div id=\"deployment-readiness\" class=\"rounded-lg border border-line bg-surface/50 p-2\">");
         html.AppendLine("<div class=\"px-3 py-2 flex flex-col md:flex-row md:items-center md:justify-between gap-3\">");
         html.AppendLine("<div>");
         html.AppendLine("<h3 class=\"font-semibold\">Deployment readiness</h3>");
@@ -1745,21 +2352,20 @@ public sealed class DragnetWebfrontService
     private void AppendDeploymentGuide(StringBuilder html)
     {
         var endpoint = _configuration.PublicEndpoint?.TrimEnd('/');
-        html.AppendLine("<div class=\"rounded-lg bg-surface/50 p-2\">");
+        html.AppendLine("<div id=\"deployment-guide\">");
         html.AppendLine("<div class=\"px-3 py-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2\">");
         html.AppendLine("<div><h3 class=\"font-semibold\">Deployment guide</h3>");
         html.AppendLine("<div class=\"text-sm text-muted\">Endpoint-specific routes and reverse-proxy requirements.</div></div>");
         html.AppendLine("<a class=\"text-sm text-primary hover:underline\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"/dragnet/setup-guide\">Open shareable guide</a>");
         html.AppendLine("</div>");
         html.AppendLine("<div class=\"grid grid-cols-1 lg:grid-cols-2 gap-2\">");
-        html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 p-4 space-y-2 text-sm\">");
+        html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/30 p-4 space-y-2 text-sm\">");
         AppendGuideValue(html, "Health", endpoint is null ? "Not configured" : $"{endpoint}/health");
         AppendGuideValue(html, "Heartbeat", endpoint is null ? "Not configured" : $"{endpoint}/heartbeat");
         AppendGuideValue(html, "Directory", endpoint is null ? "Not configured" : $"{endpoint}/directory");
-        AppendGuideValue(html, "Public ledger", endpoint is null ? "Not configured" : $"{endpoint}/ledger");
         AppendGuideValue(html, "Bootstrap", DragnetConfiguration.OfficialBootstrapEndpoint);
         html.AppendLine("</div>");
-        html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 p-4 text-sm space-y-2\">");
+        html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/30 p-4 text-sm space-y-2\">");
         AppendGuideCheck(html, "TLS certificate valid");
         AppendGuideCheck(html, "POST /dragnet/heartbeat forwarded");
         AppendGuideCheck(html, "X-Forwarded-Proto set to https");
@@ -1789,7 +2395,7 @@ public sealed class DragnetWebfrontService
         bool passed,
         string detail)
     {
-        html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 px-4 py-3\">");
+        html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/30 px-4 py-2\">");
         html.Append("<div class=\"flex items-center gap-2 font-medium\"><i class=\"ph ");
         html.Append(passed ? "ph-check-circle text-success" : "ph-warning-circle text-warning");
         html.Append("\"></i>");
@@ -1929,14 +2535,8 @@ public sealed class DragnetWebfrontService
         IReadOnlyList<DragnetDirectoryEntry> entries,
         DateTimeOffset now)
     {
-        html.AppendLine("<div class=\"rounded-lg bg-surface/50 p-2\">");
-        html.AppendLine("<div class=\"px-3 py-2 flex flex-col md:flex-row md:items-center md:justify-between gap-2\">");
-        html.AppendLine("<div><h3 class=\"font-semibold\">Community directory</h3>");
-        html.AppendLine("<div class=\"text-sm text-muted\">Public, opt-in network listings. Directory presence does not grant trust.</div></div>");
-        html.Append("<a class=\"text-sm text-primary hover:underline\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"/dragnet/directory\">");
-        html.Append(Encode($"{entries.Count} live listing{(entries.Count == 1 ? "" : "s")}"));
-        html.AppendLine("</a></div>");
-        html.AppendLine("<div class=\"rounded-md bg-surface-alt/20 overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted\"><tr><th class=\"px-4 py-3\">Network</th><th class=\"px-4 py-3\">Verification</th><th class=\"px-4 py-3\">Region</th><th class=\"px-4 py-3\">Servers</th><th class=\"px-4 py-3\">Version</th><th class=\"px-4 py-3\">Seen</th></tr></thead><tbody>");
+        html.AppendLine("<div id=\"community-directory\">");
+        html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/20 overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted\"><tr><th class=\"px-4 py-2\">Network</th><th class=\"px-4 py-2 text-center\">Verification</th><th class=\"px-4 py-2\">Region</th><th class=\"px-4 py-2 text-center\">Servers</th><th class=\"px-4 py-2\">Version</th><th class=\"px-4 py-2\">Seen</th></tr></thead><tbody>");
         if (entries.Count == 0)
         {
             html.AppendLine("<tr><td colspan=\"6\" class=\"px-4 py-5 text-center text-muted\">No live networks have opted into directory publication.</td></tr>");
@@ -1946,33 +2546,25 @@ public sealed class DragnetWebfrontService
             foreach (var entry in entries)
             {
                 html.AppendLine("<tr class=\"hover:bg-surface-alt/30\">");
-                html.Append("<td class=\"px-4 py-3 font-medium\">");
-                html.Append("<a class=\"text-primary hover:underline\" href=\"/dragnet/network?id=");
-                html.Append(Uri.EscapeDataString(entry.OriginId));
-                html.Append("\">");
+                html.Append("<td class=\"px-4 py-2 font-medium\">");
+                html.Append("<button type=\"button\" class=\"text-primary hover:underline\" onclick=\"dragnetOpenModal('network-profile-");
+                html.Append(Encode(entry.OriginId));
+                html.Append("')\">");
                 html.Append(Encode(entry.OriginName));
-                html.Append("</a>");
-                if (!string.IsNullOrWhiteSpace(entry.Website))
-                {
-                    html.Append("<div><a class=\"text-xs text-muted hover:underline\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"");
-                    html.Append(Encode(entry.Website));
-                    html.Append("\">");
-                    html.Append("Community site</a></div>");
-                }
-
-                html.Append("</td><td class=\"px-4 py-3\">");
+                html.Append("</button>");
+                html.Append("</td><td class=\"px-4 py-2 text-center\">");
                 html.Append(entry.Verified
-                    ? "<span class=\"text-success\"><i class=\"ph ph-seal-check mr-1\"></i>Verified</span>"
-                    : "<span class=\"text-warning\"><i class=\"ph ph-warning-circle mr-1\"></i>Unverified</span>");
-                html.Append("<div class=\"text-xs text-muted\">");
-                html.Append(Encode(entry.VerificationMethod));
-                html.Append("</div></td><td class=\"px-4 py-3 text-muted\">");
+                    ? "<span class=\"text-success\" title=\"Verified\"><i class=\"ph ph-check-circle\"></i></span>"
+                    : "<span class=\"text-warning\" title=\"Unverified\"><i class=\"ph ph-x-circle\"></i></span>");
+                html.Append("</td><td class=\"px-4 py-2 text-muted\"><span class=\"inline-flex items-center gap-2\"><span>");
+                html.Append(Encode(RegionFlag(entry.Region)));
+                html.Append("</span><span>");
                 html.Append(Encode(entry.Region ?? "Not specified"));
-                html.Append("</td><td class=\"px-4 py-3\">");
+                html.Append("</span></span></td><td class=\"px-4 py-2 text-center\">");
                 html.Append(Encode(entry.ServerCount.ToString()));
-                html.Append("</td><td class=\"px-4 py-3 text-muted\">");
+                html.Append("</td><td class=\"px-4 py-2 text-muted\">");
                 html.Append(Encode(entry.Version ?? "Unknown"));
-                html.Append("</td><td class=\"px-4 py-3 text-muted\">");
+                html.Append("</td><td class=\"px-4 py-2 text-muted\">");
                 html.Append(Encode(DescribeAge(now - entry.LastSeenUtc)));
                 html.AppendLine("</td></tr>");
             }
@@ -1980,6 +2572,172 @@ public sealed class DragnetWebfrontService
 
         html.AppendLine("</tbody></table></div></div>");
     }
+
+    private static void AppendNetworkProfileModals(StringBuilder html, IReadOnlyList<DragnetNetworkProfile> profiles)
+    {
+        foreach (var profile in profiles)
+        {
+            AppendNetworkProfileModal(html, profile);
+        }
+    }
+
+    private static string RegionFlag(string? region)
+    {
+        if (string.IsNullOrWhiteSpace(region))
+        {
+            return "🌐";
+        }
+
+        var trimmed = region.Trim();
+        if (trimmed.Length >= 2 &&
+            char.IsLetter(trimmed[0]) &&
+            char.IsLetter(trimmed[1]) &&
+            (trimmed.Length == 2 || trimmed[2] is '-' or '_' or ' '))
+        {
+            var first = char.ToUpperInvariant(trimmed[0]) - 'A' + 0x1F1E6;
+            var second = char.ToUpperInvariant(trimmed[1]) - 'A' + 0x1F1E6;
+            if (first is >= 0x1F1E6 and <= 0x1F1FF &&
+                second is >= 0x1F1E6 and <= 0x1F1FF)
+            {
+                return char.ConvertFromUtf32(first) + char.ConvertFromUtf32(second);
+            }
+        }
+
+        return "🏳️";
+    }
+
+    private static void AppendNetworkProfileModal(StringBuilder html, DragnetNetworkProfile profile)
+    {
+        AppendModalStart(html, $"network-profile-{profile.OriginId}", "Network profile", "ph-globe-hemisphere-west");
+        html.AppendLine("<div class=\"space-y-4 max-w-5xl\">");
+        html.Append("<div class=\"flex flex-col gap-3 md:flex-row md:items-start md:justify-between\"><div><div class=\"text-xs uppercase tracking-wide text-muted\">Dragnet origin</div><div class=\"text-2xl font-semibold text-foreground\">");
+        html.Append(Encode(profile.OriginName));
+        html.Append("</div><div class=\"mt-1 text-sm text-muted break-all\">");
+        html.Append(Encode(profile.OriginId));
+        html.Append("</div></div>");
+        AppendNetworkHealthBadge(html, profile.Health);
+        html.Append("</div>");
+
+        html.AppendLine("<div class=\"grid grid-cols-2 md:grid-cols-4 gap-3\">");
+        AppendProfileMetric(html, "ph-gavel", profile.SubmittedBanCount.ToString(), "Submitted bans");
+        AppendProfileMetric(html, "ph-shield-warning", profile.ActiveBanCount.ToString(), "Active bans");
+        AppendProfileMetric(html, "ph-hard-drives", profile.ServerCount.ToString(), "Reported servers");
+        AppendProfileMetric(html, "ph-link", $"{profile.EvidenceRatePercent}%", "Evidence coverage");
+        html.AppendLine("</div>");
+
+        html.AppendLine("<div class=\"grid grid-cols-1 lg:grid-cols-2 gap-3\">");
+        html.AppendLine("<section class=\"dragnet-detail-card\"><h4 class=\"font-semibold mb-3\"><i class=\"ph ph-fingerprint mr-2\"></i>Identity and transport</h4><div class=\"grid grid-cols-1 md:grid-cols-2 gap-3\">");
+        AppendProfileField(html, "Endpoint", string.IsNullOrWhiteSpace(profile.Endpoint) ? "Not advertised" : profile.Endpoint, "ph-plugs");
+        AppendProfileField(html, "Version", profile.Version ?? "Unknown", "ph-package");
+        AppendProfileField(html, "Region", profile.Region ?? "Not specified", "ph-map-pin");
+        AppendProfileField(html, "Last heartbeat", DescribeNullableTime(profile.LastSeenUtc), "ph-pulse");
+        AppendProfileField(html, "Identity proof", profile.IdentityVerified ? "Verified" : "Unverified", "ph-seal-check");
+        AppendProfileField(html, "Endpoint proof", profile.EndpointVerified ? "Verified" : "Pending or stale", "ph-shield-check");
+        html.AppendLine("</div></section>");
+
+        html.AppendLine("<section class=\"dragnet-detail-card\"><h4 class=\"font-semibold mb-3\"><i class=\"ph ph-scales mr-2\"></i>Local trust review</h4><div class=\"grid grid-cols-1 md:grid-cols-2 gap-3\">");
+        AppendProfileField(html, "Trusted here", profile.TrustedByThisNetwork ? "Yes" : "No", "ph-handshake");
+        AppendProfileField(html, "Auto approve bans", profile.AutoApproveBans ? "Enabled" : "Disabled", "ph-check-circle");
+        AppendProfileField(html, "Auto approve lifts", profile.AutoApproveLifts ? "Enabled" : "Disabled", "ph-arrow-u-up-left");
+        AppendProfileField(html, "Pending reviews", profile.PendingBanCount.ToString(), "ph-hourglass");
+        AppendProfileField(html, "Approved bans", $"{profile.ApprovedBanCount} ({profile.ApprovalRatePercent}%)", "ph-thumbs-up");
+        AppendProfileField(html, "Denied bans", $"{profile.DeniedBanCount} ({profile.DenialRatePercent}%)", "ph-thumbs-down");
+        html.AppendLine("</div></section>");
+
+        html.AppendLine("<section class=\"dragnet-detail-card\"><h4 class=\"font-semibold mb-3\"><i class=\"ph ph-share-network mr-2\"></i>Propagation</h4><div class=\"grid grid-cols-1 md:grid-cols-2 gap-3\">");
+        AppendProfileField(html, "Enforced coverage", $"{profile.EnforcementCoveragePercent}% ({profile.EnforcedCoverageSlots} slots)", "ph-broadcast");
+        AppendProfileField(html, "Reported coverage", $"{profile.ReportedCoverageSlots} / {profile.EligibleCoverageSlots}", "ph-chart-line-up");
+        AppendProfileField(html, "Acknowledged deliveries", $"{profile.AcknowledgedDeliveryCount} ({profile.DeliveryAcknowledgementPercent}%)", "ph-checks");
+        AppendProfileField(html, "Tracked deliveries", profile.TrackedDeliveryCount.ToString(), "ph-truck");
+        html.AppendLine("</div></section>");
+
+        html.AppendLine("<section class=\"dragnet-detail-card\"><h4 class=\"font-semibold mb-3\"><i class=\"ph ph-cpu mr-2\"></i>Protocol support</h4><div class=\"flex flex-wrap gap-2\">");
+        AppendCapabilityBadge(html, "Delivery acknowledgements", profile.SupportsDeliveryAcknowledgements);
+        AppendCapabilityBadge(html, "Evidence updates", profile.SupportsEvidenceUpdates);
+        AppendCapabilityBadge(html, "Ban attestations", profile.SupportsBanAttestations);
+        AppendCapabilityBadge(html, "Attestation refresh", profile.SupportsAttestationRefreshRequests);
+        html.AppendLine("</div></section></div>");
+
+        html.AppendLine("<section class=\"rounded-md border border-line bg-surface-alt/20 overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted\"><tr><th class=\"px-4 py-2\">Recent player</th><th class=\"px-4 py-2\">Reason</th><th class=\"px-4 py-2\">Evidence</th><th class=\"px-4 py-2\">Local review</th><th class=\"px-4 py-2\">Issued</th></tr></thead><tbody>");
+        if (profile.RecentBans.Count == 0)
+        {
+            html.AppendLine("<tr><td colspan=\"5\" class=\"px-4 py-5 text-center text-muted\">No bans from this network are stored on this node.</td></tr>");
+        }
+        else
+        {
+            foreach (var ban in profile.RecentBans)
+            {
+                html.Append("<tr class=\"hover:bg-surface-alt/30\"><td class=\"px-4 py-2 font-medium\">");
+                html.Append(Encode(ban.PlayerName));
+                html.Append("</td><td class=\"px-4 py-2\">");
+                html.Append(Encode(ban.Reason));
+                html.Append("</td><td class=\"px-4 py-2\">");
+                html.Append(ban.HasEvidence ? "<span class=\"text-success\">Available</span>" : "<span class=\"text-muted\">None</span>");
+                html.Append("</td><td class=\"px-4 py-2\">");
+                html.Append(Encode(ban.ReviewState));
+                html.Append("</td><td class=\"px-4 py-2 text-muted\">");
+                html.Append(Encode($"{ban.CreatedAtUtc:yyyy-MM-dd HH:mm} UTC"));
+                html.AppendLine("</td></tr>");
+            }
+        }
+
+        html.AppendLine("</tbody></table></section></div>");
+        AppendModalEnd(html);
+    }
+
+    private static void AppendNetworkHealthBadge(StringBuilder html, string health)
+    {
+        var (icon, css) = health switch
+        {
+            "Healthy" => ("ph-check-circle", "text-success"),
+            "Degraded" or "Stale" or "Quarantined" => ("ph-warning-circle", "text-warning"),
+            "Errored" => ("ph-x-circle", "text-danger"),
+            _ => ("ph-clock-counter-clockwise", "text-muted")
+        };
+        html.Append("<span class=\"dragnet-status-badge ");
+        html.Append(css);
+        html.Append("\" title=\"Current network transport health\"><i class=\"ph ");
+        html.Append(icon);
+        html.Append("\"></i><span>");
+        html.Append(Encode(health));
+        html.Append("</span></span>");
+    }
+
+    private static void AppendProfileMetric(StringBuilder html, string icon, string value, string label)
+    {
+        html.Append("<div class=\"dragnet-detail-card\"><div class=\"dragnet-detail-label\"><i class=\"ph ");
+        html.Append(icon);
+        html.Append("\"></i>");
+        html.Append(Encode(label));
+        html.Append("</div><div class=\"mt-2 text-2xl font-semibold text-foreground\">");
+        html.Append(Encode(value));
+        html.AppendLine("</div></div>");
+    }
+
+    private static void AppendProfileField(StringBuilder html, string label, string value, string icon)
+    {
+        html.Append("<div><div class=\"dragnet-detail-label\"><i class=\"ph ");
+        html.Append(icon);
+        html.Append("\"></i>");
+        html.Append(Encode(label));
+        html.Append("</div><div class=\"dragnet-detail-value text-sm\">");
+        html.Append(Encode(value));
+        html.AppendLine("</div></div>");
+    }
+
+    private static void AppendCapabilityBadge(StringBuilder html, string label, bool supported)
+    {
+        html.Append("<span class=\"dragnet-status-badge ");
+        html.Append(supported ? "text-success" : "text-muted");
+        html.Append("\"><i class=\"ph ");
+        html.Append(supported ? "ph-check" : "ph-minus");
+        html.Append("\"></i><span>");
+        html.Append(Encode(label));
+        html.Append("</span></span>");
+    }
+
+    private static string DescribeNullableTime(DateTimeOffset? value) =>
+        value is null ? "Never" : $"{value:yyyy-MM-dd HH:mm:ss} UTC";
 
     private static bool IsEnabledValue(string? value) =>
         value is not null &&
@@ -1993,14 +2751,14 @@ public sealed class DragnetWebfrontService
         DragnetUpdateStatus update,
         DateTimeOffset now)
     {
-        html.AppendLine("<div class=\"rounded-lg bg-surface/50 p-2\">");
+        html.AppendLine("<div id=\"dragnet-status\" class=\"rounded-lg border border-line bg-surface/50 p-2\">");
         html.AppendLine("<div class=\"grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2\">");
-        html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 px-4 py-3\">");
+        html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/30 px-4 py-2\">");
         html.Append("<div class=\"text-xs text-muted\">Deployed version</div><div class=\"mt-1 font-semibold\">Dragnet ");
         html.Append(Encode(update.CurrentVersion));
         html.AppendLine("</div></div>");
 
-        html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 px-4 py-3\">");
+        html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/30 px-4 py-2\">");
         html.Append("<div class=\"text-xs text-muted\">Release status</div><div class=\"mt-1 font-medium\">");
         if (update.RestartRequired)
         {
@@ -2033,7 +2791,7 @@ public sealed class DragnetWebfrontService
 
         html.AppendLine("</div></div>");
 
-        html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 px-4 py-3\">");
+        html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/30 px-4 py-2\">");
         html.Append("<div class=\"text-xs text-muted\">Last checked</div><div class=\"mt-1 font-medium\">");
         html.Append(update.CheckedAtUtc is null
             ? "Not yet"
@@ -2052,7 +2810,7 @@ public sealed class DragnetWebfrontService
         }
 
         html.AppendLine("</div></div>");
-        html.AppendLine("<div class=\"rounded-md bg-surface-alt/30 px-4 py-3 flex flex-col justify-center\">");
+        html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/30 px-4 py-2 flex flex-col justify-center\">");
         html.AppendLine("<div class=\"text-xs text-muted\">Release channel</div>");
         html.Append("<div class=\"mt-1 text-xs text-muted\">Auto-update ");
         html.Append(update.AutoUpdateEnabled ? "enabled" : "disabled");
@@ -2113,6 +2871,53 @@ public sealed class DragnetWebfrontService
         };
     }
 
+    private string GetEventFilterClasses(DragnetStoredEvent item)
+    {
+        var filters = new List<string> { DragnetEventFilter.All.ToString() };
+        if (IsLocalEvent(item.Event))
+        {
+            filters.Add(DragnetEventFilter.Local.ToString());
+        }
+        else
+        {
+            if (item.ReviewState is DragnetReviewState.PendingBan or DragnetReviewState.PendingLift)
+            {
+                filters.Add(DragnetEventFilter.Pending.ToString());
+            }
+            else
+            {
+                filters.Add(DragnetEventFilter.Reviewed.ToString());
+            }
+
+            if (!string.IsNullOrWhiteSpace(item.ImportError))
+            {
+                filters.Add(DragnetEventFilter.ImportFailed.ToString());
+            }
+
+            if (item.ImportedAtUtc is not null)
+            {
+                filters.Add(DragnetEventFilter.Imported.ToString());
+            }
+
+            if (item.ReviewState is DragnetReviewState.DeniedBan or DragnetReviewState.DeniedLift)
+            {
+                filters.Add(DragnetEventFilter.Denied.ToString());
+            }
+
+            if (item.ReviewState is DragnetReviewState.IgnoredBan or DragnetReviewState.IgnoredLift)
+            {
+                filters.Add(DragnetEventFilter.Ignored.ToString());
+            }
+        }
+
+        return string.Join(' ', filters.Distinct());
+    }
+
+    private bool EventMatchesFilter(DragnetStoredEvent item, DragnetEventFilter filter) =>
+        GetEventFilterClasses(item)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Contains(filter.ToString(), StringComparer.OrdinalIgnoreCase);
+
     private static DragnetStoredEvent? ResolveSelectedEvent(
         IReadOnlyList<DragnetStoredEvent> events,
         string? selectedEventId)
@@ -2134,13 +2939,15 @@ public sealed class DragnetWebfrontService
             var activeClass = filter == activeFilter
                 ? "bg-action-primary text-foreground border-action-primary"
                 : "border-line text-muted hover:bg-surface-hover";
-            html.Append("<a data-enhance-nav=\"false\" class=\"inline-flex items-center px-3 py-1.5 rounded-md border text-sm ");
+            html.Append("<button type=\"button\" data-dragnet-filter=\"");
+            html.Append(Encode(filter.ToString()));
+            html.Append("\" class=\"inline-flex items-center px-3 py-1.5 rounded-md border text-sm ");
             html.Append(activeClass);
-            html.Append("\" href=\"");
-            html.Append(BuildDashboardUri(filter));
-            html.Append("\">");
+            html.Append("\" onclick=\"dragnetFilterEvents('");
+            html.Append(Encode(filter.ToString()));
+            html.Append("')\">");
             html.Append(Encode(FilterLabel(filter)));
-            html.AppendLine("</a>");
+            html.AppendLine("</button>");
         }
 
         html.AppendLine("</div>");
@@ -2163,27 +2970,29 @@ public sealed class DragnetWebfrontService
         DragnetEventFilter filter,
         string? eventId = null)
     {
-        var uri = $"/Interaction/Render/{NavigationInteractionId}?filter={filter}";
+        var uri = BuildModuleUri("events", filter);
         return string.IsNullOrWhiteSpace(eventId)
             ? uri
             : $"{uri}&eventId={Uri.EscapeDataString(eventId)}";
     }
 
-    private string BuildLedgerUrl()
+    private static string BuildModuleUri(
+        string module,
+        DragnetEventFilter? filter = null,
+        int? ledgerPage = null)
     {
-        var endpoint = _configuration.PublicEndpoint?.TrimEnd('/');
-        return string.IsNullOrWhiteSpace(endpoint)
-            ? "/dragnet/ledger"
-            : $"{endpoint}/ledger";
-    }
+        var uri = $"/Interaction/Render/{NavigationInteractionId}?module={Uri.EscapeDataString(module)}";
+        if (filter is not null)
+        {
+            uri += $"&filter={filter}";
+        }
 
-    private static string RenderLedgerRedirect(string ledgerUrl)
-    {
-        var encodedUrl = Encode(ledgerUrl);
-        return $"""
-                <meta http-equiv="refresh" content="0;url={encodedUrl}">
-                <p>Opening <a href="{encodedUrl}">Dragnet Ledger</a>...</p>
-                """;
+        if (ledgerPage is not null)
+        {
+            uri += $"&ledgerPage={ledgerPage.Value}";
+        }
+
+        return uri;
     }
 
     private static string FilterLabel(DragnetEventFilter filter) => filter switch

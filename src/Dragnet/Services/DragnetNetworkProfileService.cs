@@ -216,7 +216,7 @@ public sealed class DragnetNetworkProfileService
         html.Append(Encode(profile.Health));
         html.Append("\">");
         html.Append(Encode(profile.Health));
-        html.Append("</div></div><div class=\"actions\"><a class=\"button\" href=\"/dragnet/ledger\">Ban ledger</a><a class=\"button\" href=\"/\">Back to IW4MAdmin</a></div></header>");
+        html.Append("</div></div><div class=\"actions\"><a class=\"button\" href=\"/\">Back to IW4MAdmin</a></div></header>");
         html.Append("<section class=\"metrics\">");
         AppendMetric(html, profile.SubmittedBanCount, "submitted bans");
         AppendMetric(html, profile.ActiveBanCount, "active bans");
@@ -282,11 +282,9 @@ public sealed class DragnetNetworkProfileService
         {
             foreach (var ban in profile.RecentBans)
             {
-                html.Append("<tr><td><a href=\"/dragnet/ledger?id=");
-                html.Append(Uri.EscapeDataString(ban.EventId));
-                html.Append("\"><strong>");
+                html.Append("<tr><td><strong>");
                 html.Append(Encode(ban.PlayerName));
-                html.Append("</strong></a></td><td>");
+                html.Append("</strong></td><td>");
                 html.Append(Encode(ban.Reason));
                 html.Append("</td><td>");
                 html.Append(ban.HasEvidence ? "Available" : "<span class=\"muted\">None</span>");
