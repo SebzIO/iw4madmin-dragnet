@@ -26,6 +26,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("directory lists only opted-in healthy networks", TestDirectoryListingsAsync),
     ("network profiles summarize trust review health and coverage", TestNetworkProfileAsync),
     ("notification inbox persists deduplicates and acknowledges per administrator", TestNotificationInboxAsync),
+    ("notification webhook completes delivery for local events", TestNotificationWebhookAsync),
     ("heartbeat peer proofs reject tampering", TestHeartbeatPeerProofValidationAsync),
     ("peer capability negotiation preserves legacy identity signatures", TestLegacyPeerSignatureCompatibility),
     ("event store expires elapsed temp bans", TestEventStoreExpiresElapsedTempBansAsync),
@@ -975,6 +976,38 @@ static async Task TestNotificationInboxAsync()
         "unread alerts for other administrators should survive a plugin restart");
 }
 
+static async Task TestNotificationWebhookAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        NotificationsEnabled = true,
+        NotificationWebhookUrl = "https://discord.example.test/webhook"
+    };
+    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
+    await eventStore.LoadAsync(CancellationToken.None);
+    var notificationStore = new DragnetNotificationStore(System.IO.Path.Combine(testDir.Path, "notifications"));
+    await notificationStore.LoadAsync(CancellationToken.None);
+    var handler = new CountingResponseHandler(System.Net.HttpStatusCode.NoContent, "");
+    using var service = new DragnetNotificationService(
+        configuration,
+        notificationStore,
+        eventStore,
+        () => null!,
+        new TestLogger<DragnetNotificationService>(),
+        httpClient: new HttpClient(handler));
+    var envelope = CreateEnvelope("local-webhook", DragnetEventType.BanCreated) with
+    {
+        PlayerName = "Webhook Player",
+        Reason = "Webhook reason"
+    };
+
+    await service.NotifyNewEventAsync(envelope, CancellationToken.None);
+
+    Assert.Equal(1, handler.RequestCount,
+        "notification creation should complete one webhook request before returning");
+}
+
 static async Task TestHeartbeatPeerProofValidationAsync()
 {
     await using var testDir = new TestDirectory();
@@ -1753,6 +1786,32 @@ static async Task TestPublicLedgerAsync()
         },
         ReviewState = DragnetReviewState.PendingBan
     }, CancellationToken.None);
+    var zeroIdTempBan = CreateEnvelope("zero-id-origin", DragnetEventType.BanCreated) with
+    {
+        EventId = "zero-id-tempban",
+        PlayerNetworkId = "zero-id-player",
+        PenaltyKind = DragnetPenaltyKind.TempBan,
+        Iw4mAdminPenaltyId = 0,
+        ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(1)
+    };
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = zeroIdTempBan,
+        ReviewState = DragnetReviewState.PendingBan
+    }, CancellationToken.None);
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = CreateEnvelope(zeroIdTempBan.OriginId, DragnetEventType.BanLifted) with
+        {
+            EventId = "public-ledger-lift",
+            PlayerNetworkId = zeroIdTempBan.PlayerNetworkId,
+            PlayerGame = zeroIdTempBan.PlayerGame,
+            Iw4mAdminPenaltyId = 0,
+            PenaltyKind = DragnetPenaltyKind.TempBan,
+            CreatedAtUtc = zeroIdTempBan.CreatedAtUtc.AddMinutes(1)
+        },
+        ReviewState = DragnetReviewState.PendingLift
+    }, CancellationToken.None);
     var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
     await peerStore.LoadAsync(configuration, CancellationToken.None);
     await peerStore.UpsertAsync(new DragnetPeerInfo
@@ -1773,7 +1832,9 @@ static async Task TestPublicLedgerAsync()
     }, CancellationToken.None, identityVerified: true);
     var ledger = new DragnetLedgerService(configuration, eventStore, peerStore, () => 2, identity);
     var snapshot = await ledger.GetSnapshotAsync(CancellationToken.None);
-    var ledgerBan = snapshot.Bans.Single();
+    var ledgerBan = snapshot.Bans.Single(item =>
+        item.EventIds.Contains(ban.EventId, StringComparer.OrdinalIgnoreCase));
+    var liftedZeroIdBan = snapshot.Bans.Single(item => item.EventId == zeroIdTempBan.EventId);
     Assert.Equal(1, ledgerBan.DuplicateEventCount, "ledger should consolidate duplicate penalty events");
     Assert.Equal(2, ledgerBan.AcceptedNetworkCount, "ledger should count signed network coverage");
     Assert.Equal(3, ledgerBan.EnforcedServerCount, "ledger should sum enforced server coverage");
@@ -1783,6 +1844,8 @@ static async Task TestPublicLedgerAsync()
     Assert.Equal(1, ledgerBan.StaleReportCount, "ledger should flag stale non-enforced reports");
     Assert.Equal("Needs attention", ledgerBan.ReconciliationStatus,
         "stale or unavailable coverage should require attention");
+    Assert.Equal("Lifted", liftedZeroIdBan.Status,
+        "a lift should close a zero-penalty-id tempban for the same origin and player");
     Assert.False(
         ledgerBan.Attestations.Any(attestation =>
             attestation.NetworkOriginId.Equals(ban.OriginId, StringComparison.OrdinalIgnoreCase)),

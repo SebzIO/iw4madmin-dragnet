@@ -17,6 +17,7 @@ public sealed class DragnetLocalEventService
     private readonly DragnetIdentityDocument _identity;
     private readonly DragnetIdentityService _identityService;
     private readonly DragnetAttestationService _attestationService;
+    private readonly DragnetNotificationService _notificationService;
     private readonly ILogger<DragnetLocalEventService> _logger;
 
     public DragnetLocalEventService(
@@ -25,6 +26,7 @@ public sealed class DragnetLocalEventService
         DragnetIdentityDocument identity,
         DragnetIdentityService identityService,
         DragnetAttestationService attestationService,
+        DragnetNotificationService notificationService,
         ILogger<DragnetLocalEventService> logger)
     {
         _configuration = configuration;
@@ -32,6 +34,7 @@ public sealed class DragnetLocalEventService
         _identity = identity;
         _identityService = identityService;
         _attestationService = attestationService;
+        _notificationService = notificationService;
         _logger = logger;
     }
 
@@ -59,7 +62,7 @@ public sealed class DragnetLocalEventService
             return;
         }
 
-        await _store.UpsertAsync(new DragnetStoredEvent
+        var inserted = await _store.UpsertAsync(new DragnetStoredEvent
         {
             Event = envelope,
             ReviewState = DragnetReviewState.ApprovedBan
@@ -68,6 +71,10 @@ public sealed class DragnetLocalEventService
             envelope.EventId,
             DragnetBanCoverageStatus.Enforced,
             token);
+        if (inserted)
+        {
+            await _notificationService.NotifyNewEventAsync(envelope, token);
+        }
 
         _logger.LogInformation(
             "Captured local Dragnet ban event {EventId} for {PlayerName}",
@@ -82,23 +89,44 @@ public sealed class DragnetLocalEventService
             return;
         }
 
-        if (revokeEvent.Penalty.Type is not (EFPenalty.PenaltyType.Ban or EFPenalty.PenaltyType.TempBan))
+        var priorBan = (await _store.ListAsync(token))
+            .Where(item =>
+                item.Event.EventType is DragnetEventType.BanCreated &&
+                item.Event.OriginId.Equals(_identity.OriginId, StringComparison.OrdinalIgnoreCase) &&
+                item.Event.PlayerNetworkId.Equals(
+                    revokeEvent.Client.NetworkId.ToString(),
+                    StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(item =>
+                revokeEvent.Penalty.PenaltyId > 0 &&
+                item.Event.Iw4mAdminPenaltyId == revokeEvent.Penalty.PenaltyId)
+            .ThenByDescending(item => item.Event.CreatedAtUtc)
+            .FirstOrDefault();
+        if (priorBan is null)
         {
+            _logger.LogDebug(
+                "Ignored local penalty revoke for {PlayerName}: no originating Dragnet ban matched",
+                revokeEvent.Client.CleanedName ?? revokeEvent.Client.Name);
             return;
         }
 
         var envelope = CreateEnvelope(
             DragnetEventType.BanLifted,
             revokeEvent,
-            revokeEvent.Penalty.Type == EFPenalty.PenaltyType.Ban
-                ? DragnetPenaltyKind.Ban
-                : DragnetPenaltyKind.TempBan);
+            priorBan.Event.PenaltyKind,
+            priorBan.Event.Iw4mAdminPenaltyId,
+            revokeEvent.CreatedAt > DateTimeOffset.UnixEpoch
+                ? revokeEvent.CreatedAt.UtcDateTime
+                : DateTime.UtcNow);
 
-        await _store.UpsertAsync(new DragnetStoredEvent
+        var inserted = await _store.UpsertAsync(new DragnetStoredEvent
         {
             Event = envelope,
             ReviewState = DragnetReviewState.ApprovedLift
         }, token);
+        if (inserted)
+        {
+            await _notificationService.NotifyNewEventAsync(envelope, token);
+        }
 
         _logger.LogInformation(
             "Captured local Dragnet lift event {EventId} for {PlayerName}",
@@ -109,18 +137,23 @@ public sealed class DragnetLocalEventService
     private DragnetEventEnvelope CreateEnvelope(
         DragnetEventType eventType,
         ClientPenaltyEvent penaltyEvent,
-        DragnetPenaltyKind penaltyKind)
+        DragnetPenaltyKind penaltyKind,
+        int? penaltyIdOverride = null,
+        DateTime? createdAtOverride = null)
     {
         var penalty = penaltyEvent.Penalty;
         var client = penaltyEvent.Client;
-        var createdAtUtc = NormalizeCreatedAt(penalty.When, penaltyEvent.CreatedAt);
+        var createdAtUtc = createdAtOverride is { } overrideValue
+            ? DateTime.SpecifyKind(overrideValue, DateTimeKind.Utc)
+            : NormalizeCreatedAt(penalty.When, penaltyEvent.CreatedAt);
+        var penaltyId = penaltyIdOverride ?? penalty.PenaltyId;
         var expiresAtUtc = penalty.Expires is { } expires
             ? DateTime.SpecifyKind(expires, DateTimeKind.Utc)
             : (DateTime?)null;
 
         var unsignedEnvelope = new DragnetEventEnvelope
         {
-            EventId = CreateEventId(eventType, penalty.PenaltyId, client.NetworkId, createdAtUtc),
+            EventId = CreateEventId(eventType, penaltyId, client.NetworkId, createdAtUtc),
             EventType = eventType,
             OriginId = _identity.OriginId,
             OriginName = _identity.OriginName,
@@ -128,7 +161,7 @@ public sealed class DragnetLocalEventService
             OriginEndpoint = _configuration.PublicEndpoint,
             OriginPublicKeyPem = _identity.PublicKeyPem,
             PenaltyKind = penaltyKind,
-            Iw4mAdminPenaltyId = penalty.PenaltyId,
+            Iw4mAdminPenaltyId = penaltyId,
             PlayerNetworkId = client.NetworkId.ToString(),
             PlayerGame = client.GameName.ToString(),
             PlayerName = client.CleanedName ?? client.Name,

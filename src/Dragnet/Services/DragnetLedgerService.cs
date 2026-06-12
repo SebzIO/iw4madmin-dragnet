@@ -75,11 +75,8 @@ public sealed class DragnetLedgerService
             .ThenByDescending(item => item.LastSeenUtc)
             .Select(item => item.Event.AdminName?.Trim())
             .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name));
-        var lifted = groupedEvents.Any(item => lifts.Any(lift =>
-            lift.OriginId.Equals(item.Event.OriginId, StringComparison.OrdinalIgnoreCase) &&
-            lift.Iw4mAdminPenaltyId == item.Event.Iw4mAdminPenaltyId &&
-            lift.PlayerNetworkId.Equals(item.Event.PlayerNetworkId, StringComparison.OrdinalIgnoreCase) &&
-            lift.CreatedAtUtc >= item.Event.CreatedAtUtc));
+        var lifted = groupedEvents.Any(item =>
+            lifts.Any(lift => DragnetEventRelationships.LiftMatchesBan(lift, item.Event)));
         var status = lifted
             ? "Lifted"
             : groupedEvents.All(item => item.Event.IsExpired(now))

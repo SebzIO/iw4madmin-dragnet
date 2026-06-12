@@ -159,11 +159,7 @@ public sealed class DragnetNetworkProfileService
             ActiveBanCount = canonicalBans.Count(item =>
                 !item.Event.IsExpired(now) &&
                 !liftEvents.Any(lift =>
-                    lift.Iw4mAdminPenaltyId == item.Event.Iw4mAdminPenaltyId &&
-                    lift.PlayerNetworkId.Equals(
-                        item.Event.PlayerNetworkId,
-                        StringComparison.OrdinalIgnoreCase) &&
-                    lift.CreatedAtUtc >= item.Event.CreatedAtUtc)),
+                    DragnetEventRelationships.LiftMatchesBan(lift, item.Event))),
             EvidenceCount = evidenceCount,
             EvidenceRatePercent = Percent(evidenceCount, canonicalBans.Count),
             ReviewedBanCount = reviewedBans,

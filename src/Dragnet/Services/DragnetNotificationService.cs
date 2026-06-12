@@ -17,10 +17,8 @@ public sealed class DragnetNotificationService : IDisposable
     private readonly Func<IManager> _managerFactory;
     private readonly ILogger<DragnetNotificationService> _logger;
     private readonly IAlertManager? _alertManager;
-    private readonly HttpClient _httpClient = new()
-    {
-        Timeout = TimeSpan.FromSeconds(10)
-    };
+    private readonly HttpClient _httpClient;
+    private readonly bool _ownsHttpClient;
     private readonly Dictionary<int, DateTimeOffset> _lastInGameSummary =
         new();
     private CancellationTokenSource? _runCancellation;
@@ -32,7 +30,8 @@ public sealed class DragnetNotificationService : IDisposable
         DragnetEventStore eventStore,
         Func<IManager> managerFactory,
         ILogger<DragnetNotificationService> logger,
-        IAlertManager? alertManager = null)
+        IAlertManager? alertManager = null,
+        HttpClient? httpClient = null)
     {
         _configuration = configuration;
         _store = store;
@@ -40,6 +39,11 @@ public sealed class DragnetNotificationService : IDisposable
         _managerFactory = managerFactory;
         _logger = logger;
         _alertManager = alertManager;
+        _httpClient = httpClient ?? new HttpClient
+        {
+            Timeout = TimeSpan.FromSeconds(10)
+        };
+        _ownsHttpClient = httpClient is null;
     }
 
     public void Start()
@@ -197,7 +201,7 @@ public sealed class DragnetNotificationService : IDisposable
             return;
         }
 
-        _ = SendWebhookAsync(notification, CancellationToken.None);
+        await SendWebhookAsync(notification, token);
     }
 
     private async Task RunAsync(CancellationToken token)
@@ -283,6 +287,9 @@ public sealed class DragnetNotificationService : IDisposable
     public void Dispose()
     {
         StopAsync().GetAwaiter().GetResult();
-        _httpClient.Dispose();
+        if (_ownsHttpClient)
+        {
+            _httpClient.Dispose();
+        }
     }
 }
