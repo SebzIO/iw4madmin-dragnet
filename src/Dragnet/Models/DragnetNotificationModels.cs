@@ -19,6 +19,7 @@ public sealed record DragnetNotification
     public required string OriginName { get; init; }
     public string? PlayerName { get; init; }
     public string? Reason { get; init; }
+    public string? PlayerGame { get; init; }
     public string? AdminName { get; init; }
     public string? OriginServerName { get; init; }
     public DateTimeOffset? ExpiresAtUtc { get; init; }

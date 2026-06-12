@@ -1019,6 +1019,10 @@ static async Task TestNotificationWebhookAsync()
         "Discord embed should use small-caps player column headers");
     Assert.True(webhookFields.Any(field => field.GetProperty("name").GetString() == "ɴᴇᴛᴡᴏʀᴋ"),
         "Discord embed should use small-caps network column headers");
+    Assert.True(webhookFields.Any(field =>
+            field.GetProperty("name").GetString() == "ᴘʟᴀᴛꜰᴏʀᴍ" &&
+            field.GetProperty("value").GetString() == envelope.PlayerGame),
+        "Discord embed should identify the platform the ban came from");
     Assert.True(webhookFields.Count(field => field.GetProperty("inline").GetBoolean()) >= 3,
         "Discord embed should arrange summary fields in columns");
     Assert.Equal(0, webhookDocument.RootElement
@@ -1026,6 +1030,24 @@ static async Task TestNotificationWebhookAsync()
             .GetProperty("parse")
             .GetArrayLength(),
         "Discord webhook should suppress accidental mentions");
+
+    await service.NotifyUpdateInstalledAsync("0.1.0-beta.20", CancellationToken.None);
+
+    Assert.Equal(2, handler.RequestCount,
+        "update notification creation should complete one webhook request before returning");
+    var updateBody = handler.LastRequestBody ?? "";
+    using var updateDocument = JsonDocument.Parse(updateBody);
+    var updateFields = updateDocument.RootElement
+        .GetProperty("embeds")[0]
+        .GetProperty("fields")
+        .EnumerateArray()
+        .ToList();
+    Assert.True(updateFields.Count(field => field.GetProperty("inline").GetBoolean()) >= 3,
+        "update Discord embed should arrange status fields in columns");
+    Assert.True(updateFields.Any(field =>
+            field.GetProperty("name").GetString() == "ʀᴇǫᴜɪʀᴇᴅ" &&
+            field.GetProperty("value").GetString() == "Restart IW4MAdmin"),
+        "update Discord embed should identify the restart requirement as a field");
 }
 
 static async Task TestHeartbeatPeerProofValidationAsync()
@@ -1877,6 +1899,12 @@ static async Task TestPublicLedgerAsync()
         html,
         "public ledger should provide a direct route back to the IW4MAdmin webfront");
     Assert.Contains("Ledger Player", html, "public ledger should render searchable ban details");
+    Assert.Contains("<th>Platform</th>", html,
+        "public ledger should include a dedicated platform column");
+    Assert.Contains("<td>IW4</td><td>origin-ledger", html,
+        "public ledger should show the platform beside each ban row");
+    Assert.Contains("<label>Platform</label><div>IW4</div>", html,
+        "expanded ledger details should identify the platform");
     Assert.Contains("issued by Ledger Admin", html,
         "public ledger should identify the administrator who issued the punishment");
     Assert.Contains("<label>Issued by</label><div>Ledger Admin</div>", html,
@@ -1894,9 +1922,10 @@ static async Task TestPublicLedgerAsync()
         "public ledger should describe attestations as peer propagation");
     Assert.Contains("TDM, Domination, Hardpoint", html, "public ledger should name covered servers");
     Assert.Contains("https://youtu.be/evidence", html, "public ledger should link HTTPS evidence");
+    var normalizedHtml = html.ReplaceLineEndings("\n");
     Assert.Contains(
-        "</td></tr>\n<tr class=\"detail-row\"><td colspan=\"8\"><section class=\"detail\">",
-        html,
+        "</td></tr>\n<tr class=\"detail-row\"><td colspan=\"9\"><section class=\"detail\">",
+        normalizedHtml,
         "selected ban details should expand directly beneath the ban row");
     Assert.Contains(
         $"/dragnet/ledger?id={ledgerBan.EventId}&amp;q=Ledger#ban-{ledgerBan.EventId}",

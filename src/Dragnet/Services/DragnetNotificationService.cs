@@ -103,6 +103,7 @@ public sealed class DragnetNotificationService : IDisposable
             OriginName = envelope.OriginName,
             PlayerName = envelope.PlayerName,
             Reason = envelope.Reason,
+            PlayerGame = envelope.PlayerGame,
             AdminName = envelope.AdminName,
             OriginServerName = envelope.OriginServerName,
             ExpiresAtUtc = envelope.ExpiresAtUtc,
@@ -130,6 +131,7 @@ public sealed class DragnetNotificationService : IDisposable
             OriginName = update.OriginName,
             PlayerName = storedEvent.Event.PlayerName,
             Reason = storedEvent.Event.Reason,
+            PlayerGame = storedEvent.Event.PlayerGame,
             AdminName = update.SubmittedByName,
             OriginServerName = storedEvent.Event.OriginServerName,
             CreatedAtUtc = update.CreatedAtUtc
@@ -183,14 +185,15 @@ public sealed class DragnetNotificationService : IDisposable
                 Type = DragnetNotificationType.StaleReview,
                 EventId = item.Event.EventId,
                 Title = "Dragnet review is stale",
-            Message = $"{item.Event.PlayerName} from {item.Event.OriginName} is still awaiting review.",
-            OriginName = item.Event.OriginName,
-            PlayerName = item.Event.PlayerName,
-            Reason = item.Event.Reason,
-            AdminName = item.Event.AdminName,
-            OriginServerName = item.Event.OriginServerName,
-            ExpiresAtUtc = item.Event.ExpiresAtUtc,
-            CreatedAtUtc = DateTimeOffset.UtcNow
+                Message = $"{item.Event.PlayerName} from {item.Event.OriginName} is still awaiting review.",
+                OriginName = item.Event.OriginName,
+                PlayerName = item.Event.PlayerName,
+                Reason = item.Event.Reason,
+                PlayerGame = item.Event.PlayerGame,
+                AdminName = item.Event.AdminName,
+                OriginServerName = item.Event.OriginServerName,
+                ExpiresAtUtc = item.Event.ExpiresAtUtc,
+                CreatedAtUtc = DateTimeOffset.UtcNow
             }, token);
         }
     }
@@ -303,27 +306,9 @@ public sealed class DragnetNotificationService : IDisposable
                 DragnetNotificationType.UpdateInstalled => 0x8E4EC6,
                 _ => 0x687076
             };
-            var fields = new List<object>
-            {
-                new
-                {
-                    name = "ᴘʟᴀʏᴇʀ",
-                    value = DiscordValue(notification.PlayerName ?? "Not applicable"),
-                    inline = true
-                },
-                new
-                {
-                    name = "ɴᴇᴛᴡᴏʀᴋ",
-                    value = DiscordValue(notification.OriginName),
-                    inline = true
-                },
-                new
-                {
-                    name = "ᴀᴄᴛɪᴏɴ",
-                    value = DiscordValue(action),
-                    inline = true
-                }
-            };
+            var fields = notification.Type is DragnetNotificationType.UpdateInstalled
+                ? CreateUpdateFields(action)
+                : CreateEventFields(notification, action);
             if (!string.IsNullOrWhiteSpace(notification.OriginServerName) ||
                 !string.IsNullOrWhiteSpace(notification.AdminName))
             {
@@ -391,6 +376,70 @@ public sealed class DragnetNotificationService : IDisposable
         var trimmed = value.Trim();
         return trimmed.Length <= 1024 ? trimmed : trimmed[..1021] + "...";
     }
+
+    private static List<object> CreateEventFields(DragnetNotification notification, string action)
+    {
+        var fields = new List<object>
+        {
+            new
+            {
+                name = "ᴘʟᴀʏᴇʀ",
+                value = DiscordValue(notification.PlayerName ?? "Not applicable"),
+                inline = true
+            },
+            new
+            {
+                name = "ɴᴇᴛᴡᴏʀᴋ",
+                value = DiscordValue(notification.OriginName),
+                inline = true
+            },
+            new
+            {
+                name = "ᴀᴄᴛɪᴏɴ",
+                value = DiscordValue(action),
+                inline = true
+            }
+        };
+        if (!string.IsNullOrWhiteSpace(notification.PlayerGame))
+        {
+            fields.Add(new
+            {
+                name = "ᴘʟᴀᴛꜰᴏʀᴍ",
+                value = DiscordValue(notification.PlayerGame),
+                inline = true
+            });
+        }
+
+        return fields;
+    }
+
+    private static List<object> CreateUpdateFields(string action) =>
+    [
+        new
+        {
+            name = "ꜱᴏᴜʀᴄᴇ",
+            value = DiscordValue("Local Dragnet"),
+            inline = true
+        },
+        new
+        {
+            name = "ꜱᴛᴀᴛᴜꜱ",
+            value = DiscordValue("Installed"),
+            inline = true
+        },
+        new
+        {
+            name = "ᴀᴄᴛɪᴏɴ",
+            value = DiscordValue(action),
+            inline = true
+        },
+        new
+        {
+            name = "ʀᴇǫᴜɪʀᴇᴅ",
+            value = DiscordValue("Restart IW4MAdmin"),
+            inline = true
+        }
+    ];
 
     public void Dispose()
     {

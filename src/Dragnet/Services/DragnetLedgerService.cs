@@ -261,8 +261,8 @@ public sealed class DragnetLedgerService
         html.Append("</div><a class=\"webfront-link\" href=\"/\" aria-label=\"Return to IW4MAdmin webfront\">Back to IW4MAdmin</a></div></header>");
         html.Append("<form class=\"tools\" method=\"get\" action=\"/dragnet/ledger\"><input name=\"q\" value=\"");
         html.Append(Encode(search));
-        html.Append("\" placeholder=\"Search player, admin, network ID, reason, or origin\"><button type=\"submit\">Search</button></form>");
-        html.AppendLine("<div class=\"table\"><table><thead><tr><th>Player</th><th>Origin</th><th>Type</th><th>Status</th><th>Reconciliation</th><th>Accepted</th><th>Enforced servers</th><th>Issued</th></tr></thead><tbody>");
+        html.Append("\" placeholder=\"Search player, platform, admin, network ID, reason, or origin\"><button type=\"submit\">Search</button></form>");
+        html.AppendLine("<div class=\"table\"><table><thead><tr><th>Player</th><th>Platform</th><th>Origin</th><th>Type</th><th>Status</th><th>Reconciliation</th><th>Accepted</th><th>Enforced servers</th><th>Issued</th></tr></thead><tbody>");
         foreach (var ban in filtered)
         {
             var isSelected = selected is not null &&
@@ -281,8 +281,10 @@ public sealed class DragnetLedgerService
             html.Append("\"><strong>");
             html.Append(Encode(ban.PlayerName));
             html.Append("</strong></a><div class=\"muted\">");
-            html.Append(Encode($"{ban.PlayerNetworkId} {ban.PlayerGame}".Trim()));
+            html.Append(Encode(ban.PlayerNetworkId));
             html.Append("</div></td><td>");
+            html.Append(Encode(string.IsNullOrWhiteSpace(ban.PlayerGame) ? "Unknown" : ban.PlayerGame));
+            html.Append("</td><td>");
             html.Append(Encode(ban.OriginName));
             html.Append("<div class=\"muted\">");
             html.Append(Encode(ban.OriginServerName));
@@ -316,7 +318,7 @@ public sealed class DragnetLedgerService
         }
         if (filtered.Count == 0)
         {
-            html.AppendLine("<tr><td colspan=\"8\" class=\"muted\">No bans match this search.</td></tr>");
+            html.AppendLine("<tr><td colspan=\"9\" class=\"muted\">No bans match this search.</td></tr>");
         }
         html.AppendLine("</tbody></table></div>");
         html.Append("<footer class=\"muted\" style=\"margin-top:24px\">Generated ");
@@ -331,11 +333,12 @@ public sealed class DragnetLedgerService
         StringBuilder html,
         DragnetLedgerBan ban)
     {
-        html.Append("<tr class=\"detail-row\"><td colspan=\"8\"><section class=\"detail\"><h2>");
+        html.Append("<tr class=\"detail-row\"><td colspan=\"9\"><section class=\"detail\"><h2>");
         html.Append(Encode(ban.PlayerName));
         html.Append("</h2><div class=\"grid\">");
         AppendField(html, "Reason", ban.Reason);
-        AppendField(html, "Network ID", $"{ban.PlayerNetworkId} {ban.PlayerGame}".Trim());
+        AppendField(html, "Network ID", ban.PlayerNetworkId);
+        AppendField(html, "Platform", string.IsNullOrWhiteSpace(ban.PlayerGame) ? "Unknown" : ban.PlayerGame);
         AppendField(html, "Origin", $"{ban.OriginName} / {ban.OriginServerName}");
         AppendField(html, "Issued by", ban.AdminName ?? "Unknown");
         AppendField(html, "Status", ban.Status);
