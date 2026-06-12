@@ -372,18 +372,11 @@ public sealed class DragnetLedgerService
             foreach (var attestation in ban.Attestations)
             {
                 html.Append("<div class=\"attest-row\"><div>");
-                if (!string.IsNullOrWhiteSpace(attestation.PublicEndpoint))
-                {
-                    html.Append("<a href=\"");
-                    html.Append(Encode(attestation.PublicEndpoint));
-                    html.Append("/ledger\" target=\"_blank\" rel=\"noopener noreferrer\">");
-                    html.Append(Encode(attestation.NetworkName));
+                html.Append("<a href=\"/dragnet/network?id=");
+                html.Append(Uri.EscapeDataString(attestation.NetworkOriginId));
+                html.Append("\">");
+                html.Append(Encode(attestation.NetworkName));
                 html.Append("</a>");
-                }
-                else
-                {
-                    html.Append(Encode(attestation.NetworkName));
-                }
                 if (attestation.ServerNames.Count > 0)
                 {
                     html.Append("<div class=\"muted\">");

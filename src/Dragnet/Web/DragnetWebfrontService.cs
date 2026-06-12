@@ -269,7 +269,11 @@ public sealed class DragnetWebfrontService
             {
                 html.AppendLine("<tr class=\"hover:bg-surface-alt/30\">");
                 html.Append("<td class=\"px-4 py-3 font-medium\">");
+                html.Append("<a class=\"text-primary hover:underline\" href=\"/dragnet/network?id=");
+                html.Append(Uri.EscapeDataString(peer.OriginId));
+                html.Append("\">");
                 html.Append(Encode(peer.OriginName));
+                html.Append("</a>");
                 html.AppendLine("</td>");
                 html.Append("<td class=\"px-4 py-3 text-muted\">");
                 html.Append(Encode(peer.Endpoint));
@@ -1620,17 +1624,17 @@ public sealed class DragnetWebfrontService
             {
                 html.AppendLine("<tr class=\"hover:bg-surface-alt/30\">");
                 html.Append("<td class=\"px-4 py-3 font-medium\">");
+                html.Append("<a class=\"text-primary hover:underline\" href=\"/dragnet/network?id=");
+                html.Append(Uri.EscapeDataString(entry.OriginId));
+                html.Append("\">");
+                html.Append(Encode(entry.OriginName));
+                html.Append("</a>");
                 if (!string.IsNullOrWhiteSpace(entry.Website))
                 {
-                    html.Append("<a class=\"text-primary hover:underline\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"");
+                    html.Append("<div><a class=\"text-xs text-muted hover:underline\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"");
                     html.Append(Encode(entry.Website));
                     html.Append("\">");
-                    html.Append(Encode(entry.OriginName));
-                    html.Append("</a>");
-                }
-                else
-                {
-                    html.Append(Encode(entry.OriginName));
+                    html.Append("Community site</a></div>");
                 }
 
                 html.Append("</td><td class=\"px-4 py-3\">");

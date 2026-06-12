@@ -22,6 +22,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("statistics aggregate participating servers and shared bans", TestStatisticsAsync),
     ("onboarding verifies public health and readiness", TestOnboardingReadinessAsync),
     ("directory lists only opted-in healthy networks", TestDirectoryListingsAsync),
+    ("network profiles summarize trust review health and coverage", TestNetworkProfileAsync),
     ("heartbeat peer proofs reject tampering", TestHeartbeatPeerProofValidationAsync),
     ("peer capability negotiation preserves legacy identity signatures", TestLegacyPeerSignatureCompatibility),
     ("event store expires elapsed temp bans", TestEventStoreExpiresElapsedTempBansAsync),
@@ -651,6 +652,187 @@ static async Task TestDirectoryListingsAsync()
     entries = await service.ListAsync(CancellationToken.None);
     Assert.False(entries.Any(entry => entry.OriginId == remoteIdentity.OriginId),
         "errored peers should be omitted until a healthy heartbeat clears the error");
+}
+
+static async Task TestNetworkProfileAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        PublicEndpoint = "https://local.example/dragnet"
+    };
+    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
+    await eventStore.LoadAsync(CancellationToken.None);
+    var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
+    await peerStore.LoadAsync(configuration, CancellationToken.None);
+    var identityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "identity"));
+    var identity = identityService.LoadOrCreate("Local Network");
+    var remoteIdentityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "remote"));
+    var remoteIdentity = remoteIdentityService.LoadOrCreate("Profile Network");
+    var peerInfo = CreateSignedPeerInfo(
+        remoteIdentityService,
+        remoteIdentity,
+        "https://profile.example/dragnet",
+        directoryListed: true) with
+    {
+        Version = "0.1.0-beta.12",
+        SupportsDeliveryAcknowledgements = true,
+        SupportsEvidenceUpdates = true,
+        SupportsBanAttestations = true,
+        SupportsAttestationRefreshRequests = true
+    };
+    await peerStore.UpsertAsync(peerInfo, CancellationToken.None, identityVerified: true);
+    await peerStore.MarkHeartbeatSucceededAsync(
+        remoteIdentity.OriginId,
+        peerInfo,
+        CancellationToken.None,
+        identityVerified: true);
+    configuration.TrustedOrigins.Add(new DragnetTrustConfiguration
+    {
+        OriginId = remoteIdentity.OriginId,
+        DisplayName = remoteIdentity.OriginName,
+        AutoApproveBans = true
+    });
+
+    var approved = CreateEnvelope(remoteIdentity.OriginId, DragnetEventType.BanCreated) with
+    {
+        EventId = "profile-approved",
+        OriginName = remoteIdentity.OriginName,
+        Iw4mAdminPenaltyId = 101,
+        PlayerName = "Approved Player",
+        Reason = "Aimbot",
+        EvidenceUrl = "https://youtu.be/profile"
+    };
+    var denied = CreateEnvelope(remoteIdentity.OriginId, DragnetEventType.BanCreated) with
+    {
+        EventId = "profile-denied",
+        OriginName = remoteIdentity.OriginName,
+        Iw4mAdminPenaltyId = 102,
+        PlayerName = "Denied Player"
+    };
+    var ignored = CreateEnvelope(remoteIdentity.OriginId, DragnetEventType.BanCreated) with
+    {
+        EventId = "profile-ignored",
+        OriginName = remoteIdentity.OriginName,
+        Iw4mAdminPenaltyId = 103,
+        PlayerName = "Ignored Player"
+    };
+    var pending = CreateEnvelope(remoteIdentity.OriginId, DragnetEventType.BanCreated) with
+    {
+        EventId = "profile-pending",
+        OriginName = remoteIdentity.OriginName,
+        Iw4mAdminPenaltyId = 104,
+        PlayerName = "Pending Player"
+    };
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = approved,
+        ReviewState = DragnetReviewState.ApprovedBan,
+        BanAttestations =
+        [
+            new DragnetBanAttestation
+            {
+                AttestationId = "profile-attestation",
+                EventId = approved.EventId,
+                NetworkOriginId = identity.OriginId,
+                NetworkName = identity.OriginName,
+                PublicEndpoint = configuration.PublicEndpoint,
+                NetworkPublicKeyPem = identity.PublicKeyPem,
+                ServerCount = 2,
+                ServerNames = ["TDM", "Domination"],
+                Status = DragnetBanCoverageStatus.Enforced,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+                Signature = "signature"
+            }
+        ]
+    }, CancellationToken.None);
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = denied,
+        ReviewState = DragnetReviewState.DeniedBan
+    }, CancellationToken.None);
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = ignored,
+        ReviewState = DragnetReviewState.IgnoredBan
+    }, CancellationToken.None);
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = pending,
+        ReviewState = DragnetReviewState.PendingBan
+    }, CancellationToken.None);
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = CreateEnvelope(remoteIdentity.OriginId, DragnetEventType.BanLifted) with
+        {
+            EventId = "profile-lift",
+            OriginName = remoteIdentity.OriginName,
+            Iw4mAdminPenaltyId = approved.Iw4mAdminPenaltyId,
+            PlayerNetworkId = approved.PlayerNetworkId,
+            CreatedAtUtc = approved.CreatedAtUtc.AddMinutes(1)
+        },
+        ReviewState = DragnetReviewState.ApprovedLift
+    }, CancellationToken.None);
+
+    var deliveryOne = CreateEnvelope(identity.OriginId, DragnetEventType.BanCreated) with
+    {
+        EventId = "profile-delivery-one"
+    };
+    var deliveryTwo = CreateEnvelope(identity.OriginId, DragnetEventType.BanCreated) with
+    {
+        EventId = "profile-delivery-two"
+    };
+    await peerStore.MarkEventBatchSentAsync(
+        remoteIdentity.OriginId,
+        [deliveryOne, deliveryTwo],
+        CancellationToken.None,
+        trackAcknowledgements: true);
+    await peerStore.MarkEventsAcknowledgedAsync(
+        remoteIdentity.OriginId,
+        [deliveryOne.EventId],
+        CancellationToken.None);
+    await peerStore.MarkErrorAsync(
+        remoteIdentity.OriginId,
+        "private proxy response body",
+        CancellationToken.None);
+
+    var service = new DragnetNetworkProfileService(
+        configuration,
+        eventStore,
+        peerStore,
+        identity,
+        () => 2);
+    var profile = await service.GetAsync(remoteIdentity.OriginId, CancellationToken.None);
+    Assert.NotNull(profile, "known peer should produce a network profile");
+    Assert.Equal(4, profile!.SubmittedBanCount, "profile should count canonical submitted bans");
+    Assert.Equal(1, profile.SubmittedLiftCount, "profile should count submitted lifts");
+    Assert.Equal(3, profile.ActiveBanCount, "profile should exclude lifted bans from active totals");
+    Assert.Equal(25, profile.EvidenceRatePercent, "profile should calculate evidence coverage");
+    Assert.Equal(1, profile.ApprovedBanCount, "profile should count local approvals");
+    Assert.Equal(1, profile.DeniedBanCount, "profile should count local denials");
+    Assert.Equal(1, profile.IgnoredBanCount, "profile should count local ignores");
+    Assert.Equal(1, profile.PendingBanCount, "profile should count pending reviews");
+    Assert.Equal(33, profile.ApprovalRatePercent, "profile should calculate approval rate from reviewed bans");
+    Assert.Equal(25, profile.EnforcementCoveragePercent,
+        "profile should calculate enforcement across all eligible ban-network slots");
+    Assert.Equal(50, profile.DeliveryAcknowledgementPercent,
+        "profile should calculate acknowledged delivery reliability");
+    Assert.True(profile.TrustedByThisNetwork, "profile should expose this node's trust policy");
+    Assert.True(profile.AutoApproveBans, "profile should expose automatic ban approval policy");
+    Assert.Equal("Errored", profile.Health, "profile should expose current transport health");
+
+    var html = await service.RenderHtmlAsync(remoteIdentity.OriginId, CancellationToken.None);
+    Assert.NotNull(html, "known peer profile should render HTML");
+    Assert.Contains("Profile Network", html!, "profile should render the network identity");
+    Assert.Contains("This instance's trust and review history", html!,
+        "profile should label local review metrics");
+    Assert.Contains("Approved Player", html!, "profile should list recent submitted bans");
+    Assert.Contains("/dragnet/ledger?id=profile-approved", html!,
+        "profile ban rows should link to ledger details");
+    Assert.False(html!.Contains("private proxy response body", StringComparison.Ordinal),
+        "public profile must not expose raw transport failure content");
+    Assert.True(await service.GetAsync("unknown-network", CancellationToken.None) is null,
+        "unknown networks should not produce profiles");
 }
 
 static async Task TestHeartbeatPeerProofValidationAsync()
@@ -1497,6 +1679,7 @@ static async Task TestPublicLedgerAsync()
         "public ledger must not expose private local review notes");
 
     var controller = new DragnetController(
+        null!,
         null!,
         null!,
         null!,

@@ -22,6 +22,7 @@ public sealed class DragnetController : ControllerBase
     private readonly DragnetUpdateService _updateService;
     private readonly DragnetDirectoryService _directoryService;
     private readonly DragnetLedgerService _ledgerService;
+    private readonly DragnetNetworkProfileService _networkProfileService;
     private readonly DragnetIdentityDocument _identity;
     private readonly DragnetIdentityService _identityService;
     private readonly Func<int> _localServerCount;
@@ -34,6 +35,7 @@ public sealed class DragnetController : ControllerBase
         DragnetUpdateService updateService,
         DragnetDirectoryService directoryService,
         DragnetLedgerService ledgerService,
+        DragnetNetworkProfileService networkProfileService,
         DragnetIdentityDocument identity,
         DragnetIdentityService identityService,
         Func<int> localServerCount)
@@ -45,6 +47,7 @@ public sealed class DragnetController : ControllerBase
         _updateService = updateService;
         _directoryService = directoryService;
         _ledgerService = ledgerService;
+        _networkProfileService = networkProfileService;
         _identity = identity;
         _identityService = identityService;
         _localServerCount = localServerCount;
@@ -96,6 +99,31 @@ public sealed class DragnetController : ControllerBase
     [ProducesResponseType<DragnetLedgerSnapshot>(StatusCodes.Status200OK)]
     public async Task<ActionResult<DragnetLedgerSnapshot>> LedgerData(CancellationToken token) =>
         Ok(await _ledgerService.GetSnapshotAsync(token));
+
+    [AllowAnonymous]
+    [HttpGet("/dragnet/network")]
+    [Produces("text/html")]
+    public async Task<IActionResult> NetworkProfile(
+        [FromQuery] string id,
+        CancellationToken token)
+    {
+        var html = await _networkProfileService.RenderHtmlAsync(id, token);
+        return html is null
+            ? NotFound()
+            : Content(html, "text/html; charset=utf-8");
+    }
+
+    [AllowAnonymous]
+    [HttpGet("/dragnet/network/data")]
+    [ProducesResponseType<DragnetNetworkProfile>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<DragnetNetworkProfile>> NetworkProfileData(
+        [FromQuery] string id,
+        CancellationToken token)
+    {
+        var profile = await _networkProfileService.GetAsync(id, token);
+        return profile is null ? NotFound() : Ok(profile);
+    }
 
     [AllowAnonymous]
     [HttpGet("/dragnet/setup-guide")]

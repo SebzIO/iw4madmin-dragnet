@@ -139,6 +139,7 @@ public sealed class Plugin : IPluginV2
         serviceCollection.AddSingleton<DragnetOnboardingService>();
         serviceCollection.AddSingleton<DragnetDirectoryService>();
         serviceCollection.AddSingleton<DragnetLedgerService>();
+        serviceCollection.AddSingleton<DragnetNetworkProfileService>();
         serviceCollection.AddSingleton<DragnetWebfrontService>();
         serviceCollection.AddSingleton<IManagerCommand, DragnetCommand>();
     }
