@@ -101,6 +101,11 @@ public sealed class DragnetNotificationService : IDisposable
             Title = $"New Dragnet {label}",
             Message = $"{envelope.PlayerName} from {envelope.OriginName}: {envelope.Reason}",
             OriginName = envelope.OriginName,
+            PlayerName = envelope.PlayerName,
+            Reason = envelope.Reason,
+            AdminName = envelope.AdminName,
+            OriginServerName = envelope.OriginServerName,
+            ExpiresAtUtc = envelope.ExpiresAtUtc,
             CreatedAtUtc = DateTimeOffset.UtcNow
         }, token);
     }
@@ -123,6 +128,10 @@ public sealed class DragnetNotificationService : IDisposable
             Title = "Dragnet evidence updated",
             Message = $"{storedEvent.Event.PlayerName} from {update.OriginName} now has updated evidence.",
             OriginName = update.OriginName,
+            PlayerName = storedEvent.Event.PlayerName,
+            Reason = storedEvent.Event.Reason,
+            AdminName = update.SubmittedByName,
+            OriginServerName = storedEvent.Event.OriginServerName,
             CreatedAtUtc = update.CreatedAtUtc
         }, token);
     }
@@ -174,9 +183,14 @@ public sealed class DragnetNotificationService : IDisposable
                 Type = DragnetNotificationType.StaleReview,
                 EventId = item.Event.EventId,
                 Title = "Dragnet review is stale",
-                Message = $"{item.Event.PlayerName} from {item.Event.OriginName} is still awaiting review.",
-                OriginName = item.Event.OriginName,
-                CreatedAtUtc = DateTimeOffset.UtcNow
+            Message = $"{item.Event.PlayerName} from {item.Event.OriginName} is still awaiting review.",
+            OriginName = item.Event.OriginName,
+            PlayerName = item.Event.PlayerName,
+            Reason = item.Event.Reason,
+            AdminName = item.Event.AdminName,
+            OriginServerName = item.Event.OriginServerName,
+            ExpiresAtUtc = item.Event.ExpiresAtUtc,
+            CreatedAtUtc = DateTimeOffset.UtcNow
             }, token);
         }
     }
@@ -271,10 +285,98 @@ public sealed class DragnetNotificationService : IDisposable
 
         try
         {
+            var action = notification.Type switch
+            {
+                DragnetNotificationType.NewBan => "Ban issued",
+                DragnetNotificationType.NewLift => "Ban lifted",
+                DragnetNotificationType.EvidenceUpdated => "Evidence updated",
+                DragnetNotificationType.StaleReview => "Review overdue",
+                DragnetNotificationType.UpdateInstalled => "Update installed",
+                _ => notification.Type.ToString()
+            };
+            var color = notification.Type switch
+            {
+                DragnetNotificationType.NewBan => 0xE5484D,
+                DragnetNotificationType.NewLift => 0x30A46C,
+                DragnetNotificationType.EvidenceUpdated => 0x3E63DD,
+                DragnetNotificationType.StaleReview => 0xF5A524,
+                DragnetNotificationType.UpdateInstalled => 0x8E4EC6,
+                _ => 0x687076
+            };
+            var fields = new List<object>
+            {
+                new
+                {
+                    name = "ᴘʟᴀʏᴇʀ",
+                    value = DiscordValue(notification.PlayerName ?? "Not applicable"),
+                    inline = true
+                },
+                new
+                {
+                    name = "ɴᴇᴛᴡᴏʀᴋ",
+                    value = DiscordValue(notification.OriginName),
+                    inline = true
+                },
+                new
+                {
+                    name = "ᴀᴄᴛɪᴏɴ",
+                    value = DiscordValue(action),
+                    inline = true
+                }
+            };
+            if (!string.IsNullOrWhiteSpace(notification.OriginServerName) ||
+                !string.IsNullOrWhiteSpace(notification.AdminName))
+            {
+                fields.Add(new
+                {
+                    name = "ꜱᴏᴜʀᴄᴇ",
+                    value = DiscordValue(
+                        $"{notification.OriginServerName ?? "Unknown server"}\n" +
+                        $"Admin: {notification.AdminName ?? "Unknown"}"),
+                    inline = true
+                });
+            }
+            if (notification.ExpiresAtUtc is { } expiresAt)
+            {
+                fields.Add(new
+                {
+                    name = "ᴇxᴘɪʀᴇꜱ",
+                    value = $"<t:{expiresAt.ToUnixTimeSeconds()}:F>\n<t:{expiresAt.ToUnixTimeSeconds()}:R>",
+                    inline = true
+                });
+            }
+            if (!string.IsNullOrWhiteSpace(notification.Reason))
+            {
+                fields.Add(new
+                {
+                    name = "ʀᴇᴀꜱᴏɴ",
+                    value = DiscordValue(notification.Reason),
+                    inline = false
+                });
+            }
+
             using var response = await _httpClient.PostAsJsonAsync(uri, new
             {
                 username = "Dragnet",
-                content = $"**{notification.Title}**\n{notification.Message}"
+                embeds = new[]
+                {
+                    new
+                    {
+                        title = notification.Title,
+                        description = notification.Message,
+                        color,
+                        fields,
+                        footer = new
+                        {
+                            text = "Dragnet • IW4MAdmin peer moderation"
+                        },
+                        timestamp = notification.CreatedAtUtc.ToUniversalTime()
+                    }
+                },
+                allowed_mentions = new
+                {
+                    parse = Array.Empty<string>()
+                }
             }, token);
             response.EnsureSuccessStatusCode();
         }
@@ -282,6 +384,12 @@ public sealed class DragnetNotificationService : IDisposable
         {
             _logger.LogWarning(ex, "Dragnet notification webhook delivery failed");
         }
+    }
+
+    private static string DiscordValue(string value)
+    {
+        var trimmed = value.Trim();
+        return trimmed.Length <= 1024 ? trimmed : trimmed[..1021] + "...";
     }
 
     public void Dispose()

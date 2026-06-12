@@ -988,7 +988,7 @@ static async Task TestNotificationWebhookAsync()
     await eventStore.LoadAsync(CancellationToken.None);
     var notificationStore = new DragnetNotificationStore(System.IO.Path.Combine(testDir.Path, "notifications"));
     await notificationStore.LoadAsync(CancellationToken.None);
-    var handler = new CountingResponseHandler(System.Net.HttpStatusCode.NoContent, "");
+    var handler = new StaticResponseHandler(System.Net.HttpStatusCode.NoContent, "");
     using var service = new DragnetNotificationService(
         configuration,
         notificationStore,
@@ -1006,6 +1006,26 @@ static async Task TestNotificationWebhookAsync()
 
     Assert.Equal(1, handler.RequestCount,
         "notification creation should complete one webhook request before returning");
+    var webhookBody = handler.LastRequestBody ?? "";
+    Assert.Contains("\"embeds\"", webhookBody,
+        "Discord webhook should use a structured embed");
+    using var webhookDocument = JsonDocument.Parse(webhookBody);
+    var webhookFields = webhookDocument.RootElement
+        .GetProperty("embeds")[0]
+        .GetProperty("fields")
+        .EnumerateArray()
+        .ToList();
+    Assert.True(webhookFields.Any(field => field.GetProperty("name").GetString() == "ᴘʟᴀʏᴇʀ"),
+        "Discord embed should use small-caps player column headers");
+    Assert.True(webhookFields.Any(field => field.GetProperty("name").GetString() == "ɴᴇᴛᴡᴏʀᴋ"),
+        "Discord embed should use small-caps network column headers");
+    Assert.True(webhookFields.Count(field => field.GetProperty("inline").GetBoolean()) >= 3,
+        "Discord embed should arrange summary fields in columns");
+    Assert.Equal(0, webhookDocument.RootElement
+            .GetProperty("allowed_mentions")
+            .GetProperty("parse")
+            .GetArrayLength(),
+        "Discord webhook should suppress accidental mentions");
 }
 
 static async Task TestHeartbeatPeerProofValidationAsync()
@@ -2889,6 +2909,7 @@ public sealed class StaticResponseHandler : HttpMessageHandler
     private readonly string _body;
 
     public string? LastRequestBody { get; private set; }
+    public int RequestCount { get; private set; }
 
     public StaticResponseHandler(System.Net.HttpStatusCode statusCode, string body)
     {
@@ -2898,6 +2919,7 @@ public sealed class StaticResponseHandler : HttpMessageHandler
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        RequestCount++;
         LastRequestBody = request.Content is null
             ? null
             : await request.Content.ReadAsStringAsync(cancellationToken);
