@@ -1946,7 +1946,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
 @media(min-width:768px){.md\:flex-row{flex-direction:row}.md\:items-end{align-items:flex-end}.md\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(min-width:1024px){.lg\:flex-row{flex-direction:row}.lg\:items-center{align-items:center}.lg\:justify-between{justify-content:space-between}.lg\:justify-center{justify-content:center}.lg\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(min-width:1280px){.xl\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}.xl\:col-span-3{grid-column:span 3/span 3}}
-.dragnet-top-nav{position:sticky;top:0;z-index:1}
+.dragnet-top-nav{position:sticky;top:4rem}
 .dragnet-modal{position:fixed;inset:0;margin:auto;width:fit-content;min-width:min(620px,calc(100vw - 32px));max-width:min(1120px,calc(100vw - 32px));max-height:86vh;overflow:visible;border:1px solid var(--color-line,#3a3042);border-radius:12px;background:#17111d;color:inherit;padding:0;opacity:0;transform:scale(.94);transition:opacity .16s ease,transform .16s ease,width .18s ease,max-height .22s ease}
 .dragnet-modal[open]{opacity:1;transform:scale(1);animation:dragnetZoomIn .16s ease}
 .dragnet-modal.closing{opacity:0;transform:scale(.94)}

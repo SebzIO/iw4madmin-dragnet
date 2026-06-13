@@ -2119,8 +2119,11 @@ static async Task TestWebfrontDashboardRendersAsync()
     Assert.False(
         html.Contains("<th class=\"px-4 py-2\">Endpoint</th>", StringComparison.Ordinal),
         "peer transport should not use the wide fixed-column table");
-    Assert.Contains(".dragnet-top-nav{position:sticky;top:0;z-index:1}", html,
-        "Dragnet navigation should remain below IW4MAdmin alert overlays");
+    Assert.Contains(".dragnet-top-nav{position:sticky;top:4rem}", html,
+        "Dragnet navigation should stick below IW4MAdmin header controls");
+    Assert.False(
+        html.Contains(".dragnet-top-nav{position:sticky;top:4rem;z-index:", StringComparison.Ordinal),
+        "Dragnet navigation should not create a stacking layer over IW4MAdmin overlays");
     Assert.Contains("#dragnet-peer-modal .dragnet-modal-body{overflow-x:hidden}", html,
         "peer transport modal should suppress horizontal overflow");
     Assert.Contains("Dragnet events", html, "dashboard should include event section");
