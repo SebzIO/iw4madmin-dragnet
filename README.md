@@ -181,6 +181,10 @@ When `AutoUpdateEnabled` is enabled, Dragnet downloads only the expected release
 
 The dashboard **Updates** module records the rollout lifecycle in `Configuration/Dragnet/update-history.json`, including release detection, download, staging, application after restart, and failures. It also compares versions reported by active peers, identifies outdated or unknown peers, and warns when the Dragnet network is split across multiple versions.
 
+Update-installed Discord webhooks include the GitHub release notes and a direct link to the published release, in addition to the staged version and restart requirement.
+
+The administrator dashboard **Audit** module provides a searchable operational timeline of moderation reviews, evidence changes, trust decisions, peer administration, automatic quarantine and recovery, configuration changes, notification acknowledgements, local ban and lift creation, and update staging. Entries are stored in `Configuration/Dragnet/audit.json`; `AuditRetentionLimit` controls bounded retention and defaults to 2,000 entries.
+
 The **Diagnostics** module tracks outbound heartbeat latency, success rate, transport failures, quarantine and recovery transitions, and delivery acknowledgement backlog for each peer. Authorized administrators can download `/api/dragnet/diagnostics` as a JSON report. The export intentionally excludes webhook URLs, private keys, trust identities, player identities, and ban contents.
 
 ## Automatic message tokens

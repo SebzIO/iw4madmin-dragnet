@@ -18,6 +18,7 @@ public sealed class DragnetLocalEventService
     private readonly DragnetIdentityService _identityService;
     private readonly DragnetAttestationService _attestationService;
     private readonly DragnetNotificationService _notificationService;
+    private readonly DragnetAuditService? _auditService;
     private readonly ILogger<DragnetLocalEventService> _logger;
 
     public DragnetLocalEventService(
@@ -27,7 +28,8 @@ public sealed class DragnetLocalEventService
         DragnetIdentityService identityService,
         DragnetAttestationService attestationService,
         DragnetNotificationService notificationService,
-        ILogger<DragnetLocalEventService> logger)
+        ILogger<DragnetLocalEventService> logger,
+        DragnetAuditService? auditService = null)
     {
         _configuration = configuration;
         _store = store;
@@ -35,6 +37,7 @@ public sealed class DragnetLocalEventService
         _identityService = identityService;
         _attestationService = attestationService;
         _notificationService = notificationService;
+        _auditService = auditService;
         _logger = logger;
     }
 
@@ -74,6 +77,20 @@ public sealed class DragnetLocalEventService
         if (inserted)
         {
             await _notificationService.NotifyNewEventAsync(envelope, token);
+            if (_auditService is not null)
+            {
+                await _auditService.RecordAsync(
+                    DragnetAuditCategory.Moderation,
+                    "Ban created",
+                    envelope.AdminName ?? "IW4MAdmin",
+                    null,
+                    envelope.PlayerName,
+                    envelope.PlayerNetworkId,
+                    envelope.OriginName,
+                    envelope.EventId,
+                    envelope.Reason,
+                    token);
+            }
         }
 
         _logger.LogInformation(
@@ -126,6 +143,20 @@ public sealed class DragnetLocalEventService
         if (inserted)
         {
             await _notificationService.NotifyNewEventAsync(envelope, token);
+            if (_auditService is not null)
+            {
+                await _auditService.RecordAsync(
+                    DragnetAuditCategory.Moderation,
+                    "Ban lifted",
+                    envelope.AdminName ?? "IW4MAdmin",
+                    null,
+                    envelope.PlayerName,
+                    envelope.PlayerNetworkId,
+                    envelope.OriginName,
+                    envelope.EventId,
+                    envelope.Reason,
+                    token);
+            }
         }
 
         _logger.LogInformation(

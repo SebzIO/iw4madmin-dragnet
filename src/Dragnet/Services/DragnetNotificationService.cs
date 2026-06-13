@@ -140,6 +140,13 @@ public sealed class DragnetNotificationService : IDisposable
 
     public Task NotifyUpdateInstalledAsync(
         string version,
+        CancellationToken token) =>
+        NotifyUpdateInstalledAsync(version, null, null, token);
+
+    public Task NotifyUpdateInstalledAsync(
+        string version,
+        string? releaseUrl,
+        string? releaseNotes,
         CancellationToken token)
     {
         _alertManager?.AddAlert(new Alert.AlertState
@@ -160,6 +167,8 @@ public sealed class DragnetNotificationService : IDisposable
             Title = $"Dragnet {version} update installed",
             Message = "The new plugin DLL is staged. Restart IW4MAdmin to load this update.",
             OriginName = "Local Dragnet",
+            ReleaseUrl = releaseUrl,
+            ReleaseNotes = releaseNotes,
             CreatedAtUtc = DateTimeOffset.UtcNow
         }, token);
     }
@@ -339,6 +348,26 @@ public sealed class DragnetNotificationService : IDisposable
                     inline = false
                 });
             }
+            if (notification.Type is DragnetNotificationType.UpdateInstalled &&
+                !string.IsNullOrWhiteSpace(notification.ReleaseNotes))
+            {
+                fields.Add(new
+                {
+                    name = "ʀᴇʟᴇᴀꜱᴇ ɴᴏᴛᴇꜱ",
+                    value = DiscordValue(NormalizeReleaseNotes(notification.ReleaseNotes)),
+                    inline = false
+                });
+            }
+            if (notification.Type is DragnetNotificationType.UpdateInstalled &&
+                !string.IsNullOrWhiteSpace(notification.ReleaseUrl))
+            {
+                fields.Add(new
+                {
+                    name = "ʀᴇʟᴇᴀꜱᴇ",
+                    value = $"[View on GitHub]({notification.ReleaseUrl})",
+                    inline = false
+                });
+            }
 
             using var response = await _httpClient.PostAsJsonAsync(uri, new
             {
@@ -375,6 +404,17 @@ public sealed class DragnetNotificationService : IDisposable
     {
         var trimmed = value.Trim();
         return trimmed.Length <= 1024 ? trimmed : trimmed[..1021] + "...";
+    }
+
+    private static string NormalizeReleaseNotes(string value)
+    {
+        var normalized = value
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Trim();
+        return string.IsNullOrWhiteSpace(normalized)
+            ? "No release notes were provided."
+            : normalized;
     }
 
     private static List<object> CreateEventFields(DragnetNotification notification, string action)

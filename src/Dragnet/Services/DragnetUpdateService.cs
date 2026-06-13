@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Xml.Linq;
 using Dragnet.Configuration;
+using Dragnet.Models;
 using Microsoft.Extensions.Logging;
 
 namespace Dragnet.Services;
@@ -15,6 +16,7 @@ public sealed class DragnetUpdateService : IDisposable
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
     private readonly DragnetNotificationService? _notificationService;
+    private readonly DragnetAuditService? _auditService;
     private readonly string _pluginPath;
     private readonly string _historyPath;
     private readonly string _currentVersion;
@@ -43,18 +45,29 @@ public sealed class DragnetUpdateService : IDisposable
     public DragnetUpdateService(
         DragnetConfiguration configuration,
         ILogger<DragnetUpdateService> logger,
+        DragnetNotificationService notificationService,
+        DragnetAuditService auditService)
+        : this(configuration, logger, CreateHttpClient(), true, notificationService, null, null, null, auditService)
+    {
+    }
+
+    public DragnetUpdateService(
+        DragnetConfiguration configuration,
+        ILogger<DragnetUpdateService> logger,
         HttpClient httpClient,
         bool ownsHttpClient = false,
         DragnetNotificationService? notificationService = null,
         string? pluginPath = null,
         string? currentVersion = null,
-        string? historyPath = null)
+        string? historyPath = null,
+        DragnetAuditService? auditService = null)
     {
         _configuration = configuration;
         _logger = logger;
         _httpClient = httpClient;
         _ownsHttpClient = ownsHttpClient;
         _notificationService = notificationService;
+        _auditService = auditService;
         _pluginPath = pluginPath ?? typeof(DragnetUpdateService).Assembly.Location;
         _historyPath = historyPath ?? (pluginPath is null
             ? Path.Combine(configuration.DataDirectory, "update-history.json")
@@ -264,6 +277,9 @@ public sealed class DragnetUpdateService : IDisposable
         var releaseUrl = root.TryGetProperty("html_url", out var urlElement)
             ? urlElement.GetString()
             : null;
+        var releaseNotes = root.TryGetProperty("body", out var bodyElement)
+            ? bodyElement.GetString()
+            : null;
         string? assetUrl = null;
         if (root.TryGetProperty("assets", out var assetsElement) &&
             assetsElement.ValueKind == JsonValueKind.Array &&
@@ -281,7 +297,7 @@ public sealed class DragnetUpdateService : IDisposable
                 .FirstOrDefault(url => !string.IsNullOrWhiteSpace(url));
         }
 
-        return CreateMetadata(tag, releaseUrl, assetUrl, "GitHub release response");
+        return CreateMetadata(tag, releaseUrl, assetUrl, releaseNotes, "GitHub release response");
     }
 
     private async Task<ReleaseMetadata> ReadFeedReleaseAsync(CancellationToken token)
@@ -302,14 +318,21 @@ public sealed class DragnetUpdateService : IDisposable
                 string.Equals((string?)element.Attribute("rel"), "alternate", StringComparison.OrdinalIgnoreCase))
             ?.Attribute("href")
             ?.Value;
+        var releaseNotes = entry?.Element(atom + "content")?.Value;
 
-        return CreateMetadata(tag, releaseUrl, BuildOfficialAssetUrl(tag), "GitHub release feed");
+        return CreateMetadata(
+            tag,
+            releaseUrl,
+            BuildOfficialAssetUrl(tag),
+            releaseNotes,
+            "GitHub release feed");
     }
 
     private static ReleaseMetadata CreateMetadata(
         string? tag,
         string? releaseUrl,
         string? assetUrl,
+        string? releaseNotes,
         string source)
     {
         if (string.IsNullOrWhiteSpace(tag))
@@ -322,7 +345,8 @@ public sealed class DragnetUpdateService : IDisposable
             string.IsNullOrWhiteSpace(releaseUrl)
                 ? DragnetBuildInfo.RepositoryUrl + "/releases"
                 : releaseUrl,
-            assetUrl);
+            assetUrl,
+            releaseNotes);
     }
 
     private async Task InstallUpdateAsync(
@@ -443,7 +467,25 @@ public sealed class DragnetUpdateService : IDisposable
                 null);
             if (_notificationService is not null)
             {
-                await _notificationService.NotifyUpdateInstalledAsync(latestVersion, token);
+                await _notificationService.NotifyUpdateInstalledAsync(
+                    latestVersion,
+                    metadata.ReleaseUrl,
+                    metadata.ReleaseNotes,
+                    token);
+            }
+            if (_auditService is not null)
+            {
+                await _auditService.RecordAsync(
+                    DragnetAuditCategory.Update,
+                    "Update staged",
+                    "Dragnet updater",
+                    null,
+                    latestVersion,
+                    latestVersion,
+                    "Local Dragnet",
+                    null,
+                    $"Release {latestVersion} staged; IW4MAdmin restart required.",
+                    token);
             }
             _logger.LogWarning(
                 "Dragnet {Version} was installed and requires an IW4MAdmin restart",
@@ -781,7 +823,11 @@ public sealed class DragnetUpdateService : IDisposable
         WriteIndented = true
     };
 
-    private sealed record ReleaseMetadata(string Tag, string ReleaseUrl, string? AssetUrl);
+    private sealed record ReleaseMetadata(
+        string Tag,
+        string ReleaseUrl,
+        string? AssetUrl,
+        string? ReleaseNotes);
 }
 
 public enum DragnetUpdateStage

@@ -9,6 +9,7 @@ public sealed class DragnetReviewService
     private readonly DragnetImportService _importService;
     private readonly DragnetTrustService _trustService;
     private readonly DragnetAttestationService? _attestationService;
+    private readonly DragnetAuditService? _auditService;
 
     public DragnetReviewService(
         DragnetEventStore store,
@@ -22,12 +23,14 @@ public sealed class DragnetReviewService
         DragnetEventStore store,
         DragnetImportService importService,
         DragnetTrustService trustService,
-        DragnetAttestationService? attestationService)
+        DragnetAttestationService? attestationService,
+        DragnetAuditService? auditService = null)
     {
         _store = store;
         _importService = importService;
         _trustService = trustService;
         _attestationService = attestationService;
+        _auditService = auditService;
     }
 
     public async Task<IReadOnlyList<DragnetStoredEvent>> ListPendingAsync(
@@ -104,6 +107,20 @@ public sealed class DragnetReviewService
         else if (importResult is { Imported: false })
         {
             message += $" {importResult.Message}";
+        }
+        if (_auditService is not null)
+        {
+            await _auditService.RecordAsync(
+                DragnetAuditCategory.Moderation,
+                action.ToString(),
+                reviewedByName,
+                reviewedByClientId,
+                item.Match.Event.PlayerName,
+                item.Match.Event.PlayerNetworkId,
+                item.Match.Event.OriginName,
+                item.Match.Event.EventId,
+                message,
+                token);
         }
 
         return DragnetReviewResult.Succeeded(message);

@@ -1,5 +1,6 @@
 using Dragnet.Configuration;
 using Dragnet.Models;
+using Dragnet.Services;
 
 namespace Dragnet.Transport;
 
@@ -8,11 +9,13 @@ public sealed class DragnetPeerStore
     private readonly SemaphoreSlim _lock = new(1, 1);
     private readonly string _storePath;
     private readonly Dictionary<string, DragnetPeerRecord> _peers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly DragnetAuditService? _auditService;
 
-    public DragnetPeerStore(string dataDirectory)
+    public DragnetPeerStore(string dataDirectory, DragnetAuditService? auditService = null)
     {
         Directory.CreateDirectory(dataDirectory);
         _storePath = Path.Combine(dataDirectory, "peers.json");
+        _auditService = auditService;
     }
 
     public async Task LoadAsync(DragnetConfiguration configuration, CancellationToken token)
@@ -330,6 +333,7 @@ public sealed class DragnetPeerStore
         TimeSpan? quarantineAfter = null,
         double? latencyMs = null)
     {
+        DragnetPeerRecord? quarantinedPeer = null;
         await _lock.WaitAsync(token);
         try
         {
@@ -354,6 +358,7 @@ public sealed class DragnetPeerStore
                     if (existing.QuarantinedAtUtc is null)
                     {
                         existing.QuarantinedAtUtc = now;
+                        quarantinedPeer = existing;
                         AddTelemetryEvent(
                             existing,
                             DragnetPeerTelemetryEventType.Quarantined,
@@ -376,6 +381,20 @@ public sealed class DragnetPeerStore
         {
             _lock.Release();
         }
+        if (quarantinedPeer is not null && _auditService is not null)
+        {
+            await _auditService.RecordAsync(
+                DragnetAuditCategory.Peer,
+                "Peer quarantined",
+                "Dragnet transport",
+                null,
+                quarantinedPeer.OriginName,
+                quarantinedPeer.OriginId,
+                quarantinedPeer.OriginName,
+                null,
+                error,
+                token);
+        }
     }
 
     public async Task MarkHeartbeatSucceededAsync(
@@ -390,6 +409,7 @@ public sealed class DragnetPeerStore
             return;
         }
 
+        var recovered = false;
         await _lock.WaitAsync(token);
         try
         {
@@ -477,6 +497,7 @@ public sealed class DragnetPeerStore
                 peer.ConsecutiveFailures > 0 ||
                 peer.QuarantinedAtUtc is not null ||
                 !string.IsNullOrWhiteSpace(peer.LastError));
+            recovered = wasUnhealthy;
 
             foreach (var related in relatedRecords)
             {
@@ -546,6 +567,20 @@ public sealed class DragnetPeerStore
         finally
         {
             _lock.Release();
+        }
+        if (recovered && _auditService is not null)
+        {
+            await _auditService.RecordAsync(
+                DragnetAuditCategory.Peer,
+                "Peer recovered",
+                "Dragnet transport",
+                null,
+                receiver.OriginName,
+                receiver.OriginId,
+                receiver.OriginName,
+                null,
+                "Signed heartbeat communication recovered.",
+                token);
         }
     }
 

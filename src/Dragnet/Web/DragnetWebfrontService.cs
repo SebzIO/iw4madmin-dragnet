@@ -40,6 +40,7 @@ public sealed class DragnetWebfrontService
     private readonly IConfigurationHandlerV2<DragnetConfiguration> _configurationHandler;
     private readonly Func<IManager> _managerFactory;
     private readonly DragnetNotificationService? _notificationService;
+    private readonly DragnetAuditService? _auditService;
 
     public DragnetWebfrontService(
         DragnetConfiguration configuration,
@@ -56,7 +57,8 @@ public sealed class DragnetWebfrontService
         DragnetIdentityService identityService,
         IConfigurationHandlerV2<DragnetConfiguration> configurationHandler,
         Func<IManager> managerFactory,
-        DragnetNotificationService? notificationService = null)
+        DragnetNotificationService? notificationService = null,
+        DragnetAuditService? auditService = null)
     {
         _configuration = configuration;
         _eventStore = eventStore;
@@ -73,6 +75,7 @@ public sealed class DragnetWebfrontService
         _configurationHandler = configurationHandler;
         _managerFactory = managerFactory;
         _notificationService = notificationService;
+        _auditService = auditService;
     }
 
     public Task<IInteractionData> CreateNavigationInteractionAsync(CancellationToken token)
@@ -348,6 +351,9 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             await _notificationService.SyncStaleReviewsAsync(token);
             unreadNotifications = await _notificationService.ListForClientAsync(originId, token);
         }
+        var auditEntries = _auditService is null
+            ? []
+            : await _auditService.ListAsync(500, token);
         var networkProfileIds = directory
             .Select(entry => entry.OriginId)
             .Concat(displayedPeers.Select(peer => peer.OriginId))
@@ -407,6 +413,9 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             "ph-bell",
             BuildNotificationModuleControls(unreadNotifications));
         AppendNotificationInbox(html, unreadNotifications, filter, now);
+        AppendModalEnd(html);
+        AppendModalStart(html, "dragnet-audit-modal", "Operational audit", "ph-clock-counter-clockwise");
+        AppendAuditTimeline(html, auditEntries, now);
         AppendModalEnd(html);
         AppendModalStart(html, "dragnet-updates-modal", "Update rollout", "ph-cloud-arrow-down");
         AppendUpdateOperationsPanel(html, updateStatus, updateHistory, activePeers, now);
@@ -603,15 +612,37 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         if (action.Equals("AcknowledgeAll", StringComparison.OrdinalIgnoreCase))
         {
             var count = await _notificationService.AcknowledgeAllAsync(originId, token);
+            await RecordAuditAsync(
+                DragnetAuditCategory.Notification,
+                "Notifications acknowledged",
+                origin,
+                null,
+                null,
+                null,
+                null,
+                $"{count} notification(s)",
+                token);
             return $"Acknowledged {count} Dragnet notification(s).";
         }
 
         if (action.Equals("Acknowledge", StringComparison.OrdinalIgnoreCase) &&
             meta.TryGetValue("NotificationId", out var notificationId))
         {
-            return await _notificationService.AcknowledgeAsync(notificationId, originId, token)
-                ? "Dragnet notification acknowledged."
-                : "Dragnet notification was not found.";
+            if (!await _notificationService.AcknowledgeAsync(notificationId, originId, token))
+            {
+                return "Dragnet notification was not found.";
+            }
+            await RecordAuditAsync(
+                DragnetAuditCategory.Notification,
+                "Notification acknowledged",
+                origin,
+                notificationId,
+                notificationId,
+                null,
+                null,
+                null,
+                token);
+            return "Dragnet notification acknowledged.";
         }
 
         return "Invalid Dragnet notification action.";
@@ -680,17 +711,26 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         if (string.Equals(actionValue, "RetryImport", StringComparison.OrdinalIgnoreCase))
         {
             var retryResult = await _reviewService.RetryImportAsync(eventId, token);
+            if (retryResult.Success)
+            {
+                await RecordEventAuditAsync("Import retried", origin, eventId, retryResult.Message, token);
+            }
             return retryResult.Message;
         }
 
         if (string.Equals(actionValue, "SetEvidence", StringComparison.OrdinalIgnoreCase))
         {
             meta.TryGetValue("EvidenceUrl", out var evidenceUrl);
-            return await SetEvidenceAsync(
+            var evidenceResult = await SetEvidenceAsync(
                 eventId,
                 evidenceUrl,
                 GetReviewerName(origin),
                 token);
+            if (evidenceResult.StartsWith("Evidence saved", StringComparison.Ordinal))
+            {
+                await RecordEventAuditAsync("Evidence updated", origin, eventId, evidenceUrl, token);
+            }
+            return evidenceResult;
         }
 
         if (!Enum.TryParse<DragnetReviewAction>(actionValue, true, out var action))
@@ -733,16 +773,24 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         {
             case "Trust":
                 await _trustService.TrustAsync(remoteOriginId, remoteOriginName, false, false, token);
+                await RecordAuditAsync(DragnetAuditCategory.Trust, "Origin trusted", origin,
+                    remoteOriginName, remoteOriginId, remoteOriginName, null, "Manual review required.", token);
                 return $"Trusted Dragnet origin {remoteOriginName}.";
 
             case "TrustAuto":
                 await _trustService.TrustAsync(remoteOriginId, remoteOriginName, true, true, token);
+                await RecordAuditAsync(DragnetAuditCategory.Trust, "Origin trusted with auto-approval", origin,
+                    remoteOriginName, remoteOriginId, remoteOriginName, null, "Bans and lifts auto-approved.", token);
                 return $"Trusted Dragnet origin {remoteOriginName} with auto-approval.";
 
             case "Untrust":
-                return await _trustService.UntrustAsync(remoteOriginId, token)
-                    ? $"Untrusted Dragnet origin {remoteOriginName}."
-                    : "That Dragnet origin was not trusted.";
+                if (!await _trustService.UntrustAsync(remoteOriginId, token))
+                {
+                    return "That Dragnet origin was not trusted.";
+                }
+                await RecordAuditAsync(DragnetAuditCategory.Trust, "Origin untrusted", origin,
+                    remoteOriginName, remoteOriginId, remoteOriginName, null, null, token);
+                return $"Untrusted Dragnet origin {remoteOriginName}.";
 
             default:
                 return "Invalid Dragnet trust action.";
@@ -772,17 +820,27 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         {
             case "ClearError":
                 await _peerStore.ClearErrorAsync(peerOriginId, token);
+                await RecordAuditAsync(DragnetAuditCategory.Peer, "Peer error cleared", origin,
+                    peerOriginId, peerOriginId, null, null, null, token);
                 return "Cleared Dragnet peer error.";
 
             case "Remove":
-                return await _peerStore.RemoveAsync(peerOriginId, token)
-                    ? "Removed Dragnet peer."
-                    : "That Dragnet peer was not found.";
+                if (!await _peerStore.RemoveAsync(peerOriginId, token))
+                {
+                    return "That Dragnet peer was not found.";
+                }
+                await RecordAuditAsync(DragnetAuditCategory.Peer, "Peer removed", origin,
+                    peerOriginId, peerOriginId, null, null, null, token);
+                return "Removed Dragnet peer.";
 
             case "Resync":
-                return await _peerStore.RequestResyncAsync(peerOriginId, token)
-                    ? "Dragnet peer resync queued. Approved active events will replay on the next successful heartbeat."
-                    : "That Dragnet peer was not found.";
+                if (!await _peerStore.RequestResyncAsync(peerOriginId, token))
+                {
+                    return "That Dragnet peer was not found.";
+                }
+                await RecordAuditAsync(DragnetAuditCategory.Peer, "Peer resync queued", origin,
+                    peerOriginId, peerOriginId, null, null, null, token);
+                return "Dragnet peer resync queued. Approved active events will replay on the next successful heartbeat.";
 
             case "RefreshCoverage":
             {
@@ -798,12 +856,18 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
                     return "This network has no active originated bans to refresh.";
                 }
 
-                return await _peerStore.QueueAttestationRefreshAsync(
+                var queued = await _peerStore.QueueAttestationRefreshAsync(
                     peerOriginId,
                     activeOriginBanIds,
-                    token)
-                    ? $"Queued coverage refresh for {activeOriginBanIds.Count} active originated ban(s)."
-                    : "That Dragnet peer was not found.";
+                    token);
+                if (!queued)
+                {
+                    return "That Dragnet peer was not found.";
+                }
+                await RecordAuditAsync(DragnetAuditCategory.Peer, "Coverage refresh queued", origin,
+                    peerOriginId, peerOriginId, null, null,
+                    $"{activeOriginBanIds.Count} active ban(s)", token);
+                return $"Queued coverage refresh for {activeOriginBanIds.Count} active originated ban(s).";
             }
 
             case "VerifySync":
@@ -978,8 +1042,63 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             : notificationWebhookUrl;
         await _configurationHandler.Set(_configuration);
         _onboardingService.Invalidate();
+        await RecordAuditAsync(
+            DragnetAuditCategory.Configuration,
+            "Configuration updated",
+            origin,
+            originName,
+            _identity.OriginId,
+            originName,
+            null,
+            $"Endpoint {publicEndpoint}; directory {(directoryListingEnabled ? "enabled" : "disabled")}; " +
+            $"auto-update {(_configuration.AutoUpdateEnabled ? "enabled" : "disabled")}.",
+            token);
         return "Dragnet configuration saved. Restart IW4MAdmin to apply the network identity and endpoint everywhere.";
     }
+
+    private async Task RecordEventAuditAsync(
+        string action,
+        EFClient? actor,
+        string eventId,
+        string? details,
+        CancellationToken token)
+    {
+        var storedEvent = await _eventStore.GetAsync(eventId, token);
+        await RecordAuditAsync(
+            action.Equals("Evidence updated", StringComparison.Ordinal)
+                ? DragnetAuditCategory.Evidence
+                : DragnetAuditCategory.Moderation,
+            action,
+            actor,
+            storedEvent?.Event.PlayerName,
+            storedEvent?.Event.PlayerNetworkId,
+            storedEvent?.Event.OriginName,
+            storedEvent?.Event.EventId ?? eventId,
+            details,
+            token);
+    }
+
+    private Task RecordAuditAsync(
+        DragnetAuditCategory category,
+        string action,
+        EFClient? actor,
+        string? targetName,
+        string? targetId,
+        string? originName,
+        string? eventId,
+        string? details,
+        CancellationToken token) =>
+        _auditService?.RecordAsync(
+            category,
+            action,
+            GetReviewerName(actor),
+            actor?.ClientId,
+            targetName,
+            targetId,
+            originName,
+            eventId,
+            details,
+            token) ?? Task.CompletedTask;
 
     private void AppendEventDetail(
         StringBuilder html,
@@ -1988,6 +2107,91 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         html.AppendLine("</div></div>");
     }
 
+    private static void AppendAuditTimeline(
+        StringBuilder html,
+        IReadOnlyList<DragnetAuditEntry> entries,
+        DateTimeOffset now)
+    {
+        html.AppendLine("<div class=\"space-y-3\">");
+        html.AppendLine("<div class=\"flex flex-col gap-2 md:flex-row md:items-center md:justify-between\"><div><div class=\"font-semibold\">Administrator and system activity</div><div class=\"text-xs text-muted\">Newest entries first. Stored locally on this Dragnet node.</div></div><label class=\"flex items-center gap-2 rounded-md border border-line px-3 py-2\"><i class=\"ph ph-magnifying-glass text-muted\"></i><input class=\"bg-transparent text-sm text-foreground\" type=\"search\" placeholder=\"Search actor, action, player, network or event\" aria-label=\"Search audit timeline\" oninput=\"dragnetFilterAudit(this.value)\"></label></div>");
+        html.AppendLine("<div class=\"space-y-2\">");
+        foreach (var entry in entries)
+        {
+            var searchText = string.Join(' ', new[]
+            {
+                entry.Category.ToString(),
+                entry.Action,
+                entry.ActorName,
+                entry.TargetName,
+                entry.TargetId,
+                entry.OriginName,
+                entry.EventId,
+                entry.Details
+            }.Where(value => !string.IsNullOrWhiteSpace(value))).ToLowerInvariant();
+            var (icon, color) = AuditPresentation(entry.Category);
+            html.Append("<article class=\"rounded-md bg-surface-alt/20 p-3\" data-audit-search=\"");
+            html.Append(Encode(searchText));
+            html.Append("\"><div class=\"flex flex-col gap-3 md:flex-row md:items-start md:justify-between\"><div class=\"flex min-w-0 items-start gap-3\"><span class=\"inline-flex w-10 items-center justify-center rounded-md bg-surface/50 p-2 ");
+            html.Append(color);
+            html.Append("\"><i class=\"ph ");
+            html.Append(icon);
+            html.Append("\"></i></span><div class=\"min-w-0\"><div class=\"font-semibold text-foreground\">");
+            html.Append(Encode(entry.Action));
+            html.Append("</div><div class=\"mt-1 text-sm text-muted\">");
+            html.Append(Encode(entry.ActorName));
+            if (!string.IsNullOrWhiteSpace(entry.TargetName))
+            {
+                html.Append(" acted on <span class=\"text-foreground\">");
+                html.Append(Encode(entry.TargetName));
+                html.Append("</span>");
+            }
+            if (!string.IsNullOrWhiteSpace(entry.OriginName))
+            {
+                html.Append(" · ");
+                html.Append(Encode(entry.OriginName));
+            }
+            html.Append("</div>");
+            if (!string.IsNullOrWhiteSpace(entry.Details))
+            {
+                html.Append("<div class=\"mt-2 text-sm text-foreground whitespace-pre-wrap\">");
+                html.Append(Encode(entry.Details));
+                html.Append("</div>");
+            }
+            if (!string.IsNullOrWhiteSpace(entry.EventId) ||
+                !string.IsNullOrWhiteSpace(entry.TargetId))
+            {
+                html.Append("<div class=\"mt-2 text-xs text-muted break-all\">");
+                html.Append(Encode(entry.EventId ?? entry.TargetId ?? ""));
+                html.Append("</div>");
+            }
+            html.Append("</div></div><div class=\"whitespace-nowrap text-xs text-muted\" title=\"");
+            html.Append(Encode(entry.OccurredAtUtc.ToString("yyyy-MM-dd HH:mm:ss 'UTC'", CultureInfo.InvariantCulture)));
+            html.Append("\">");
+            html.Append(Encode(DescribeAge(now - entry.OccurredAtUtc)));
+            html.Append("</div></div></article>");
+        }
+
+        if (entries.Count == 0)
+        {
+            html.AppendLine("<div class=\"rounded-md bg-surface-alt/20 px-4 py-6 text-center text-muted\">No operational audit entries have been recorded yet.</div>");
+        }
+
+        html.AppendLine("</div></div>");
+    }
+
+    private static (string Icon, string Color) AuditPresentation(DragnetAuditCategory category) =>
+        category switch
+        {
+            DragnetAuditCategory.Moderation => ("ph-gavel", "text-danger"),
+            DragnetAuditCategory.Evidence => ("ph-link", "text-info"),
+            DragnetAuditCategory.Trust => ("ph-shield-check", "text-success"),
+            DragnetAuditCategory.Peer => ("ph-plugs", "text-info"),
+            DragnetAuditCategory.Configuration => ("ph-gear", "text-warning"),
+            DragnetAuditCategory.Notification => ("ph-bell", "text-muted"),
+            DragnetAuditCategory.Update => ("ph-cloud-arrow-down", "text-success"),
+            _ => ("ph-activity", "text-muted")
+        };
+
     private static void AppendEventMetric(StringBuilder html, string label, int value, string icon)
     {
         html.Append("<div class=\"rounded-md border border-line bg-surface-alt/30 px-3 py-2\"><div class=\"flex items-center gap-2 text-xs text-muted\"><i class=\"ph ");
@@ -2059,6 +2263,7 @@ function dragnetCloseModal(button){dragnetCloseDialog(button.closest('dialog'));
 function dragnetPrepareDynamicAction(button){var d=button.closest('dialog');if(!d)return;if(d.close)d.close();else d.removeAttribute('open');d.classList.remove('closing');d.style.left='';d.style.top='';d.style.margin='auto';}
 function dragnetLedgerPage(page){document.querySelectorAll('[data-ledger-page]').forEach(function(row){row.hidden=row.getAttribute('data-ledger-page')!==String(page);});document.querySelectorAll('[data-ledger-current]').forEach(function(el){el.textContent=page;});}
 function dragnetFilterEvents(filter){document.querySelectorAll('[data-event-filters]').forEach(function(row){var filters=row.getAttribute('data-event-filters').split(' ');row.hidden=filters.indexOf(filter)<0;});document.querySelectorAll('[data-dragnet-filter]').forEach(function(btn){var active=btn.getAttribute('data-dragnet-filter')===filter;btn.classList.toggle('bg-action-primary',active);btn.classList.toggle('text-foreground',active);btn.classList.toggle('border-action-primary',active);btn.classList.toggle('text-muted',!active);});}
+function dragnetFilterAudit(value){var query=(value||'').trim().toLowerCase();document.querySelectorAll('[data-audit-search]').forEach(function(row){row.hidden=query!==''&&row.getAttribute('data-audit-search').indexOf(query)<0;});}
 document.addEventListener('mousedown',function(e){var head=e.target.closest('.dragnet-modal-head');if(!head||e.target.closest('button'))return;var d=head.closest('dialog');if(!d)return;var r=d.getBoundingClientRect();var x=e.clientX-r.left;var y=e.clientY-r.top;d.style.margin='0';d.style.left=r.left+'px';d.style.top=r.top+'px';function move(ev){d.style.left=Math.max(8,Math.min(window.innerWidth-r.width-8,ev.clientX-x))+'px';d.style.top=Math.max(8,Math.min(window.innerHeight-r.height-8,ev.clientY-y))+'px';}function up(){document.removeEventListener('mousemove',move);document.removeEventListener('mouseup',up);}document.addEventListener('mousemove',move);document.addEventListener('mouseup',up);});
 document.addEventListener('click',function(e){var d=e.target;if(d instanceof HTMLDialogElement&&d.classList.contains('dragnet-modal'))dragnetCloseDialog(d);});
 </script>
@@ -2280,6 +2485,7 @@ document.addEventListener('click',function(e){var d=e.target;if(d instanceof HTM
             "events" => "dragnet-events-modal",
             "peers" => "dragnet-peer-modal",
             "notifications" => "dragnet-notification-modal",
+            "audit" => "dragnet-audit-modal",
             "guide" => "dragnet-guide-modal",
             "directory" => "dragnet-directory-modal",
             "ledger" => "dragnet-ledger-modal",
@@ -2315,6 +2521,7 @@ document.addEventListener('click',function(e){var d=e.target;if(d instanceof HTM
         html.AppendLine("</div><div class=\"flex flex-wrap items-center gap-2 lg:justify-end\">");
         AppendModalButton(html, "Public ledger", "dragnet-ledger-modal", "ph-list-magnifying-glass");
         AppendModalButton(html, "Notifications", "dragnet-notification-modal", "ph-bell", notificationCount);
+        AppendModalButton(html, "Audit", "dragnet-audit-modal", "ph-clock-counter-clockwise");
         AppendModalButton(
             html,
             "Updates",

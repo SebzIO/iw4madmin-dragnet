@@ -50,6 +50,8 @@ public sealed class DragnetConfiguration
 
     public string? NotificationWebhookUrl { get; set; }
 
+    public int AuditRetentionLimit { get; set; } = 2000;
+
     public bool UpdateCheckEnabled { get; set; } = true;
 
     public bool AutoUpdateEnabled { get; set; } = true;

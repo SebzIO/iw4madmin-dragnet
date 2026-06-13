@@ -28,6 +28,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("network profiles summarize trust review health and coverage", TestNetworkProfileAsync),
     ("notification inbox persists deduplicates and acknowledges per administrator", TestNotificationInboxAsync),
     ("notification webhook completes delivery for local events", TestNotificationWebhookAsync),
+    ("operational audit persists searchable administrator activity", TestOperationalAuditAsync),
     ("heartbeat peer proofs reject tampering", TestHeartbeatPeerProofValidationAsync),
     ("peer capability negotiation preserves legacy identity signatures", TestLegacyPeerSignatureCompatibility),
     ("event store expires elapsed temp bans", TestEventStoreExpiresElapsedTempBansAsync),
@@ -1122,7 +1123,11 @@ static async Task TestNotificationWebhookAsync()
             .GetArrayLength(),
         "Discord webhook should suppress accidental mentions");
 
-    await service.NotifyUpdateInstalledAsync("0.1.0-beta.21", CancellationToken.None);
+    await service.NotifyUpdateInstalledAsync(
+        "0.1.0-beta.21",
+        "https://github.com/SebzIO/iw4madmin-dragnet/releases/tag/v0.1.0-beta.21",
+        "- Added operational visibility\n- Fixed peer recovery",
+        CancellationToken.None);
 
     Assert.Equal(2, handler.RequestCount,
         "update notification creation should complete one webhook request before returning");
@@ -1139,6 +1144,44 @@ static async Task TestNotificationWebhookAsync()
             field.GetProperty("name").GetString() == "ʀᴇǫᴜɪʀᴇᴅ" &&
             field.GetProperty("value").GetString() == "Restart IW4MAdmin"),
         "update Discord embed should identify the restart requirement as a field");
+    Assert.True(updateFields.Any(field =>
+            field.GetProperty("name").GetString() == "ʀᴇʟᴇᴀꜱᴇ ɴᴏᴛᴇꜱ" &&
+            field.GetProperty("value").GetString()!.Contains("operational visibility", StringComparison.Ordinal)),
+        "update Discord embed should include GitHub release notes");
+    Assert.True(updateFields.Any(field =>
+            field.GetProperty("name").GetString() == "ʀᴇʟᴇᴀꜱᴇ" &&
+            field.GetProperty("value").GetString()!.Contains("View on GitHub", StringComparison.Ordinal)),
+        "update Discord embed should link to the GitHub release");
+}
+
+static async Task TestOperationalAuditAsync()
+{
+    await using var testDir = new TestDirectory();
+    var store = new DragnetAuditStore(testDir.Path, retentionLimit: 100);
+    await store.LoadAsync(CancellationToken.None);
+    var service = new DragnetAuditService(store);
+    await service.RecordAsync(
+        DragnetAuditCategory.Moderation,
+        "ApproveBan",
+        "Senior Admin",
+        42,
+        "Audit Player",
+        "12345",
+        "Audit Network",
+        "event-audit-1",
+        "Approved and imported.",
+        CancellationToken.None);
+
+    var entries = await service.ListAsync(20, CancellationToken.None);
+    Assert.Equal(1, entries.Count, "audit service should return the recorded action");
+    Assert.Equal("Senior Admin", entries[0].ActorName, "audit should retain the administrator");
+    Assert.Equal("Audit Player", entries[0].TargetName, "audit should retain the affected player");
+
+    var reloaded = new DragnetAuditStore(testDir.Path, retentionLimit: 100);
+    await reloaded.LoadAsync(CancellationToken.None);
+    var persisted = await reloaded.ListAsync(20, CancellationToken.None);
+    Assert.Equal(1, persisted.Count, "audit entries should survive a restart");
+    Assert.Equal("event-audit-1", persisted[0].EventId, "audit should retain the related event id");
 }
 
 static async Task TestHeartbeatPeerProofValidationAsync()
@@ -2169,6 +2212,22 @@ static async Task TestWebfrontDashboardRendersAsync()
         managerFactory: () => null!,
         logger: new TestLogger<DragnetNotificationService>());
     await notificationService.NotifyNewEventAsync(bulkEvent, CancellationToken.None);
+    var auditStore = new DragnetAuditStore(
+        System.IO.Path.Combine(testDir.Path, "audit"),
+        retentionLimit: 100);
+    await auditStore.LoadAsync(CancellationToken.None);
+    var auditService = new DragnetAuditService(auditStore);
+    await auditService.RecordAsync(
+        DragnetAuditCategory.Trust,
+        "Origin trusted",
+        "Dashboard Admin",
+        7,
+        "Dashboard Peer",
+        "dashboard-peer",
+        "Dashboard Peer",
+        null,
+        "Manual approval enabled.",
+        CancellationToken.None);
     var webfront = new DragnetWebfrontService(
         configuration,
         eventStore,
@@ -2184,7 +2243,8 @@ static async Task TestWebfrontDashboardRendersAsync()
         identityService,
         configurationHandler,
         managerFactory: () => null!,
-        notificationService);
+        notificationService,
+        auditService);
     var interaction = await webfront.CreateNavigationInteractionAsync(CancellationToken.None);
 
     Assert.Equal(InteractionType.TemplateContent, interaction.InteractionType, "dashboard should render as an IW4MAdmin navigation page");
@@ -2233,6 +2293,10 @@ static async Task TestWebfrontDashboardRendersAsync()
     Assert.False(html.Contains("/dragnet/network?id=", StringComparison.OrdinalIgnoreCase),
         "dashboard should not link to removed network profile pages");
     Assert.Contains("Notification inbox", html, "dashboard should include the notification inbox");
+    Assert.Contains("Operational audit", html, "dashboard should include the operational audit timeline");
+    Assert.Contains("Dashboard Admin", html, "audit timeline should display the acting administrator");
+    Assert.Contains("dragnetFilterAudit", html, "audit timeline should provide client-side search");
+    Assert.Contains("data-tip=\"Audit\"", html, "dashboard navigation should expose the audit timeline");
     Assert.Contains("data-tip=\"Notifications\"", html, "dashboard should expose notifications as an icon tooltip");
     Assert.Contains("onpointerdown=\"dragnetPrepareDynamicAction(this)\"", html,
         "notification actions should release the Dragnet dialog before IW4MAdmin opens its action modal");
@@ -2483,6 +2547,7 @@ static async Task TestAutomaticUpdateInstallAsync()
                     {
                       "tag_name": "{{tag}}",
                       "html_url": "https://github.com/SebzIO/iw4madmin-dragnet/releases/tag/{{tag}}",
+                      "body": "- Added release-note delivery\n- Improved update visibility",
                       "assets": [
                         {
                           "name": "Dragnet.IW4MAdmin.Plugin-{{tag}}.zip",
@@ -2528,6 +2593,10 @@ static async Task TestAutomaticUpdateInstallAsync()
         "successful auto-update should create an administrator notification");
     Assert.Contains("Restart IW4MAdmin", notification.Message,
         "update notification should explain the required restart");
+    Assert.Contains("release-note delivery", notification.ReleaseNotes ?? "",
+        "auto-update notification should retain GitHub release notes");
+    Assert.Contains("/releases/tag/", notification.ReleaseUrl ?? "",
+        "auto-update notification should retain the GitHub release URL");
     Assert.Equal(1, alertManager.Alerts.Count,
         "successful auto-update should create one native IW4MAdmin alert");
     Assert.Contains("Restart IW4MAdmin", alertManager.Alerts.Single().Message,

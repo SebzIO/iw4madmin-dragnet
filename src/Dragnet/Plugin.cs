@@ -27,6 +27,7 @@ public sealed class Plugin : IPluginV2
     private readonly DragnetUpdateService _updateService;
     private readonly DragnetWebfrontService _webfrontService;
     private readonly DragnetNotificationStore _notificationStore;
+    private readonly DragnetAuditStore _auditStore;
     private readonly DragnetNotificationService _notificationService;
     private readonly IInteractionRegistration _interactionRegistration;
     private readonly DragnetConfiguration _configuration;
@@ -51,6 +52,7 @@ public sealed class Plugin : IPluginV2
         DragnetUpdateService updateService,
         DragnetWebfrontService webfrontService,
         DragnetNotificationStore notificationStore,
+        DragnetAuditStore auditStore,
         DragnetNotificationService notificationService,
         IInteractionRegistration interactionRegistration,
         DragnetIdentityDocument identity)
@@ -67,6 +69,7 @@ public sealed class Plugin : IPluginV2
         _updateService = updateService;
         _webfrontService = webfrontService;
         _notificationStore = notificationStore;
+        _auditStore = auditStore;
         _notificationService = notificationService;
         _interactionRegistration = interactionRegistration;
         _identity = identity;
@@ -108,13 +111,23 @@ public sealed class Plugin : IPluginV2
         serviceCollection.AddSingleton(serviceProvider =>
         {
             var configuration = serviceProvider.GetRequiredService<DragnetConfiguration>();
-            return new DragnetPeerStore(Path.GetFullPath(configuration.DataDirectory));
+            return new DragnetPeerStore(
+                Path.GetFullPath(configuration.DataDirectory),
+                serviceProvider.GetRequiredService<DragnetAuditService>());
         });
         serviceCollection.AddSingleton(serviceProvider =>
         {
             var configuration = serviceProvider.GetRequiredService<DragnetConfiguration>();
             return new DragnetNotificationStore(Path.GetFullPath(configuration.DataDirectory));
         });
+        serviceCollection.AddSingleton(serviceProvider =>
+        {
+            var configuration = serviceProvider.GetRequiredService<DragnetConfiguration>();
+            return new DragnetAuditStore(
+                Path.GetFullPath(configuration.DataDirectory),
+                configuration.AuditRetentionLimit);
+        });
+        serviceCollection.AddSingleton<DragnetAuditService>();
         serviceCollection.AddSingleton<DragnetLocalEventService>();
         serviceCollection.AddSingleton<DragnetTrustService>();
         serviceCollection.AddSingleton<Func<IManager>>(serviceProvider =>
@@ -162,6 +175,7 @@ public sealed class Plugin : IPluginV2
         await _eventStore.LoadAsync(token);
         await _peerStore.LoadAsync(_configuration, token);
         await _notificationStore.LoadAsync(token);
+        await _auditStore.LoadAsync(token);
         await _attestationService.BackfillAsync(token);
         RegisterMessageTokens(manager);
         _interactionRegistration.RegisterInteraction(
