@@ -316,6 +316,20 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
                     item.Event.EventId.Equals(delivery.EventId, StringComparison.OrdinalIgnoreCase))));
         var pendingDeliveryCount = Math.Max(0, deliveryTargetCount - acknowledgedDeliveryCount);
         var updateStatus = _updateService.Status;
+        var updateHistory = _updateService.History;
+        var targetVersion = updateStatus.LatestVersion ?? updateStatus.CurrentVersion;
+        var outdatedPeers = activePeers.Count(peer =>
+            !string.IsNullOrWhiteSpace(peer.Version) &&
+            DragnetUpdateService.CompareVersions(peer.Version, targetVersion) < 0);
+        var unknownVersionPeers = activePeers.Count(peer => string.IsNullOrWhiteSpace(peer.Version));
+        var updateAttentionCount =
+            (updateStatus.RestartRequired || updateStatus.UpdateAvailable ||
+             !string.IsNullOrWhiteSpace(updateStatus.CheckError) ||
+             !string.IsNullOrWhiteSpace(updateStatus.InstallError)
+                ? 1
+                : 0) +
+            outdatedPeers +
+            unknownVersionPeers;
         var filteredEvents = FilterEvents(events, filter).Take(50).ToList();
         var eventRows = events.Take(50).ToList();
         var bulkApprovableEvents = filteredEvents.Where(IsBulkApprovable).ToList();
@@ -348,7 +362,8 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             unreadNotifications.Count,
             directory.Count,
             peerTableRows.Count,
-            filteredEvents.Count);
+            filteredEvents.Count,
+            updateAttentionCount);
         AppendOperationalHeader(html, updateStatus, now);
         AppendOnboardingPanel(html, onboarding);
         html.AppendLine("<div class=\"grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-4\">");
@@ -383,6 +398,9 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             "ph-bell",
             BuildNotificationModuleControls(unreadNotifications));
         AppendNotificationInbox(html, unreadNotifications, filter, now);
+        AppendModalEnd(html);
+        AppendModalStart(html, "dragnet-updates-modal", "Update rollout", "ph-cloud-arrow-down");
+        AppendUpdateOperationsPanel(html, updateStatus, updateHistory, activePeers, now);
         AppendModalEnd(html);
         AppendModalStart(html, "dragnet-guide-modal", "Deployment guide", "ph-clipboard-text");
         AppendDeploymentGuide(html);
@@ -2214,6 +2232,7 @@ document.addEventListener('click',function(e){var d=e.target;if(d instanceof HTM
             "guide" => "dragnet-guide-modal",
             "directory" => "dragnet-directory-modal",
             "ledger" => "dragnet-ledger-modal",
+            "updates" => "dragnet-updates-modal",
             _ => null
         };
         if (id is null)
@@ -2231,7 +2250,8 @@ document.addEventListener('click',function(e){var d=e.target;if(d instanceof HTM
         int notificationCount,
         int directoryCount,
         int peerCount,
-        int eventCount)
+        int eventCount,
+        int updateAttentionCount)
     {
         html.AppendLine("<nav class=\"dragnet-top-nav rounded-lg bg-surface/90 p-3\" aria-label=\"Dragnet navigation\">");
         html.AppendLine("<div class=\"flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between\">");
@@ -2242,6 +2262,12 @@ document.addEventListener('click',function(e){var d=e.target;if(d instanceof HTM
         html.AppendLine("</div><div class=\"flex flex-wrap items-center gap-2 lg:justify-end\">");
         AppendModalButton(html, "Public ledger", "dragnet-ledger-modal", "ph-list-magnifying-glass");
         AppendModalButton(html, "Notifications", "dragnet-notification-modal", "ph-bell", notificationCount);
+        AppendModalButton(
+            html,
+            "Updates",
+            "dragnet-updates-modal",
+            "ph-cloud-arrow-down",
+            updateAttentionCount > 0 ? updateAttentionCount : null);
         AppendModalButton(html, "Guide", "dragnet-guide-modal", "ph-clipboard-text");
         AppendModalButton(html, "Directory", "dragnet-directory-modal", "ph-address-book", directoryCount);
         AppendModalButton(html, "Peers", "dragnet-peer-modal", "ph-plugs", peerCount);
@@ -2755,6 +2781,220 @@ document.addEventListener('click',function(e){var d=e.target;if(d instanceof HTM
          value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
          value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
          value.Equals("on", StringComparison.OrdinalIgnoreCase));
+
+    private static void AppendUpdateOperationsPanel(
+        StringBuilder html,
+        DragnetUpdateStatus update,
+        IReadOnlyList<DragnetUpdateHistoryEntry> history,
+        IReadOnlyList<DragnetPeerRecord> activePeers,
+        DateTimeOffset now)
+    {
+        var targetVersion = update.LatestVersion ?? update.CurrentVersion;
+        var knownPeerVersions = activePeers
+            .Where(peer => !string.IsNullOrWhiteSpace(peer.Version))
+            .GroupBy(peer => peer.Version!.Trim(), StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(group => group.Count())
+            .ThenByDescending(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var unknownPeers = activePeers
+            .Where(peer => string.IsNullOrWhiteSpace(peer.Version))
+            .ToList();
+        var outdatedPeers = activePeers
+            .Where(peer =>
+                !string.IsNullOrWhiteSpace(peer.Version) &&
+                DragnetUpdateService.CompareVersions(peer.Version, targetVersion) < 0)
+            .ToList();
+        var aheadPeers = activePeers
+            .Where(peer =>
+                !string.IsNullOrWhiteSpace(peer.Version) &&
+                DragnetUpdateService.CompareVersions(peer.Version, targetVersion) > 0)
+            .ToList();
+        var networkVersions = knownPeerVersions
+            .Select(group => group.Key)
+            .Append(update.CurrentVersion)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var fragmented = networkVersions.Count > 1 || unknownPeers.Count > 0;
+
+        html.AppendLine("<div class=\"space-y-4\">");
+        html.AppendLine("<div class=\"grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2\">");
+        AppendUpdateSummaryCard(
+            html,
+            "Running",
+            update.CurrentVersion,
+            "ph-play-circle",
+            "text-success");
+        AppendUpdateSummaryCard(
+            html,
+            update.RestartRequired ? "Staged" : "Target",
+            update.RestartRequired
+                ? update.InstalledVersion ?? targetVersion
+                : targetVersion,
+            update.RestartRequired ? "ph-arrow-clockwise" : "ph-crosshair",
+            update.RestartRequired ? "text-warning" : "text-info");
+        AppendUpdateSummaryCard(
+            html,
+            "Outdated peers",
+            outdatedPeers.Count.ToString(),
+            "ph-warning-circle",
+            outdatedPeers.Count > 0 ? "text-warning" : "text-success");
+        AppendUpdateSummaryCard(
+            html,
+            "Version health",
+            fragmented ? "Fragmented" : "Aligned",
+            fragmented ? "ph-git-fork" : "ph-check-circle",
+            fragmented ? "text-warning" : "text-success");
+        html.AppendLine("</div>");
+
+        if (update.RestartRequired)
+        {
+            html.Append("<div class=\"rounded-md bg-surface-alt/30 p-3 text-sm text-warning\"><i class=\"ph ph-arrow-clockwise mr-2\"></i>Dragnet ");
+            html.Append(Encode(update.InstalledVersion ?? targetVersion));
+            html.AppendLine(" is staged. Restart IW4MAdmin to load the new DLL.</div>");
+        }
+        else if (!string.IsNullOrWhiteSpace(update.InstallError))
+        {
+            html.Append("<div class=\"rounded-md bg-surface-alt/30 p-3 text-sm text-danger\"><i class=\"ph ph-x-circle mr-2\"></i>Installation failed: ");
+            html.Append(Encode(update.InstallError));
+            html.AppendLine("</div>");
+        }
+        else if (!string.IsNullOrWhiteSpace(update.CheckError))
+        {
+            html.Append("<div class=\"rounded-md bg-surface-alt/30 p-3 text-sm text-warning\"><i class=\"ph ph-warning-circle mr-2\"></i>Release check failed: ");
+            html.Append(Encode(update.CheckError));
+            html.AppendLine("</div>");
+        }
+
+        html.AppendLine("<section><div class=\"flex items-center justify-between gap-2 mb-2\"><h4 class=\"font-semibold\">Network versions</h4><span class=\"text-xs text-muted\">Active peers only</span></div>");
+        html.AppendLine("<div class=\"space-y-2\">");
+        AppendVersionRow(
+            html,
+            label: "This network",
+            version: update.CurrentVersion,
+            detail: update.RestartRequired ? "Restart required" : "Running",
+            stateClass: update.RestartRequired ? "text-warning" : "text-success");
+        foreach (var group in knownPeerVersions)
+        {
+            var comparison = DragnetUpdateService.CompareVersions(group.Key, targetVersion);
+            var state = comparison < 0 ? "Outdated" : comparison > 0 ? "Ahead" : "Current";
+            var stateClass = comparison < 0 ? "text-warning" : comparison > 0 ? "text-info" : "text-success";
+            AppendVersionRow(
+                html,
+                string.Join(", ", group.Select(peer => peer.OriginName).OrderBy(name => name)),
+                group.Key,
+                $"{group.Count()} network{(group.Count() == 1 ? "" : "s")} · {state}",
+                stateClass);
+        }
+        if (unknownPeers.Count > 0)
+        {
+            AppendVersionRow(
+                html,
+                string.Join(", ", unknownPeers.Select(peer => peer.OriginName).OrderBy(name => name)),
+                "Unknown",
+                $"{unknownPeers.Count} peer{(unknownPeers.Count == 1 ? "" : "s")} did not advertise a version",
+                "text-muted");
+        }
+        if (activePeers.Count == 0)
+        {
+            html.AppendLine("<div class=\"rounded-md bg-surface-alt/20 p-3 text-sm text-muted\">No active peers are currently reporting rollout status.</div>");
+        }
+        html.AppendLine("</div></section>");
+
+        html.AppendLine("<section><div class=\"flex items-center justify-between gap-2 mb-2\"><h4 class=\"font-semibold\">Rollout history</h4><span class=\"text-xs text-muted\">Newest first</span></div>");
+        html.AppendLine("<div class=\"space-y-2\">");
+        if (history.Count == 0)
+        {
+            html.AppendLine("<div class=\"rounded-md bg-surface-alt/20 p-3 text-sm text-muted\">No update lifecycle events have been recorded yet.</div>");
+        }
+        else
+        {
+            foreach (var entry in history.Take(20))
+            {
+                var (icon, stateClass) = UpdateStagePresentation(entry.Stage);
+                html.Append("<div class=\"rounded-md bg-surface-alt/20 p-3\"><div class=\"flex items-start gap-3\"><i class=\"ph ");
+                html.Append(icon);
+                html.Append(" mt-1 ");
+                html.Append(stateClass);
+                html.Append("\"></i><div class=\"min-w-0\"><div class=\"flex flex-wrap items-center gap-2\"><span class=\"font-medium\">");
+                html.Append(Encode(UpdateStageLabel(entry.Stage)));
+                html.Append("</span><span class=\"text-xs text-muted\">");
+                html.Append(Encode(entry.Version));
+                html.Append(" · ");
+                html.Append(Encode(DescribeAge(now - entry.OccurredAtUtc)));
+                html.Append("</span></div><div class=\"mt-1 text-sm text-muted\">");
+                html.Append(Encode(entry.Message));
+                html.Append("</div>");
+                if (!string.IsNullOrWhiteSpace(entry.Error))
+                {
+                    html.Append("<div class=\"mt-1 text-xs text-danger break-all\">");
+                    html.Append(Encode(entry.Error));
+                    html.Append("</div>");
+                }
+                html.AppendLine("</div></div></div>");
+            }
+        }
+        html.AppendLine("</div></section></div>");
+    }
+
+    private static void AppendUpdateSummaryCard(
+        StringBuilder html,
+        string label,
+        string value,
+        string icon,
+        string stateClass)
+    {
+        html.Append("<div class=\"rounded-md bg-surface-alt/30 p-3\"><div class=\"flex items-center gap-2 text-xs text-muted\"><i class=\"ph ");
+        html.Append(icon);
+        html.Append("\"></i>");
+        html.Append(Encode(label));
+        html.Append("</div><div class=\"mt-1 font-semibold ");
+        html.Append(stateClass);
+        html.Append("\">");
+        html.Append(Encode(value));
+        html.AppendLine("</div></div>");
+    }
+
+    private static void AppendVersionRow(
+        StringBuilder html,
+        string label,
+        string version,
+        string detail,
+        string stateClass)
+    {
+        html.Append("<div class=\"rounded-md bg-surface-alt/20 p-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between\"><div class=\"min-w-0\"><div class=\"font-medium break-words\">");
+        html.Append(Encode(label));
+        html.Append("</div><div class=\"mt-1 text-xs text-muted\">");
+        html.Append(Encode(detail));
+        html.Append("</div></div><span class=\"dragnet-status-badge ");
+        html.Append(stateClass);
+        html.Append("\"><i class=\"ph ph-tag\"></i><span>");
+        html.Append(Encode(version));
+        html.AppendLine("</span></span></div>");
+    }
+
+    private static (string Icon, string StateClass) UpdateStagePresentation(DragnetUpdateStage stage) =>
+        stage switch
+        {
+            DragnetUpdateStage.Available => ("ph-megaphone", "text-info"),
+            DragnetUpdateStage.Downloading => ("ph-download-simple", "text-info"),
+            DragnetUpdateStage.Staged => ("ph-package", "text-warning"),
+            DragnetUpdateStage.Applied => ("ph-check-circle", "text-success"),
+            DragnetUpdateStage.CheckFailed => ("ph-cloud-x", "text-warning"),
+            DragnetUpdateStage.InstallFailed => ("ph-x-circle", "text-danger"),
+            _ => ("ph-info", "text-muted")
+        };
+
+    private static string UpdateStageLabel(DragnetUpdateStage stage) =>
+        stage switch
+        {
+            DragnetUpdateStage.Available => "Update detected",
+            DragnetUpdateStage.Downloading => "Download started",
+            DragnetUpdateStage.Staged => "Update staged",
+            DragnetUpdateStage.Applied => "Update applied",
+            DragnetUpdateStage.CheckFailed => "Check failed",
+            DragnetUpdateStage.InstallFailed => "Install failed",
+            _ => stage.ToString()
+        };
 
     private static void AppendOperationalHeader(
         StringBuilder html,

@@ -6,11 +6,11 @@ CONFIGURATION="${CONFIGURATION:-Release}"
 PACKAGE_VERSION="${PACKAGE_VERSION:-}"
 
 if [[ -z "${PACKAGE_VERSION}" ]]; then
-  if git -C "${ROOT_DIR}" describe --tags --exact-match >/dev/null 2>&1; then
-    PACKAGE_VERSION="$(git -C "${ROOT_DIR}" describe --tags --exact-match)"
-  else
-    PACKAGE_VERSION="$(git -C "${ROOT_DIR}" rev-parse --short HEAD 2>/dev/null || date -u +%Y%m%d%H%M%S)"
-  fi
+  PACKAGE_VERSION="$(
+    dotnet msbuild "${ROOT_DIR}/src/Dragnet/Dragnet.csproj" \
+      -nologo \
+      -getProperty:Version
+  )"
 fi
 
 PACKAGE_NAME="Dragnet.IW4MAdmin.Plugin-${PACKAGE_VERSION}"

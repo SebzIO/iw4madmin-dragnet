@@ -16,9 +16,11 @@ public sealed class DragnetUpdateService : IDisposable
     private readonly bool _ownsHttpClient;
     private readonly DragnetNotificationService? _notificationService;
     private readonly string _pluginPath;
+    private readonly string _historyPath;
     private readonly string _currentVersion;
     private readonly object _sync = new();
     private readonly SemaphoreSlim _checkLock = new(1, 1);
+    private readonly List<DragnetUpdateHistoryEntry> _history = [];
     private CancellationTokenSource? _runCancellation;
     private Task? _runTask;
     private DragnetUpdateStatus _status = DragnetUpdateStatus.Initial;
@@ -45,7 +47,8 @@ public sealed class DragnetUpdateService : IDisposable
         bool ownsHttpClient = false,
         DragnetNotificationService? notificationService = null,
         string? pluginPath = null,
-        string? currentVersion = null)
+        string? currentVersion = null,
+        string? historyPath = null)
     {
         _configuration = configuration;
         _logger = logger;
@@ -53,13 +56,27 @@ public sealed class DragnetUpdateService : IDisposable
         _ownsHttpClient = ownsHttpClient;
         _notificationService = notificationService;
         _pluginPath = pluginPath ?? typeof(DragnetUpdateService).Assembly.Location;
+        _historyPath = historyPath ?? (pluginPath is null
+            ? Path.Combine(configuration.DataDirectory, "update-history.json")
+            : Path.Combine(
+                Path.GetDirectoryName(_pluginPath) ?? configuration.DataDirectory,
+                "update-history.json"));
         _currentVersion = currentVersion ?? DragnetBuildInfo.Version;
+        var persistedState = LoadPersistedState();
         _status = DragnetUpdateStatus.Initial with
         {
             CurrentVersion = _currentVersion,
             CheckEnabled = configuration.UpdateCheckEnabled,
-            AutoUpdateEnabled = configuration.AutoUpdateEnabled
+            AutoUpdateEnabled = configuration.AutoUpdateEnabled,
+            InstalledVersion = persistedState.InstalledVersion,
+            InstalledAtUtc = persistedState.InstalledAtUtc,
+            RestartRequired = persistedState.RestartRequired,
+            InstallError = persistedState.InstallError
         };
+        _history.AddRange(persistedState.History
+            .OrderByDescending(entry => entry.OccurredAtUtc)
+            .Take(30));
+        ReconcileAppliedUpdate();
     }
 
     public DragnetUpdateStatus Status
@@ -69,6 +86,17 @@ public sealed class DragnetUpdateService : IDisposable
             lock (_sync)
             {
                 return _status;
+            }
+        }
+    }
+
+    public IReadOnlyList<DragnetUpdateHistoryEntry> History
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _history.ToList();
             }
         }
     }
@@ -180,6 +208,15 @@ public sealed class DragnetUpdateService : IDisposable
                 RestartRequired = priorStatus.RestartRequired,
                 InstallError = priorStatus.InstallError
             });
+            if (updateAvailable)
+            {
+                RecordHistory(
+                    DragnetUpdateStage.Available,
+                    latestVersion,
+                    $"Release {latestVersion} is available.",
+                    null,
+                    deduplicate: true);
+            }
             if (updateAvailable &&
                 _configuration.AutoUpdateEnabled &&
                 !string.Equals(priorStatus.InstalledVersion, latestVersion, StringComparison.OrdinalIgnoreCase))
@@ -201,6 +238,12 @@ public sealed class DragnetUpdateService : IDisposable
                 CheckError = ex.Message,
                 IsChecking = false
             });
+            RecordHistory(
+                DragnetUpdateStage.CheckFailed,
+                existing.LatestVersion ?? _currentVersion,
+                "Release check failed.",
+                ex.Message,
+                deduplicate: true);
         }
     }
 
@@ -303,6 +346,12 @@ public sealed class DragnetUpdateService : IDisposable
                 throw new InvalidOperationException("The deployed Dragnet.dll path could not be identified.");
             }
 
+            RecordHistory(
+                DragnetUpdateStage.Downloading,
+                latestVersion,
+                $"Downloading official release {latestVersion}.",
+                null,
+                deduplicate: true);
             using var response = await _httpClient.GetAsync(
                 assetUrl,
                 HttpCompletionOption.ResponseHeadersRead,
@@ -387,6 +436,11 @@ public sealed class DragnetUpdateService : IDisposable
                 RestartRequired = true,
                 InstallError = null
             });
+            RecordHistory(
+                DragnetUpdateStage.Staged,
+                latestVersion,
+                $"Release {latestVersion} was staged. Restart IW4MAdmin to apply it.",
+                null);
             if (_notificationService is not null)
             {
                 await _notificationService.NotifyUpdateInstalledAsync(latestVersion, token);
@@ -403,6 +457,11 @@ public sealed class DragnetUpdateService : IDisposable
         {
             _logger.LogWarning(ex, "Dragnet automatic update installation failed");
             SetStatus(Status with { InstallError = ex.Message });
+            RecordHistory(
+                DragnetUpdateStage.InstallFailed,
+                latestVersion,
+                $"Automatic installation of {latestVersion} failed.",
+                ex.Message);
         }
     }
 
@@ -480,6 +539,121 @@ public sealed class DragnetUpdateService : IDisposable
         lock (_sync)
         {
             _status = status;
+        }
+    }
+
+    private DragnetUpdateStateDocument LoadPersistedState()
+    {
+        try
+        {
+            if (!File.Exists(_historyPath))
+            {
+                return new DragnetUpdateStateDocument();
+            }
+
+            return JsonSerializer.Deserialize<DragnetUpdateStateDocument>(
+                       File.ReadAllText(_historyPath),
+                       UpdateStateJsonOptions) ??
+                   new DragnetUpdateStateDocument();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not read Dragnet update history from {Path}", _historyPath);
+            return new DragnetUpdateStateDocument();
+        }
+    }
+
+    private void ReconcileAppliedUpdate()
+    {
+        var status = Status;
+        if (!status.RestartRequired ||
+            string.IsNullOrWhiteSpace(status.InstalledVersion) ||
+            !string.Equals(status.InstalledVersion, _currentVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        SetStatus(status with
+        {
+            RestartRequired = false,
+            InstallError = null
+        });
+        RecordHistory(
+            DragnetUpdateStage.Applied,
+            _currentVersion,
+            $"Release {_currentVersion} is running after restart.",
+            null,
+            deduplicate: true);
+    }
+
+    private void RecordHistory(
+        DragnetUpdateStage stage,
+        string version,
+        string message,
+        string? error,
+        bool deduplicate = false)
+    {
+        lock (_sync)
+        {
+            if (deduplicate &&
+                _history.FirstOrDefault() is { } latest &&
+                latest.Stage == stage &&
+                string.Equals(latest.Version, version, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(latest.Error, error, StringComparison.Ordinal) &&
+                DateTimeOffset.UtcNow - latest.OccurredAtUtc < TimeSpan.FromHours(1))
+            {
+                return;
+            }
+
+            _history.Insert(0, new DragnetUpdateHistoryEntry
+            {
+                Stage = stage,
+                Version = version,
+                Message = message,
+                Error = error,
+                OccurredAtUtc = DateTimeOffset.UtcNow
+            });
+            if (_history.Count > 30)
+            {
+                _history.RemoveRange(30, _history.Count - 30);
+            }
+        }
+
+        PersistState();
+    }
+
+    private void PersistState()
+    {
+        DragnetUpdateStateDocument document;
+        lock (_sync)
+        {
+            document = new DragnetUpdateStateDocument
+            {
+                InstalledVersion = _status.InstalledVersion,
+                InstalledAtUtc = _status.InstalledAtUtc,
+                RestartRequired = _status.RestartRequired,
+                InstallError = _status.InstallError,
+                History = _history.ToList()
+            };
+        }
+
+        try
+        {
+            var directory = Path.GetDirectoryName(_historyPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var temporaryPath = _historyPath + ".tmp";
+            File.WriteAllText(
+                temporaryPath,
+                JsonSerializer.Serialize(document, UpdateStateJsonOptions));
+            File.Move(temporaryPath, _historyPath, overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not persist Dragnet update history to {Path}", _historyPath);
         }
     }
 
@@ -602,7 +776,40 @@ public sealed class DragnetUpdateService : IDisposable
         return client;
     }
 
+    private static readonly JsonSerializerOptions UpdateStateJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        WriteIndented = true
+    };
+
     private sealed record ReleaseMetadata(string Tag, string ReleaseUrl, string? AssetUrl);
+}
+
+public enum DragnetUpdateStage
+{
+    Available,
+    Downloading,
+    Staged,
+    Applied,
+    CheckFailed,
+    InstallFailed
+}
+
+public sealed record DragnetUpdateHistoryEntry
+{
+    public required DragnetUpdateStage Stage { get; init; }
+    public required string Version { get; init; }
+    public required string Message { get; init; }
+    public string? Error { get; init; }
+    public required DateTimeOffset OccurredAtUtc { get; init; }
+}
+
+public sealed record DragnetUpdateStateDocument
+{
+    public string? InstalledVersion { get; init; }
+    public DateTimeOffset? InstalledAtUtc { get; init; }
+    public bool RestartRequired { get; init; }
+    public string? InstallError { get; init; }
+    public IReadOnlyList<DragnetUpdateHistoryEntry> History { get; init; } = [];
 }
 
 public sealed record DragnetUpdateStatus(

@@ -2115,6 +2115,10 @@ static async Task TestWebfrontDashboardRendersAsync()
         ["eventId"] = legacyEvent.EventId
     }, CancellationToken.None);
     Assert.Contains("Peer transport", html, "dashboard should include peer section");
+    Assert.Contains("dragnet-updates-modal", html, "dashboard should include update rollout operations");
+    Assert.Contains("Network versions", html, "update rollout should summarize active peer versions");
+    Assert.Contains("Rollout history", html, "update rollout should include persistent lifecycle history");
+    Assert.Contains("data-tip=\"Updates\"", html, "dashboard navigation should expose update operations");
     Assert.Contains("class=\"dragnet-peer-list\"", html, "peer transport should use the responsive peer list");
     Assert.False(
         html.Contains("<th class=\"px-4 py-2\">Endpoint</th>", StringComparison.Ordinal),
@@ -2424,6 +2428,25 @@ static async Task TestAutomaticUpdateInstallAsync()
         "successful auto-update should create one native IW4MAdmin alert");
     Assert.Contains("Restart IW4MAdmin", alertManager.Alerts.Single().Message,
         "native IW4MAdmin alert should explain the required restart");
+    Assert.True(File.Exists(System.IO.Path.Combine(testDir.Path, "update-history.json")),
+        "auto-update should persist rollout history beside a custom deployed DLL");
+    Assert.True(updateService.History.Any(entry =>
+            entry.Stage == DragnetUpdateStage.Staged &&
+            entry.Version == version),
+        "successful auto-update should record a staged lifecycle event");
+
+    using var restartedUpdateService = new DragnetUpdateService(
+        configuration,
+        new TestLogger<DragnetUpdateService>(),
+        new HttpClient(new StaticResponseHandler(System.Net.HttpStatusCode.OK, "{}")),
+        pluginPath: deployedPath,
+        currentVersion: version);
+    Assert.False(restartedUpdateService.Status.RestartRequired,
+        "loading the staged version after restart should clear restart-required state");
+    Assert.True(restartedUpdateService.History.Any(entry =>
+            entry.Stage == DragnetUpdateStage.Applied &&
+            entry.Version == version),
+        "loading the staged version after restart should record an applied lifecycle event");
 }
 
 static async Task TestHeartbeatValidationAsync()

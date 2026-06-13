@@ -179,6 +179,8 @@ The dashboard checks the official GitHub releases API in the background and cach
 
 When `AutoUpdateEnabled` is enabled, Dragnet downloads only the expected release ZIP from the official `SebzIO/iw4madmin-dragnet` GitHub release, validates the packaged DLL name and version, backs up the currently deployed DLL, and atomically stages the replacement. Dragnet does not restart IW4MAdmin automatically. Administrators receive a persistent notification that the update was installed and that IW4MAdmin must be restarted. A failed validation or installation leaves the running and deployed DLL unchanged.
 
+The dashboard **Updates** module records the rollout lifecycle in `Configuration/Dragnet/update-history.json`, including release detection, download, staging, application after restart, and failures. It also compares versions reported by active peers, identifies outdated or unknown peers, and warns when the Dragnet network is split across multiple versions.
+
 ## Automatic message tokens
 
 Dragnet registers native IW4MAdmin message tokens for use in the existing `AutoMessages` rotation:
