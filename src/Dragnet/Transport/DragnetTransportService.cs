@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http.Json;
 using Dragnet.Configuration;
 using Dragnet.Identity;
@@ -222,6 +223,7 @@ public sealed class DragnetTransportService : IDisposable
                 continue;
             }
 
+            var heartbeatTimer = Stopwatch.StartNew();
             try
             {
                 if (!IsAllowedEndpoint(peer.Endpoint))
@@ -231,7 +233,8 @@ public sealed class DragnetTransportService : IDisposable
                         "Peer endpoint must be absolute HTTPS",
                         token,
                         _configuration.PeerFailureThreshold,
-                        _configuration.PeerQuarantineAfter);
+                        _configuration.PeerQuarantineAfter,
+                        heartbeatTimer.Elapsed.TotalMilliseconds);
                     continue;
                 }
 
@@ -288,7 +291,8 @@ public sealed class DragnetTransportService : IDisposable
                         "Empty heartbeat response",
                         token,
                         _configuration.PeerFailureThreshold,
-                        _configuration.PeerQuarantineAfter);
+                        _configuration.PeerQuarantineAfter,
+                        heartbeatTimer.Elapsed.TotalMilliseconds);
                     continue;
                 }
 
@@ -300,7 +304,8 @@ public sealed class DragnetTransportService : IDisposable
                         $"Unexpected origin id {heartbeat.Receiver.OriginId}",
                         token,
                         _configuration.PeerFailureThreshold,
-                        _configuration.PeerQuarantineAfter);
+                        _configuration.PeerQuarantineAfter,
+                        heartbeatTimer.Elapsed.TotalMilliseconds);
                     continue;
                 }
 
@@ -331,7 +336,8 @@ public sealed class DragnetTransportService : IDisposable
                     peer.OriginId,
                     heartbeat.Receiver,
                     token,
-                    receiverIdentityVerified);
+                    receiverIdentityVerified,
+                    heartbeatTimer.Elapsed.TotalMilliseconds);
                 await _peerStore.MarkEventBatchSentAsync(
                     heartbeat.Receiver.OriginId,
                     eventBatch,
@@ -376,7 +382,8 @@ public sealed class DragnetTransportService : IDisposable
                     ex.Message,
                     token,
                     _configuration.PeerFailureThreshold,
-                    _configuration.PeerQuarantineAfter);
+                    _configuration.PeerQuarantineAfter,
+                    heartbeatTimer.Elapsed.TotalMilliseconds);
                 _logger.LogWarning(ex, "Dragnet heartbeat to {Endpoint} failed", peer.Endpoint);
             }
         }

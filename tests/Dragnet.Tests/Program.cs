@@ -20,6 +20,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("review service denies pending ban and blocks untrusted approval", TestReviewTransitionsAsync),
     ("bulk review approves trusted selections with individual audits", TestBulkReviewAsync),
     ("peer store tracks bootstrap, errors, removal, and send cursor", TestPeerStoreAsync),
+    ("diagnostics summarize telemetry without exposing secrets", TestDiagnosticsSanitizationAsync),
     ("peer gossip selection rotates fairly and persists", TestPeerGossipRotationAsync),
     ("statistics aggregate participating servers and shared bans", TestStatisticsAsync),
     ("onboarding verifies public health and readiness", TestOnboardingReadinessAsync),
@@ -458,7 +459,7 @@ static async Task TestPeerStoreAsync()
         OriginName = "Canonical",
         PublicEndpoint = "https://discovered.example/dragnet",
         ServerCount = 4
-    }, CancellationToken.None);
+    }, CancellationToken.None, latencyMs: 125);
     var reconciledPeers = await store.ListAsync(CancellationToken.None);
     Assert.False(reconciledPeers.Any(peer => peer.OriginId == "discovered-origin"),
         "successful heartbeat should remove the provisional identity");
@@ -468,6 +469,20 @@ static async Task TestPeerStoreAsync()
     Assert.Null(canonical.QuarantinedAtUtc, "successful heartbeat should restore a quarantined peer");
     Assert.Null(canonical.LastRecoveryProbeAtUtc, "successful heartbeat should clear recovery probe state");
     Assert.Equal(4, canonical.ServerCount, "successful heartbeat should retain advertised server count");
+    Assert.Equal(1L, canonical.HeartbeatSuccessCount, "successful heartbeat should increment success telemetry");
+    Assert.True(canonical.HeartbeatFailureCount >= 5,
+        "failed heartbeat attempts should remain in cumulative telemetry");
+    Assert.Equal(125d, canonical.LastHeartbeatLatencyMs,
+        "successful heartbeat should persist measured latency");
+    Assert.True(canonical.TelemetryEvents.Any(item =>
+            item.Type == DragnetPeerTelemetryEventType.Recovered),
+        "successful probe after failures should record a recovery transition");
+
+    await store.LoadAsync(configuration, CancellationToken.None);
+    canonical = (await store.ListAsync(CancellationToken.None))
+        .Single(peer => peer.OriginId == "canonical-origin");
+    Assert.Equal(125d, canonical.LastHeartbeatLatencyMs,
+        "peer latency telemetry should survive restart");
 
     var sentEvent = CreateEnvelope(originId: "local", eventType: DragnetEventType.BanCreated) with
     {
@@ -481,6 +496,82 @@ static async Task TestPeerStoreAsync()
     Assert.True(await store.RemoveAsync("canonical-origin", CancellationToken.None), "discovered peer should be removable");
     Assert.False((await store.ListAsync(CancellationToken.None)).Any(peer => peer.OriginId == "canonical-origin"),
         "removed peer should not remain");
+}
+
+static Task TestDiagnosticsSanitizationAsync()
+{
+    var now = DateTimeOffset.UtcNow;
+    var configuration = new DragnetConfiguration
+    {
+        PublicEndpoint = "https://local.example/dragnet",
+        NotificationWebhookUrl = "https://discord.example/secret-webhook",
+        BootstrapPeers =
+        [
+            new DragnetPeerConfiguration
+            {
+                Endpoint = "https://bootstrap.example/dragnet",
+                ExpectedOriginId = "expected-secret-origin"
+            }
+        ],
+        TrustedOrigins =
+        [
+            new DragnetTrustConfiguration
+            {
+                OriginId = "trusted-secret-origin",
+                DisplayName = "Trusted"
+            }
+        ]
+    };
+    var peer = new DragnetPeerRecord
+    {
+        OriginId = "peer-origin",
+        OriginName = "Peer Network",
+        Endpoint = "https://peer.example/dragnet",
+        Version = "0.1.0-beta.24",
+        LastSeenUtc = now,
+        HeartbeatAttemptCount = 10,
+        HeartbeatSuccessCount = 8,
+        HeartbeatFailureCount = 2,
+        LastHeartbeatLatencyMs = 180,
+        AverageHeartbeatLatencyMs = 150,
+        LastHeartbeatSucceededAtUtc = now,
+        TelemetryEvents =
+        [
+            new DragnetPeerTelemetryEvent
+            {
+                Type = DragnetPeerTelemetryEventType.Recovered,
+                OccurredAtUtc = now,
+                Detail = "Heartbeat communication recovered.",
+                LatencyMs = 180
+            }
+        ]
+    };
+    var report = DragnetDiagnosticsService.Create(
+        configuration,
+        [peer],
+        [],
+        DragnetUpdateStatus.Initial with
+        {
+            CurrentVersion = DragnetBuildInfo.Version,
+            IsChecking = false
+        },
+        now);
+    var json = JsonSerializer.Serialize(report);
+
+    Assert.Equal(1, report.ActivePeerCount, "diagnostics should count active peers");
+    Assert.Equal(80d, report.Peers.Single().HeartbeatSuccessRate,
+        "diagnostics should calculate heartbeat success rate");
+    Assert.Equal(1, report.Configuration.BootstrapPeerCount,
+        "diagnostics should expose bootstrap count without endpoint details");
+    Assert.Equal(1, report.Configuration.TrustedOriginCount,
+        "diagnostics should expose trust count without trust identities");
+    Assert.False(json.Contains("secret-webhook", StringComparison.Ordinal),
+        "diagnostics must not expose webhook URLs");
+    Assert.False(json.Contains("expected-secret-origin", StringComparison.Ordinal),
+        "diagnostics must not expose configured bootstrap identity pins");
+    Assert.False(json.Contains("trusted-secret-origin", StringComparison.Ordinal),
+        "diagnostics must not expose trusted origin identities");
+    return Task.CompletedTask;
 }
 
 static async Task TestStatisticsAsync()
@@ -2116,6 +2207,11 @@ static async Task TestWebfrontDashboardRendersAsync()
     }, CancellationToken.None);
     Assert.Contains("Peer transport", html, "dashboard should include peer section");
     Assert.Contains("dragnet-updates-modal", html, "dashboard should include update rollout operations");
+    Assert.Contains("dragnet-diagnostics-modal", html, "dashboard should include network diagnostics");
+    Assert.Contains("Download diagnostics", html, "diagnostics should expose the sanitized download");
+    Assert.Contains("Peer health", html, "diagnostics should summarize per-peer health");
+    Assert.Contains("Connection timeline", html, "diagnostics should include recent peer transitions");
+    Assert.Contains("data-tip=\"Diagnostics\"", html, "dashboard navigation should expose diagnostics");
     Assert.Contains("Network versions", html, "update rollout should summarize active peer versions");
     Assert.Contains("Rollout history", html, "update rollout should include persistent lifecycle history");
     Assert.Contains("data-tip=\"Updates\"", html, "dashboard navigation should expose update operations");

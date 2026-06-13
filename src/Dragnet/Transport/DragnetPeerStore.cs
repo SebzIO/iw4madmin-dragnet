@@ -327,7 +327,8 @@ public sealed class DragnetPeerStore
         string error,
         CancellationToken token,
         int failureThreshold = 1,
-        TimeSpan? quarantineAfter = null)
+        TimeSpan? quarantineAfter = null,
+        double? latencyMs = null)
     {
         await _lock.WaitAsync(token);
         try
@@ -335,6 +336,9 @@ public sealed class DragnetPeerStore
             if (_peers.TryGetValue(originId, out var existing))
             {
                 var now = DateTimeOffset.UtcNow;
+                existing.HeartbeatAttemptCount++;
+                existing.HeartbeatFailureCount++;
+                existing.LastHeartbeatLatencyMs = NormalizeLatency(latencyMs);
                 existing.ConsecutiveFailures++;
                 existing.FirstFailureAtUtc ??= now;
                 existing.LastFailureAtUtc = now;
@@ -347,8 +351,24 @@ public sealed class DragnetPeerStore
                     quarantineDuration > TimeSpan.Zero &&
                     now - existing.FirstFailureAtUtc.Value >= quarantineDuration)
                 {
-                    existing.QuarantinedAtUtc ??= now;
+                    if (existing.QuarantinedAtUtc is null)
+                    {
+                        existing.QuarantinedAtUtc = now;
+                        AddTelemetryEvent(
+                            existing,
+                            DragnetPeerTelemetryEventType.Quarantined,
+                            now,
+                            error,
+                            latencyMs);
+                    }
                 }
+                AddTelemetryEvent(
+                    existing,
+                    DragnetPeerTelemetryEventType.Failed,
+                    now,
+                    error,
+                    latencyMs,
+                    deduplicateWithin: TimeSpan.FromMinutes(5));
                 await SaveUnlockedAsync(token);
             }
         }
@@ -362,7 +382,8 @@ public sealed class DragnetPeerStore
         string attemptedOriginId,
         DragnetPeerInfo receiver,
         CancellationToken token,
-        bool identityVerified = false)
+        bool identityVerified = false,
+        double? latencyMs = null)
     {
         if (string.IsNullOrWhiteSpace(receiver.PublicEndpoint))
         {
@@ -432,6 +453,30 @@ public sealed class DragnetPeerStore
                 .SelectMany(peer => peer.PendingAttestationRefreshEventIds ?? [])
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            var heartbeatAttemptCount = relatedRecords.Sum(peer => peer.HeartbeatAttemptCount) + 1;
+            var heartbeatSuccessCount = relatedRecords.Sum(peer => peer.HeartbeatSuccessCount) + 1;
+            var heartbeatFailureCount = relatedRecords.Sum(peer => peer.HeartbeatFailureCount);
+            var priorSuccessfulLatencyCount = relatedRecords.Sum(peer => peer.HeartbeatSuccessCount);
+            var priorSuccessfulLatencyTotal = relatedRecords.Sum(peer =>
+                (peer.AverageHeartbeatLatencyMs ?? 0) * peer.HeartbeatSuccessCount);
+            var normalizedLatency = NormalizeLatency(latencyMs);
+            var averageLatency = normalizedLatency is null
+                ? relatedRecords
+                    .Where(peer => peer.AverageHeartbeatLatencyMs is not null)
+                    .OrderByDescending(peer => peer.LastHeartbeatSucceededAtUtc)
+                    .Select(peer => peer.AverageHeartbeatLatencyMs)
+                    .FirstOrDefault()
+                : (priorSuccessfulLatencyTotal + normalizedLatency.Value) /
+                  Math.Max(1, priorSuccessfulLatencyCount + 1);
+            var telemetryEvents = relatedRecords
+                .SelectMany(peer => peer.TelemetryEvents ?? [])
+                .OrderByDescending(item => item.OccurredAtUtc)
+                .Take(29)
+                .ToList();
+            var wasUnhealthy = relatedRecords.Any(peer =>
+                peer.ConsecutiveFailures > 0 ||
+                peer.QuarantinedAtUtc is not null ||
+                !string.IsNullOrWhiteSpace(peer.LastError));
 
             foreach (var related in relatedRecords)
             {
@@ -461,6 +506,13 @@ public sealed class DragnetPeerStore
                     ? DateTimeOffset.UtcNow
                     : previousEndpointVerifiedAtUtc,
                 LastAdvertisedAtUtc = lastAdvertisedAtUtc,
+                HeartbeatAttemptCount = heartbeatAttemptCount,
+                HeartbeatSuccessCount = heartbeatSuccessCount,
+                HeartbeatFailureCount = heartbeatFailureCount,
+                LastHeartbeatLatencyMs = normalizedLatency,
+                AverageHeartbeatLatencyMs = averageLatency,
+                LastHeartbeatSucceededAtUtc = DateTimeOffset.UtcNow,
+                TelemetryEvents = telemetryEvents,
                 SupportsDeliveryAcknowledgements = receiver.SupportsDeliveryAcknowledgements,
                 SupportsEvidenceUpdates = receiver.SupportsEvidenceUpdates,
                 SupportsBanAttestations = receiver.SupportsBanAttestations,
@@ -478,6 +530,15 @@ public sealed class DragnetPeerStore
                     .Max(),
                 IsBootstrap = isBootstrap
             };
+            AddTelemetryEvent(
+                healthy,
+                wasUnhealthy
+                    ? DragnetPeerTelemetryEventType.Recovered
+                    : DragnetPeerTelemetryEventType.Connected,
+                DateTimeOffset.UtcNow,
+                wasUnhealthy ? "Heartbeat communication recovered." : "Heartbeat completed successfully.",
+                normalizedLatency,
+                deduplicateWithin: wasUnhealthy ? null : TimeSpan.FromHours(1));
             ClearFailureState(healthy);
             _peers[healthy.OriginId] = healthy;
             await SaveUnlockedAsync(token);
@@ -981,6 +1042,41 @@ public sealed class DragnetPeerStore
         peer.LastFailureMessage = null;
         peer.QuarantinedAtUtc = null;
         peer.LastRecoveryProbeAtUtc = null;
+    }
+
+    private static double? NormalizeLatency(double? latencyMs) =>
+        latencyMs is null || double.IsNaN(latencyMs.Value) || double.IsInfinity(latencyMs.Value)
+            ? null
+            : Math.Round(Math.Max(0, latencyMs.Value), 1);
+
+    private static void AddTelemetryEvent(
+        DragnetPeerRecord peer,
+        DragnetPeerTelemetryEventType type,
+        DateTimeOffset occurredAtUtc,
+        string? detail,
+        double? latencyMs,
+        TimeSpan? deduplicateWithin = null)
+    {
+        peer.TelemetryEvents ??= [];
+        if (deduplicateWithin is { } window &&
+            peer.TelemetryEvents.FirstOrDefault() is { } latest &&
+            latest.Type == type &&
+            occurredAtUtc - latest.OccurredAtUtc < window)
+        {
+            return;
+        }
+
+        peer.TelemetryEvents.Insert(0, new DragnetPeerTelemetryEvent
+        {
+            Type = type,
+            OccurredAtUtc = occurredAtUtc,
+            Detail = detail,
+            LatencyMs = NormalizeLatency(latencyMs)
+        });
+        if (peer.TelemetryEvents.Count > 30)
+        {
+            peer.TelemetryEvents.RemoveRange(30, peer.TelemetryEvents.Count - 30);
+        }
     }
 
     private static void ApplyDirectoryMetadata(DragnetPeerRecord record, DragnetPeerInfo peerInfo)

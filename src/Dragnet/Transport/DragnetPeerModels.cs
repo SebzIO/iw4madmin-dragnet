@@ -116,6 +116,20 @@ public sealed record DragnetPeerRecord
 
     public DateTimeOffset? LastRecoveryProbeAtUtc { get; set; }
 
+    public long HeartbeatAttemptCount { get; set; }
+
+    public long HeartbeatSuccessCount { get; set; }
+
+    public long HeartbeatFailureCount { get; set; }
+
+    public double? LastHeartbeatLatencyMs { get; set; }
+
+    public double? AverageHeartbeatLatencyMs { get; set; }
+
+    public DateTimeOffset? LastHeartbeatSucceededAtUtc { get; set; }
+
+    public List<DragnetPeerTelemetryEvent> TelemetryEvents { get; set; } = [];
+
     public int ServerCount { get; set; }
 
     public bool DirectoryListed { get; set; }
@@ -155,6 +169,22 @@ public sealed record DragnetPeerRecord
     public DateTimeOffset? LastResyncRequestedAtUtc { get; set; }
 
     public bool IsBootstrap { get; set; }
+}
+
+public enum DragnetPeerTelemetryEventType
+{
+    Connected,
+    Failed,
+    Quarantined,
+    Recovered
+}
+
+public sealed record DragnetPeerTelemetryEvent
+{
+    public required DragnetPeerTelemetryEventType Type { get; init; }
+    public required DateTimeOffset OccurredAtUtc { get; init; }
+    public string? Detail { get; init; }
+    public double? LatencyMs { get; init; }
 }
 
 public sealed record DragnetEventDeliveryRecord

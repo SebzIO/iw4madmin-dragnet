@@ -7,6 +7,7 @@ using Dragnet.Transport;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using System.Text;
 using System.Text.Json;
 
 namespace Dragnet.Web;
@@ -252,6 +253,25 @@ public sealed class DragnetController : ControllerBase
                 !string.IsNullOrWhiteSpace(item.ImportError) &&
                 !item.ImportError.StartsWith("Queued:", StringComparison.OrdinalIgnoreCase))
         });
+    }
+
+    [Authorize(Policy = "Permissions.Interaction.Read")]
+    [HttpGet("/api/dragnet/diagnostics")]
+    [Produces("application/json")]
+    public async Task<IActionResult> Diagnostics(CancellationToken token)
+    {
+        var report = DragnetDiagnosticsService.Create(
+            _configuration,
+            await _peerStore.ListAsync(token),
+            await _eventStore.ListAsync(token),
+            _updateService.Status,
+            DateTimeOffset.UtcNow);
+        var payload = JsonSerializer.Serialize(report, new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            WriteIndented = true
+        });
+        var filename = $"dragnet-diagnostics-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}.json";
+        return File(Encoding.UTF8.GetBytes(payload), "application/json", filename);
     }
 
     private bool IsHttpsRequest()

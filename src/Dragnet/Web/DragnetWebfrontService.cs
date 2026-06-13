@@ -317,6 +317,14 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         var pendingDeliveryCount = Math.Max(0, deliveryTargetCount - acknowledgedDeliveryCount);
         var updateStatus = _updateService.Status;
         var updateHistory = _updateService.History;
+        var diagnostics = DragnetDiagnosticsService.Create(
+            _configuration,
+            peers,
+            events,
+            updateStatus,
+            now);
+        var diagnosticsAttentionCount = diagnostics.Peers.Count(peer =>
+            peer.Active && peer.HealthScore < 70);
         var targetVersion = updateStatus.LatestVersion ?? updateStatus.CurrentVersion;
         var outdatedPeers = activePeers.Count(peer =>
             !string.IsNullOrWhiteSpace(peer.Version) &&
@@ -363,7 +371,8 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             directory.Count,
             peerTableRows.Count,
             filteredEvents.Count,
-            updateAttentionCount);
+            updateAttentionCount,
+            diagnosticsAttentionCount);
         AppendOperationalHeader(html, updateStatus, now);
         AppendOnboardingPanel(html, onboarding);
         html.AppendLine("<div class=\"grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-4\">");
@@ -401,6 +410,9 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         AppendModalEnd(html);
         AppendModalStart(html, "dragnet-updates-modal", "Update rollout", "ph-cloud-arrow-down");
         AppendUpdateOperationsPanel(html, updateStatus, updateHistory, activePeers, now);
+        AppendModalEnd(html);
+        AppendModalStart(html, "dragnet-diagnostics-modal", "Network diagnostics", "ph-activity");
+        AppendDiagnosticsPanel(html, diagnostics, now);
         AppendModalEnd(html);
         AppendModalStart(html, "dragnet-guide-modal", "Deployment guide", "ph-clipboard-text");
         AppendDeploymentGuide(html);
@@ -492,7 +504,12 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
                 html.AppendLine("</div></div>");
                 if (!quarantined)
                 {
-                    AppendPeerGraphRow(html, peer, deliverableEvents, now);
+                    AppendPeerGraphRow(
+                        html,
+                        peer,
+                        deliverableEvents,
+                        now,
+                        _configuration.PeerStaleAfter);
                 }
                 html.AppendLine("</div>");
             }
@@ -1290,7 +1307,8 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         StringBuilder html,
         DragnetPeerRecord peer,
         IReadOnlyList<DragnetStoredEvent> deliverableEvents,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        TimeSpan staleAfter)
     {
         var acknowledged = peer.EventDeliveries?.Count(delivery =>
             delivery.AcknowledgedAtUtc is not null &&
@@ -1298,6 +1316,22 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
                 item.Event.EventId.Equals(delivery.EventId, StringComparison.OrdinalIgnoreCase))) ?? 0;
         var pending = Math.Max(0, deliverableEvents.Count - acknowledged);
         var sentPending = CountSentPendingDeliveries(peer, deliverableEvents);
+        var pendingDeliveries = (peer.EventDeliveries ?? [])
+            .Where(delivery =>
+                delivery.AcknowledgedAtUtc is null &&
+                deliverableEvents.Any(item =>
+                    item.Event.EventId.Equals(delivery.EventId, StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(delivery => delivery.FirstSentAtUtc)
+            .ToList();
+        var health = DragnetPeerHealth.Assess(
+            peer,
+            now,
+            staleAfter,
+            pendingDeliveries.Count,
+            pendingDeliveries.FirstOrDefault()?.FirstSentAtUtc);
+        double? successRate = peer.HeartbeatAttemptCount == 0
+            ? null
+            : peer.HeartbeatSuccessCount * 100d / peer.HeartbeatAttemptCount;
         var acknowledgementPercent = deliverableEvents.Count == 0
             ? 100
             : (int)Math.Round(acknowledged * 100d / deliverableEvents.Count);
@@ -1330,7 +1364,15 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         html.Append(62 - healthPhase);
         html.AppendLine(", 420 37\" fill=\"none\" stroke=\"#f0b84b\" stroke-width=\"3\"/>");
         html.AppendLine("</svg>");
-        html.Append("<div class=\"grid grid-cols-2 md:grid-cols-5 gap-2 text-xs\"><div><span class=\"text-muted\">Ack</span><div class=\"font-semibold\">");
+        html.Append("<div class=\"grid grid-cols-2 md:grid-cols-5 gap-2 text-xs\"><div><span class=\"text-muted\">Health</span><div class=\"font-semibold\">");
+        html.Append(health.Score);
+        html.Append("/100</div></div><div><span class=\"text-muted\">Latency</span><div class=\"font-semibold\">");
+        html.Append(peer.AverageHeartbeatLatencyMs is null
+            ? "Unknown"
+            : Encode($"{peer.AverageHeartbeatLatencyMs:0} ms avg"));
+        html.Append("</div></div><div><span class=\"text-muted\">Success</span><div class=\"font-semibold\">");
+        html.Append(successRate is null ? "Unknown" : Encode($"{successRate:0.#}%"));
+        html.Append("</div></div><div><span class=\"text-muted\">Ack</span><div class=\"font-semibold\">");
         html.Append(acknowledged);
         html.Append(" / ");
         html.Append(deliverableEvents.Count);
@@ -1345,6 +1387,12 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         html.Append("</div></div><div><span class=\"text-muted\">Failures</span><div class=\"font-semibold\">");
         html.Append(peer.ConsecutiveFailures);
         html.AppendLine("</div></div></div>");
+        if (health.Causes.Count > 0)
+        {
+            html.Append("<div class=\"mt-2 text-xs text-warning\">");
+            html.Append(Encode(string.Join(" · ", health.Causes)));
+            html.AppendLine("</div>");
+        }
         html.Append("<div class=\"mt-2\"><button type=\"button\" class=\"text-primary hover:underline\" onclick=\"dragnetOpenModal('network-profile-");
         html.Append(Encode(peer.OriginId));
         html.Append("')\">Open network profile</button></div>");
@@ -1998,8 +2046,10 @@ details[open] > summary .dragnet-chevron,.dragnet-chevron.open{transform:rotate(
 .dragnet-peer-detail{grid-column:1/-1;max-height:0;overflow:hidden;transition:max-height .24s ease}
 .dragnet-peer-row.open .dragnet-peer-detail{max-height:760px}
 .dragnet-sine{width:100%;height:74px}
+.dragnet-diagnostics-peer-grid{display:grid;grid-template-columns:minmax(0,1.5fr) repeat(4,minmax(90px,.7fr));gap:12px}
 @media(max-width:900px){.dragnet-peer-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.dragnet-peer-actions{text-align:left}.dragnet-peer-actions>div{justify-content:flex-start}}
-@media(max-width:560px){.dragnet-modal{min-width:calc(100vw - 16px);max-width:calc(100vw - 16px)}.dragnet-modal-head{align-items:flex-start}.dragnet-peer-row{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:900px){.dragnet-diagnostics-peer-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.dragnet-diagnostics-peer-grid>div:first-child{grid-column:1/-1}}
+@media(max-width:560px){.dragnet-modal{min-width:calc(100vw - 16px);max-width:calc(100vw - 16px)}.dragnet-modal-head{align-items:flex-start}.dragnet-peer-row,.dragnet-diagnostics-peer-grid{grid-template-columns:minmax(0,1fr)}.dragnet-diagnostics-peer-grid>div:first-child{grid-column:auto}}
 @keyframes dragnetZoomIn{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:scale(1)}}
 </style>
 <script>
@@ -2233,6 +2283,7 @@ document.addEventListener('click',function(e){var d=e.target;if(d instanceof HTM
             "directory" => "dragnet-directory-modal",
             "ledger" => "dragnet-ledger-modal",
             "updates" => "dragnet-updates-modal",
+            "diagnostics" => "dragnet-diagnostics-modal",
             _ => null
         };
         if (id is null)
@@ -2251,7 +2302,8 @@ document.addEventListener('click',function(e){var d=e.target;if(d instanceof HTM
         int directoryCount,
         int peerCount,
         int eventCount,
-        int updateAttentionCount)
+        int updateAttentionCount,
+        int diagnosticsAttentionCount)
     {
         html.AppendLine("<nav class=\"dragnet-top-nav rounded-lg bg-surface/90 p-3\" aria-label=\"Dragnet navigation\">");
         html.AppendLine("<div class=\"flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between\">");
@@ -2268,6 +2320,12 @@ document.addEventListener('click',function(e){var d=e.target;if(d instanceof HTM
             "dragnet-updates-modal",
             "ph-cloud-arrow-down",
             updateAttentionCount > 0 ? updateAttentionCount : null);
+        AppendModalButton(
+            html,
+            "Diagnostics",
+            "dragnet-diagnostics-modal",
+            "ph-activity",
+            diagnosticsAttentionCount > 0 ? diagnosticsAttentionCount : null);
         AppendModalButton(html, "Guide", "dragnet-guide-modal", "ph-clipboard-text");
         AppendModalButton(html, "Directory", "dragnet-directory-modal", "ph-address-book", directoryCount);
         AppendModalButton(html, "Peers", "dragnet-peer-modal", "ph-plugs", peerCount);
@@ -2781,6 +2839,153 @@ document.addEventListener('click',function(e){var d=e.target;if(d instanceof HTM
          value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
          value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
          value.Equals("on", StringComparison.OrdinalIgnoreCase));
+
+    private static void AppendDiagnosticsPanel(
+        StringBuilder html,
+        DragnetDiagnosticsReport report,
+        DateTimeOffset now)
+    {
+        var healthClass = report.NetworkHealthScore >= 90
+            ? "text-success"
+            : report.NetworkHealthScore >= 70
+                ? "text-warning"
+                : "text-danger";
+        var recentEvents = report.Peers
+            .SelectMany(peer => peer.RecentTelemetry.Select(item => (Peer: peer, Event: item)))
+            .OrderByDescending(item => item.Event.OccurredAtUtc)
+            .Take(20)
+            .ToList();
+
+        html.AppendLine("<div class=\"space-y-4\">");
+        html.AppendLine("<div class=\"flex flex-col gap-3 md:flex-row md:items-center md:justify-between\">");
+        html.Append("<div><div class=\"text-xs text-muted\">Network health</div><div class=\"mt-1 text-2xl font-semibold ");
+        html.Append(healthClass);
+        html.Append("\">");
+        html.Append(report.NetworkHealthScore);
+        html.Append("/100 · ");
+        html.Append(Encode(report.NetworkHealthState));
+        html.AppendLine("</div></div>");
+        html.AppendLine("<a class=\"inline-flex items-center gap-2 rounded-md border border-line px-3 py-2 text-sm hover:bg-surface-hover\" href=\"/api/dragnet/diagnostics\" download><i class=\"ph ph-download-simple\"></i><span>Download diagnostics</span></a>");
+        html.AppendLine("</div>");
+
+        html.AppendLine("<div class=\"grid grid-cols-2 md:grid-cols-4 gap-2\">");
+        AppendUpdateSummaryCard(html, "Active peers", report.ActivePeerCount.ToString(), "ph-plugs", "text-info");
+        AppendUpdateSummaryCard(html, "Known peers", report.TotalPeerCount.ToString(), "ph-address-book", "text-foreground");
+        AppendUpdateSummaryCard(html, "Pending delivery", report.PendingDeliveryCount.ToString(), "ph-hourglass", report.PendingDeliveryCount > 0 ? "text-warning" : "text-success");
+        AppendUpdateSummaryCard(html, "Deliverable events", report.DeliverableEventCount.ToString(), "ph-paper-plane-tilt", "text-foreground");
+        html.AppendLine("</div>");
+
+        html.AppendLine("<section><div class=\"flex items-center justify-between gap-2 mb-2\"><h4 class=\"font-semibold\">Peer health</h4><span class=\"text-xs text-muted\">Latency and delivery pressure</span></div><div class=\"space-y-2\">");
+        if (report.Peers.Count == 0)
+        {
+            html.AppendLine("<div class=\"rounded-md bg-surface-alt/20 p-3 text-sm text-muted\">No peer telemetry is available yet.</div>");
+        }
+        else
+        {
+            foreach (var peer in report.Peers)
+            {
+                var peerClass = peer.HealthScore >= 90
+                    ? "text-success"
+                    : peer.HealthScore >= 70
+                        ? "text-warning"
+                        : "text-danger";
+                html.Append("<div class=\"rounded-md bg-surface-alt/20 p-3\"><div class=\"dragnet-diagnostics-peer-grid\"><div class=\"min-w-0\"><div class=\"font-medium break-words\">");
+                html.Append(Encode(peer.OriginName));
+                html.Append("</div><div class=\"mt-1 text-xs text-muted break-all\">");
+                html.Append(Encode(peer.Endpoint));
+                html.Append("</div>");
+                if (peer.HealthCauses.Count > 0)
+                {
+                    html.Append("<div class=\"mt-1 text-xs text-warning\">");
+                    html.Append(Encode(string.Join(" · ", peer.HealthCauses)));
+                    html.Append("</div>");
+                }
+                html.Append("</div><div><div class=\"text-xs text-muted\">Health</div><div class=\"mt-1 font-semibold ");
+                html.Append(peerClass);
+                html.Append("\">");
+                html.Append(peer.HealthScore);
+                html.Append("/100</div></div><div><div class=\"text-xs text-muted\">Latency</div><div class=\"mt-1 font-medium\">");
+                html.Append(peer.AverageHeartbeatLatencyMs is null
+                    ? "Unknown"
+                    : Encode($"{peer.AverageHeartbeatLatencyMs:0} ms"));
+                html.Append("</div></div><div><div class=\"text-xs text-muted\">Success</div><div class=\"mt-1 font-medium\">");
+                html.Append(peer.HeartbeatSuccessRate is null
+                    ? "Unknown"
+                    : Encode($"{peer.HeartbeatSuccessRate:0.#}%"));
+                html.Append("</div></div><div><div class=\"text-xs text-muted\">Backlog</div><div class=\"mt-1 font-medium\">");
+                html.Append(peer.PendingDeliveryCount);
+                html.Append("</div>");
+                if (peer.OldestPendingDeliveryAtUtc is { } oldest)
+                {
+                    html.Append("<div class=\"text-xs text-muted\">oldest ");
+                    html.Append(Encode(DescribeAge(now - oldest)));
+                    html.Append("</div>");
+                }
+                html.AppendLine("</div></div></div>");
+            }
+        }
+        html.AppendLine("</div></section>");
+
+        html.AppendLine("<section><div class=\"flex items-center justify-between gap-2 mb-2\"><h4 class=\"font-semibold\">Connection timeline</h4><span class=\"text-xs text-muted\">Recent peer transitions</span></div><div class=\"space-y-2\">");
+        if (recentEvents.Count == 0)
+        {
+            html.AppendLine("<div class=\"rounded-md bg-surface-alt/20 p-3 text-sm text-muted\">No connection transitions have been recorded yet.</div>");
+        }
+        else
+        {
+            foreach (var item in recentEvents)
+            {
+                var (icon, stateClass) = PeerTelemetryPresentation(item.Event.Type);
+                html.Append("<div class=\"rounded-md bg-surface-alt/20 p-3 flex items-start gap-3\"><i class=\"ph ");
+                html.Append(icon);
+                html.Append(" mt-1 ");
+                html.Append(stateClass);
+                html.Append("\"></i><div class=\"min-w-0\"><div class=\"font-medium\">");
+                html.Append(Encode(item.Peer.OriginName));
+                html.Append(" · ");
+                html.Append(Encode(PeerTelemetryLabel(item.Event.Type)));
+                html.Append("</div><div class=\"mt-1 text-xs text-muted\">");
+                html.Append(Encode(DescribeAge(now - item.Event.OccurredAtUtc)));
+                if (item.Event.LatencyMs is { } latency)
+                {
+                    html.Append(" · ");
+                    html.Append(Encode($"{latency:0} ms"));
+                }
+                html.Append("</div>");
+                if (!string.IsNullOrWhiteSpace(item.Event.Detail))
+                {
+                    html.Append("<div class=\"mt-1 text-sm text-muted break-words\">");
+                    html.Append(Encode(Shorten(item.Event.Detail, 240)));
+                    html.Append("</div>");
+                }
+                html.AppendLine("</div></div>");
+            }
+        }
+        html.AppendLine("</div></section>");
+        html.AppendLine("<div class=\"text-xs text-muted\">The downloaded report excludes webhook URLs, private keys, trust details, player identities, and ban contents.</div>");
+        html.AppendLine("</div>");
+    }
+
+    private static (string Icon, string StateClass) PeerTelemetryPresentation(
+        DragnetPeerTelemetryEventType type) =>
+        type switch
+        {
+            DragnetPeerTelemetryEventType.Connected => ("ph-link", "text-success"),
+            DragnetPeerTelemetryEventType.Recovered => ("ph-arrow-counter-clockwise", "text-success"),
+            DragnetPeerTelemetryEventType.Failed => ("ph-warning-circle", "text-warning"),
+            DragnetPeerTelemetryEventType.Quarantined => ("ph-lock-key", "text-danger"),
+            _ => ("ph-info", "text-muted")
+        };
+
+    private static string PeerTelemetryLabel(DragnetPeerTelemetryEventType type) =>
+        type switch
+        {
+            DragnetPeerTelemetryEventType.Connected => "Connected",
+            DragnetPeerTelemetryEventType.Recovered => "Recovered",
+            DragnetPeerTelemetryEventType.Failed => "Heartbeat failed",
+            DragnetPeerTelemetryEventType.Quarantined => "Quarantined",
+            _ => type.ToString()
+        };
 
     private static void AppendUpdateOperationsPanel(
         StringBuilder html,
