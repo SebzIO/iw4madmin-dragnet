@@ -408,11 +408,11 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
 
         AppendModalStart(html, "dragnet-peer-modal", "Peer transport", "ph-plugs");
         html.AppendLine("<div id=\"peer-transport\">");
-        html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/20 overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted\"><tr><th class=\"px-4 py-2\">Origin</th><th class=\"px-4 py-2\">Endpoint</th><th class=\"px-4 py-2\">Source</th><th class=\"px-4 py-2\">Last seen</th><th class=\"px-4 py-2\">Last advertised</th><th class=\"px-4 py-2\">Delivery</th><th class=\"px-4 py-2\">Status</th><th class=\"px-4 py-2 text-right\">Actions</th></tr></thead><tbody>");
+        html.AppendLine("<div class=\"dragnet-peer-list\">");
 
         if (peerTableRows.Count == 0)
         {
-            html.AppendLine("<tr><td colspan=\"8\" class=\"px-4 py-6 text-center text-muted\">No active or recovering peers.</td></tr>");
+            html.AppendLine("<div class=\"dragnet-peer-empty\">No active or recovering peers.</div>");
         }
         else
         {
@@ -421,10 +421,10 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
                          .ThenByDescending(peer => peer.LastSeenUtc))
             {
                 var quarantined = DragnetPeerHealth.IsQuarantined(peer);
-                html.Append("<tr id=\"peer-row-");
+                html.Append("<div id=\"peer-row-");
                 html.Append(Encode(peer.OriginId));
-                html.AppendLine("\" class=\"hover:bg-surface-alt/30\">");
-                html.Append("<td class=\"px-4 py-2 font-medium\">");
+                html.AppendLine("\" class=\"dragnet-peer-row\">");
+                html.Append("<div class=\"dragnet-peer-cell dragnet-peer-identity\"><span class=\"dragnet-peer-label\">Origin</span><div class=\"font-medium\">");
                 if (quarantined)
                 {
                     html.Append(Encode(peer.OriginName));
@@ -442,27 +442,24 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
                     html.Append(Encode(peer.OriginName));
                     html.Append("</span><span class=\"dragnet-chevron\" aria-hidden=\"true\"></span></button>");
                 }
-                html.AppendLine("</td>");
-                html.Append("<td class=\"px-4 py-2 text-muted\">");
+                html.Append("</div><div class=\"dragnet-peer-endpoint\">");
                 html.Append(Encode(peer.Endpoint));
-                html.AppendLine("</td>");
-                html.Append("<td class=\"px-4 py-2 text-muted\">");
+                html.AppendLine("</div></div>");
+                html.Append("<div class=\"dragnet-peer-cell\"><span class=\"dragnet-peer-label\">Discovery</span><div>");
                 html.Append(quarantined ? "Quarantined" : peer.IsBootstrap ? "Bootstrap" : "Discovered");
-                html.AppendLine("</td>");
-                html.Append("<td class=\"px-4 py-2 text-muted\">");
+                html.Append("</div><div class=\"dragnet-peer-meta\">Seen ");
                 html.Append(quarantined && peer.QuarantinedAtUtc is not null
                     ? Encode($"Quarantined {DescribeAge(now - peer.QuarantinedAtUtc.Value)}")
                     : Encode(DescribeAge(now - peer.LastSeenUtc)));
-                html.AppendLine("</td>");
-                html.Append("<td class=\"px-4 py-2 text-muted\">");
+                html.Append("</div><div class=\"dragnet-peer-meta\">Last advertised ");
                 html.Append(peer.LastAdvertisedAtUtc is null
                     ? "Never"
                     : Encode(DescribeAge(now - peer.LastAdvertisedAtUtc.Value)));
-                html.AppendLine("</td>");
-                html.Append("<td class=\"px-4 py-2 text-muted\">");
+                html.AppendLine("</div></div>");
+                html.Append("<div class=\"dragnet-peer-cell\"><span class=\"dragnet-peer-label\">Delivery</span>");
                 AppendDeliveryStatus(html, peer, deliverableEvents, now);
-                html.AppendLine("</td>");
-                html.Append("<td class=\"px-4 py-2\">");
+                html.AppendLine("</div>");
+                html.Append("<div class=\"dragnet-peer-cell\"><span class=\"dragnet-peer-label\">Status</span>");
                 if (quarantined)
                 {
                     AppendPeerStatusBadge(html, "Quarantined", "ph-lock-key", "text-warning", "Peer is held until it sends a valid signed heartbeat.");
@@ -471,19 +468,19 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
                 {
                     AppendPeerStatus(html, peer, now);
                 }
-                html.AppendLine("</td>");
-                html.Append("<td class=\"px-4 py-2 text-right whitespace-nowrap\"><div class=\"inline-flex items-center justify-end gap-1\">");
+                html.AppendLine("</div>");
+                html.Append("<div class=\"dragnet-peer-cell dragnet-peer-actions\"><span class=\"dragnet-peer-label\">Actions</span><div class=\"flex flex-wrap items-center justify-end gap-1\">");
                 AppendPeerButtons(html, peer);
-                html.AppendLine("</div></td>");
-                html.AppendLine("</tr>");
+                html.AppendLine("</div></div>");
                 if (!quarantined)
                 {
                     AppendPeerGraphRow(html, peer, deliverableEvents, now);
                 }
+                html.AppendLine("</div>");
             }
         }
 
-        html.AppendLine("</tbody></table></div>");
+        html.AppendLine("</div>");
         html.AppendLine("</div>");
         AppendModalEnd(html);
 
@@ -1290,7 +1287,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             ? 0
             : Math.Min(18, peer.ConsecutiveFailures * 3);
 
-        html.AppendLine("<tr><td colspan=\"8\" class=\"p-0 bg-surface-alt/10\"><div class=\"dragnet-peer-detail\">");
+        html.AppendLine("<div class=\"dragnet-peer-detail\">");
         html.AppendLine("<div class=\"p-4\">");
         html.AppendLine("<div class=\"rounded-md p-3\" style=\"background:linear-gradient(135deg,rgba(69,163,255,.16),rgba(82,210,115,.10) 46%,rgba(240,184,75,.10));border:1px solid rgba(143,199,255,.28)\">");
         html.AppendLine("<div class=\"flex flex-col gap-2 md:flex-row md:items-center md:justify-between text-xs text-muted\"><span>Heartbeat, delivery acknowledgement, and retry pressure</span><span>live peer signal</span></div>");
@@ -1333,7 +1330,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         html.Append("<div class=\"mt-2\"><button type=\"button\" class=\"text-primary hover:underline\" onclick=\"dragnetOpenModal('network-profile-");
         html.Append(Encode(peer.OriginId));
         html.Append("')\">Open network profile</button></div>");
-        html.AppendLine("</div></div></div></td></tr>");
+        html.AppendLine("</div></div></div>");
     }
 
     private static void AppendNotificationActionButton(
@@ -1949,13 +1946,15 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
 @media(min-width:768px){.md\:flex-row{flex-direction:row}.md\:items-end{align-items:flex-end}.md\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(min-width:1024px){.lg\:flex-row{flex-direction:row}.lg\:items-center{align-items:center}.lg\:justify-between{justify-content:space-between}.lg\:justify-center{justify-content:center}.lg\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(min-width:1280px){.xl\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}.xl\:col-span-3{grid-column:span 3/span 3}}
-.dragnet-top-nav{position:sticky;top:0;z-index:20}
+.dragnet-top-nav{position:sticky;top:0;z-index:1}
 .dragnet-modal{position:fixed;inset:0;margin:auto;width:fit-content;min-width:min(620px,calc(100vw - 32px));max-width:min(1120px,calc(100vw - 32px));max-height:86vh;overflow:visible;border:1px solid var(--color-line,#3a3042);border-radius:12px;background:#17111d;color:inherit;padding:0;opacity:0;transform:scale(.94);transition:opacity .16s ease,transform .16s ease,width .18s ease,max-height .22s ease}
 .dragnet-modal[open]{opacity:1;transform:scale(1);animation:dragnetZoomIn .16s ease}
 .dragnet-modal.closing{opacity:0;transform:scale(.94)}
 .dragnet-modal::backdrop{background:rgba(0,0,0,.66)}
 .dragnet-modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--color-line,#3a3042);cursor:move;user-select:none}
 .dragnet-modal-body{padding:16px;overflow:auto;max-height:calc(86vh - 58px)}
+#dragnet-peer-modal{width:min(1040px,calc(100vw - 32px));min-width:0}
+#dragnet-peer-modal .dragnet-modal-body{overflow-x:hidden}
 .dragnet-modal-close{border:1px solid var(--color-line,#3a3042);border-radius:8px;padding:6px 10px}
 .dragnet-icon-button{position:relative;width:38px;height:34px;justify-content:center}
 .dragnet-icon-button[data-tip]:hover:after{content:attr(data-tip);position:absolute;right:0;top:calc(100% + 8px);z-index:30;white-space:nowrap;border:1px solid var(--color-line,#3a3042);border-radius:6px;background:#0b0d10;color:inherit;padding:5px 8px;font-size:12px}
@@ -1969,9 +1968,20 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
 .dragnet-detail-value{margin-top:6px;color:var(--color-foreground,#f6f2fb);font-weight:600;line-height:1.35;word-break:break-word}
 .dragnet-chevron{display:inline-block;width:8px;height:8px;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(-135deg);transition:transform .18s ease}
 details[open] > summary .dragnet-chevron,.dragnet-chevron.open{transform:rotate(45deg)}
-.dragnet-peer-detail{max-height:0;overflow:hidden;transition:max-height .24s ease}
-tr.open + tr .dragnet-peer-detail{max-height:760px}
+.dragnet-peer-list{display:grid;gap:8px;min-width:0}
+.dragnet-peer-empty{padding:24px;text-align:center;color:var(--color-muted,#a9a1b5);border-radius:8px;background:rgba(255,255,255,.025)}
+.dragnet-peer-row{display:grid;grid-template-columns:minmax(220px,1.6fr) minmax(135px,1fr) minmax(170px,1.2fr) minmax(120px,.8fr) minmax(120px,.8fr);gap:12px;align-items:start;min-width:0;padding:12px;border-radius:8px;background:rgba(255,255,255,.025)}
+.dragnet-peer-row:hover{background:rgba(255,255,255,.045)}
+.dragnet-peer-cell{min-width:0;color:var(--color-foreground,#f6f2fb);font-size:14px}
+.dragnet-peer-label{display:block;margin-bottom:5px;color:var(--color-muted,#a9a1b5);font-size:11px;font-weight:700;text-transform:uppercase}
+.dragnet-peer-endpoint,.dragnet-peer-meta{margin-top:4px;color:var(--color-muted,#a9a1b5);font-size:12px;overflow-wrap:anywhere}
+.dragnet-peer-actions{text-align:right}
+.dragnet-peer-actions .profile-action{margin-left:0}
+.dragnet-peer-detail{grid-column:1/-1;max-height:0;overflow:hidden;transition:max-height .24s ease}
+.dragnet-peer-row.open .dragnet-peer-detail{max-height:760px}
 .dragnet-sine{width:100%;height:74px}
+@media(max-width:900px){.dragnet-peer-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.dragnet-peer-actions{text-align:left}.dragnet-peer-actions>div{justify-content:flex-start}}
+@media(max-width:560px){.dragnet-modal{min-width:calc(100vw - 16px);max-width:calc(100vw - 16px)}.dragnet-modal-head{align-items:flex-start}.dragnet-peer-row{grid-template-columns:minmax(0,1fr)}}
 @keyframes dragnetZoomIn{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:scale(1)}}
 </style>
 <script>
