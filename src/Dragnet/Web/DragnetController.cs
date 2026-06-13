@@ -7,6 +7,7 @@ using Dragnet.Transport;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 
@@ -274,6 +275,54 @@ public sealed class DragnetController : ControllerBase
         return File(Encoding.UTF8.GetBytes(payload), "application/json", filename);
     }
 
+    [Authorize(Policy = "Permissions.Interaction.Read")]
+    [IgnoreAntiforgeryToken]
+    [HttpPost("/api/dragnet/notifications/acknowledge")]
+    [ProducesResponseType<DragnetActionResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<DragnetActionResponse>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<DragnetActionResponse>(StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<DragnetActionResponse>> AcknowledgeNotification(
+        [FromBody] DragnetNotificationActionRequest request,
+        CancellationToken token)
+    {
+        if (!Request.Headers.TryGetValue("X-Requested-With", out var requestedWith) ||
+            !requestedWith.Any(value => string.Equals(value, "DragnetWebfront", StringComparison.Ordinal)))
+        {
+            return BadRequest(new DragnetActionResponse
+            {
+                Message = "Invalid Dragnet notification request."
+            });
+        }
+
+        var clientId = ResolveAuthenticatedClientId() ??
+                       (request.ActorClientId > 0 ? request.ActorClientId : null);
+        if (clientId is null)
+        {
+            return Unauthorized(new DragnetActionResponse
+            {
+                Message = "Could not resolve the authenticated IW4MAdmin client."
+            });
+        }
+
+        var meta = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["NotificationAction"] = request.Action ?? ""
+        };
+        if (!string.IsNullOrWhiteSpace(request.NotificationId))
+        {
+            meta["NotificationId"] = request.NotificationId;
+        }
+
+        var message = await _webfrontService.ProcessNotificationActionAsync(clientId.Value, meta, token);
+        var ok = !message.StartsWith("You are not authorized", StringComparison.OrdinalIgnoreCase) &&
+                 !message.StartsWith("Invalid", StringComparison.OrdinalIgnoreCase) &&
+                 !message.EndsWith("was not found.", StringComparison.OrdinalIgnoreCase);
+
+        return ok
+            ? Ok(new DragnetActionResponse { Message = message })
+            : BadRequest(new DragnetActionResponse { Message = message });
+    }
+
     private bool IsHttpsRequest()
     {
         if (Request.IsHttps)
@@ -285,6 +334,46 @@ public sealed class DragnetController : ControllerBase
                Request.Headers.TryGetValue("X-Forwarded-Proto", out var forwardedProto) &&
                forwardedProto.Any(value => string.Equals(value, "https", StringComparison.OrdinalIgnoreCase));
     }
+
+    private int? ResolveAuthenticatedClientId()
+    {
+        var candidates = new[]
+        {
+            ClaimTypes.NameIdentifier,
+            "NameIdentifier",
+            "ClientId",
+            "clientId",
+            "client_id",
+            "sub"
+        };
+
+        foreach (var candidate in candidates)
+        {
+            var value = User.FindFirst(candidate)?.Value;
+            if (int.TryParse(value, out var clientId) && clientId > 0)
+            {
+                return clientId;
+            }
+        }
+
+        return int.TryParse(User.Identity?.Name, out var identityClientId) && identityClientId > 0
+            ? identityClientId
+            : null;
+    }
+}
+
+public sealed record DragnetNotificationActionRequest
+{
+    public string? Action { get; init; }
+
+    public string? NotificationId { get; init; }
+
+    public int? ActorClientId { get; init; }
+}
+
+public sealed record DragnetActionResponse
+{
+    public required string Message { get; init; }
 }
 
 public sealed record DragnetHealthResponse

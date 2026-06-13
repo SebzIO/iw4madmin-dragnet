@@ -257,9 +257,6 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         var events = await _eventStore.ListAsync(token);
         var peers = await _peerStore.ListAsync(token);
         var filter = ParseFilter(meta);
-        var selectedEventId = meta is not null && meta.TryGetValue("eventId", out var eventId)
-            ? eventId
-            : null;
         var ledgerPage = meta is not null &&
                          meta.TryGetValue("ledgerPage", out var ledgerPageValue) &&
                          int.TryParse(ledgerPageValue, out var parsedLedgerPage)
@@ -342,18 +339,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             outdatedPeers +
             unknownVersionPeers;
         var filteredEvents = FilterEvents(events, filter).Take(50).ToList();
-        var selectedEvent = ResolveSelectedEvent(events, selectedEventId) ?? filteredEvents.FirstOrDefault();
-        var eventRows = selectedEvent is null
-            ? events.Take(50).ToList()
-            : events
-                .Where(item => item.Event.EventId.Equals(
-                    selectedEvent.Event.EventId,
-                    StringComparison.OrdinalIgnoreCase))
-                .Concat(events.Where(item => !item.Event.EventId.Equals(
-                    selectedEvent.Event.EventId,
-                    StringComparison.OrdinalIgnoreCase)))
-                .Take(50)
-                .ToList();
+        var eventRows = events.Take(50).ToList();
         var bulkApprovableEvents = filteredEvents.Where(IsBulkApprovable).ToList();
         IReadOnlyList<DragnetNotification> unreadNotifications = [];
         if (_notificationService is not null)
@@ -411,18 +397,13 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         AppendMetric(html, "Pending deliveries", pendingDeliveryCount.ToString());
         html.AppendLine("</div>");
 
-        if (selectedEvent is not null)
-        {
-            AppendEventDetail(html, selectedEvent, now);
-        }
-
         AppendModalStart(
             html,
             "dragnet-notification-modal",
             "Notification inbox",
             "ph-bell",
-            BuildNotificationModuleControls(unreadNotifications));
-        AppendNotificationInbox(html, unreadNotifications, filter, now);
+            BuildNotificationModuleControls(unreadNotifications, originId));
+        AppendNotificationInbox(html, unreadNotifications, filter, now, originId);
         AppendModalEnd(html);
         AppendModalStart(html, "dragnet-audit-modal", "Operational audit", "ph-clock-counter-clockwise");
         AppendAuditTimeline(html, auditEntries, now);
@@ -551,10 +532,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             html.Append("<div id=\"dragnet-event-");
             html.Append(Encode(item.Event.EventId));
             html.Append("\" class=\"rounded-md border px-3 py-2 hover:bg-surface-alt/30 ");
-            html.Append(selectedEvent is not null &&
-                        item.Event.EventId.Equals(selectedEvent.Event.EventId, StringComparison.OrdinalIgnoreCase)
-                ? "border-action-primary bg-surface-alt/30"
-                : "border-line bg-surface-alt/20");
+            html.Append("border-line bg-surface-alt/20");
             html.Append("\" data-event-id=\"");
             html.Append(Encode(item.Event.EventId));
             html.Append("\" data-event-filters=\"");
@@ -576,7 +554,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             }
 
             html.Append("<div class=\"min-w-0\"><div class=\"font-medium truncate\">");
-            AppendEventLink(html, item.Event.EventId, item.Event.PlayerName, filter);
+            AppendEventLink(html, item.Event.EventId, item.Event.PlayerName);
             html.Append("</div><div class=\"mt-1 text-xs text-muted truncate\">");
             html.Append(Encode(IsLocalEvent(item.Event) ? "Local" : item.Event.OriginName));
             html.Append(" · ");
@@ -604,12 +582,13 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
 
         html.AppendLine("</div></div>");
         AppendModalEnd(html);
+        AppendEventDetailModals(html, eventRows, now);
         AppendRequestedModuleScript(html, meta);
         html.AppendLine("</div>");
         return html.ToString();
     }
 
-    private async Task<string> ProcessNotificationActionAsync(
+    public async Task<string> ProcessNotificationActionAsync(
         int originId,
         IDictionary<string, string>? meta,
         CancellationToken token)
@@ -1266,6 +1245,23 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         html.AppendLine("</div></div>");
     }
 
+    private void AppendEventDetailModals(
+        StringBuilder html,
+        IReadOnlyList<DragnetStoredEvent> events,
+        DateTimeOffset now)
+    {
+        foreach (var item in events)
+        {
+            AppendModalStart(
+                html,
+                $"dragnet-event-detail-{item.Event.EventId}",
+                item.Event.PlayerName,
+                item.Event.EventType is DragnetEventType.BanLifted ? "ph-arrow-u-up-left" : "ph-gavel");
+            AppendEventDetail(html, item, now);
+            AppendModalEnd(html);
+        }
+    }
+
     private static void AppendDetailCell(StringBuilder html, string label, string value)
     {
         html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/30 p-4\">");
@@ -1393,7 +1389,8 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         StringBuilder html,
         IReadOnlyList<DragnetNotification> notifications,
         DragnetEventFilter filter,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        int actorClientId)
     {
         if (notifications.Count == 0)
         {
@@ -1401,10 +1398,12 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             return;
         }
 
-        html.AppendLine("<div class=\"space-y-2\">");
+        html.AppendLine("<div id=\"dragnet-notification-list\" class=\"space-y-2\">");
         foreach (var notification in notifications.Take(20))
         {
-            html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/30 px-4 py-2 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between\">");
+            html.Append("<div data-dragnet-notification=\"");
+            html.Append(Encode(notification.NotificationId));
+            html.AppendLine("\" class=\"rounded-md border border-line bg-surface-alt/30 px-4 py-2 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between\">");
             html.Append("<div><div class=\"font-medium\">");
             html.Append(Encode(notification.Title));
             html.Append("</div><div class=\"text-sm\">");
@@ -1416,22 +1415,25 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             html.Append("</div></div><div class=\"flex items-center gap-2\">");
             if (!string.IsNullOrWhiteSpace(notification.EventId))
             {
-                html.Append("<a data-enhance-nav=\"false\" class=\"inline-flex items-center justify-center w-10 px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\" title=\"Open event\" aria-label=\"Open event\" href=\"");
-                html.Append(Encode(BuildDashboardUri(filter, notification.EventId)));
-                html.Append("\"><i class=\"ph ph-arrow-square-out\"></i></a>");
+                html.Append("<button type=\"button\" class=\"inline-flex items-center justify-center w-10 px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\" title=\"Open event\" aria-label=\"Open event\" onclick=\"dragnetOpenModal('dragnet-event-detail-");
+                html.Append(Encode(notification.EventId));
+                html.Append("')\"><i class=\"ph ph-arrow-square-out\"></i></button>");
             }
             AppendNotificationActionButton(
                 html,
                 notification.NotificationId,
                 "Acknowledge",
                 "Acknowledge",
-                "ph-check");
+                "ph-check",
+                actorClientId);
             html.AppendLine("</div></div>");
         }
         html.AppendLine("</div>");
     }
 
-    private static string BuildNotificationModuleControls(IReadOnlyList<DragnetNotification> notifications)
+    private static string BuildNotificationModuleControls(
+        IReadOnlyList<DragnetNotification> notifications,
+        int actorClientId)
     {
         if (notifications.Count == 0)
         {
@@ -1439,7 +1441,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         }
 
         var html = new StringBuilder();
-        AppendNotificationActionButton(html, null, "AcknowledgeAll", "Acknowledge all", "ph-checks");
+        AppendNotificationActionButton(html, null, "AcknowledgeAll", "Acknowledge all", "ph-checks", actorClientId);
         return html.ToString();
     }
 
@@ -1478,16 +1480,40 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         var healthPhase = peer.ConsecutiveFailures == 0
             ? 0
             : Math.Min(18, peer.ConsecutiveFailures * 3);
+        var latencyPhase = peer.AverageHeartbeatLatencyMs is null
+            ? 0
+            : Math.Min(24, (int)Math.Round(peer.AverageHeartbeatLatencyMs.Value / 80d));
 
         html.AppendLine("<div class=\"dragnet-peer-detail\">");
         html.AppendLine("<div class=\"p-4\">");
         html.AppendLine("<div class=\"rounded-md p-3\" style=\"background:linear-gradient(135deg,rgba(69,163,255,.16),rgba(82,210,115,.10) 46%,rgba(240,184,75,.10));border:1px solid rgba(143,199,255,.28)\">");
         html.AppendLine("<div class=\"flex flex-col gap-2 md:flex-row md:items-center md:justify-between text-xs text-muted\"><span>Heartbeat, delivery acknowledgement, and retry pressure</span><span>live peer signal</span></div>");
-        html.AppendLine("<div class=\"mt-2 flex flex-wrap gap-2 text-xs\"><span class=\"inline-flex items-center gap-1\"><span style=\"width:10px;height:10px;border-radius:999px;background:#45a3ff\"></span>Heartbeat</span><span class=\"inline-flex items-center gap-1\"><span style=\"width:10px;height:10px;border-radius:999px;background:#52d273\"></span>Acknowledged</span><span class=\"inline-flex items-center gap-1\"><span style=\"width:10px;height:10px;border-radius:999px;background:#f0b84b\"></span>Pending</span><span class=\"inline-flex items-center gap-1\"><span style=\"width:10px;height:10px;border-radius:999px;background:#ff6b6b\"></span>Failure pressure</span></div>");
+        html.AppendLine("<div class=\"mt-2 flex flex-wrap gap-2 text-xs\"><span class=\"inline-flex items-center gap-1\"><span style=\"width:10px;height:10px;border-radius:999px;background:#45a3ff\"></span>Heartbeat</span><span class=\"inline-flex items-center gap-1\"><span style=\"width:10px;height:10px;border-radius:999px;background:#52d273\"></span>Acknowledged</span><span class=\"inline-flex items-center gap-1\"><span style=\"width:10px;height:10px;border-radius:999px;background:#a78bfa\"></span>Latency</span><span class=\"inline-flex items-center gap-1\"><span style=\"width:10px;height:10px;border-radius:999px;background:#f0b84b\"></span>Pending</span><span class=\"inline-flex items-center gap-1\"><span style=\"width:10px;height:10px;border-radius:999px;background:#ff6b6b\"></span>Failure pressure</span></div>");
         html.AppendLine("<svg class=\"dragnet-sine\" viewBox=\"0 0 420 74\" role=\"img\" aria-label=\"Peer activity wave\">");
         html.AppendLine("<path d=\"M0 61 H420 M0 37 H420 M0 13 H420\" stroke=\"currentColor\" stroke-opacity=\"0.08\" stroke-width=\"1\"/>");
         html.AppendLine("<path d=\"M0 37 C 35 12, 70 12, 105 37 S 175 62, 210 37 S 280 12, 315 37 S 385 62, 420 37\" fill=\"none\" stroke=\"#45a3ff\" stroke-opacity=\"0.30\" stroke-width=\"3\"/>");
         html.AppendLine("<path d=\"M0 54 C 35 44, 70 44, 105 54 S 175 64, 210 54 S 280 44, 315 54 S 385 64, 420 54\" fill=\"none\" stroke=\"#52d273\" stroke-opacity=\"0.70\" stroke-width=\"2\"/>");
+        html.Append("<path d=\"M0 ");
+        html.Append(24 + latencyPhase);
+        html.Append(" C 35 ");
+        html.Append(18 + latencyPhase);
+        html.Append(", 70 ");
+        html.Append(18 + latencyPhase);
+        html.Append(", 105 ");
+        html.Append(24 + latencyPhase);
+        html.Append(" S 175 ");
+        html.Append(36 + latencyPhase);
+        html.Append(", 210 ");
+        html.Append(24 + latencyPhase);
+        html.Append(" S 280 ");
+        html.Append(18 + latencyPhase);
+        html.Append(", 315 ");
+        html.Append(24 + latencyPhase);
+        html.Append(" S 385 ");
+        html.Append(36 + latencyPhase);
+        html.Append(", 420 ");
+        html.Append(24 + latencyPhase);
+        html.AppendLine("\" fill=\"none\" stroke=\"#a78bfa\" stroke-opacity=\"0.80\" stroke-width=\"2\"/>");
         html.Append("<path d=\"M0 ");
         html.Append(37 + healthPhase);
         html.Append(" C 35 ");
@@ -1544,39 +1570,16 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         string? notificationId,
         string action,
         string label,
-        string icon)
+        string icon,
+        int actorClientId)
     {
-        var inputs = new List<Dictionary<string, object?>>
-        {
-            new()
-            {
-                ["Name"] = "NotificationAction",
-                ["Type"] = "hidden",
-                ["Value"] = action
-            }
-        };
-        if (!string.IsNullOrWhiteSpace(notificationId))
-        {
-            inputs.Add(new Dictionary<string, object?>
-            {
-                ["Name"] = "NotificationId",
-                ["Type"] = "hidden",
-                ["Value"] = notificationId
-            });
-        }
-
-        var meta = new Dictionary<string, string>
-        {
-            ["InteractionId"] = NotificationInteractionId,
-            ["ActionButtonLabel"] = label,
-            ["Name"] = label,
-            ["ShouldRefresh"] = "true",
-            ["Inputs"] = JsonSerializer.Serialize(inputs)
-        };
-        var encodedMeta = Uri.EscapeDataString(JsonSerializer.Serialize(meta));
-        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer\" data-action=\"DynamicAction\" onclick=\"return dragnetLaunchDynamicAction(this,event)\" data-action-meta=\"");
-        html.Append(Encode(encodedMeta));
-        html.Append("\"><span class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ");
+        html.Append("<button type=\"button\" data-dragnet-notification-control=\"true\" class=\"cursor-pointer\" onclick=\"return dragnetAcknowledgeNotification('");
+        html.Append(Encode(action));
+        html.Append("','");
+        html.Append(Encode(notificationId ?? ""));
+        html.Append("',");
+        html.Append(actorClientId);
+        html.Append(",this)\"><span class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ");
         html.Append(Encode(icon));
         html.Append(" mr-1\"></i>");
         html.Append(Encode(label));
@@ -2238,10 +2241,12 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
 @media(min-width:1024px){.lg\:flex-row{flex-direction:row}.lg\:items-center{align-items:center}.lg\:justify-between{justify-content:space-between}.lg\:justify-center{justify-content:center}.lg\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(min-width:1280px){.xl\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}.xl\:col-span-3{grid-column:span 3/span 3}}
 .dragnet-top-nav{position:sticky;top:4rem}
-.dragnet-modal{position:fixed;inset:0;margin:auto;width:fit-content;min-width:min(620px,calc(100vw - 32px));max-width:min(1120px,calc(100vw - 32px));max-height:86vh;overflow:visible;border:1px solid var(--color-line,#3a3042);border-radius:12px;background:#17111d;color:inherit;padding:0;opacity:0;transform:scale(.94);transition:opacity .16s ease,transform .16s ease,width .18s ease,max-height .22s ease}
+.dragnet-modal{position:fixed;inset:0;margin:auto;width:fit-content;min-width:min(620px,calc(100vw - 32px));max-width:min(1120px,calc(100vw - 32px));max-height:86vh;overflow:visible;border:1px solid var(--color-line,#3a3042);border-radius:12px;background:#17111d;color:inherit;padding:0;opacity:0;transform:scale(.94);transition:opacity .16s ease,transform .16s ease,width .18s ease,max-height .22s ease;z-index:1200}
 .dragnet-modal[open]{opacity:1;transform:scale(1);animation:dragnetZoomIn .16s ease}
 .dragnet-modal.closing{opacity:0;transform:scale(.94)}
-.dragnet-modal::backdrop{background:rgba(0,0,0,.66)}
+.dragnet-modal-shade{position:fixed;inset:0;background:rgba(0,0,0,.66);z-index:1190}
+.bg-surface.rounded-lg.shadow-xl.w-full.max-w-lg.overflow-hidden.transform.transition-all.flex.flex-col.max-h-\[90vh\]{position:relative;z-index:2200}
+body.dragnet-auto-action .bg-surface.rounded-lg.shadow-xl.w-full.max-w-lg.overflow-hidden.transform.transition-all.flex.flex-col.max-h-\[90vh\]{opacity:0!important;pointer-events:none!important;transform:scale(.96)!important}
 .dragnet-modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--color-line,#3a3042);cursor:move;user-select:none}
 .dragnet-modal-body{padding:16px;overflow:auto;max-height:calc(86vh - 58px)}
 #dragnet-peer-modal{width:min(1040px,calc(100vw - 32px));min-width:0}
@@ -2278,15 +2283,20 @@ details[open] > summary .dragnet-chevron,.dragnet-chevron.open{transform:rotate(
 @keyframes dragnetZoomIn{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:scale(1)}}
 </style>
 <script>
-function dragnetOpenModal(id){var d=document.getElementById(id);if(!d)return;d.classList.remove('closing');if(d.showModal)d.showModal();else d.setAttribute('open','open');}
-function dragnetCloseDialog(d){if(!d)return;d.classList.add('closing');setTimeout(function(){if(d.close)d.close();else d.removeAttribute('open');d.classList.remove('closing');d.style.left='';d.style.top='';d.style.margin='auto';},160);}
+function dragnetEnsureShade(){var s=document.getElementById('dragnet-modal-shade');if(!s){s=document.createElement('div');s.id='dragnet-modal-shade';s.className='dragnet-modal-shade';s.addEventListener('click',function(){document.querySelectorAll('dialog.dragnet-modal[open]').forEach(dragnetCloseDialog);});document.body.appendChild(s);}return s;}
+function dragnetSyncShade(){var s=document.getElementById('dragnet-modal-shade');if(!s)return;if(document.querySelector('dialog.dragnet-modal[open]'))s.hidden=false;else s.hidden=true;}
+function dragnetOpenModal(id){var d=document.getElementById(id);if(!d)return;dragnetEnsureShade().hidden=false;d.classList.remove('closing');d.setAttribute('open','open');}
+function dragnetCloseDialog(d){if(!d)return;d.classList.add('closing');setTimeout(function(){d.removeAttribute('open');d.classList.remove('closing');d.style.left='';d.style.top='';d.style.margin='auto';dragnetSyncShade();},160);}
 function dragnetCloseModal(button){dragnetCloseDialog(button.closest('dialog'));}
-function dragnetLaunchDynamicAction(button,event){if(event){event.preventDefault();event.stopImmediatePropagation();}var proxy=button.cloneNode(true);proxy.removeAttribute('onclick');proxy.removeAttribute('onpointerdown');proxy.removeAttribute('id');proxy.style.display='none';document.body.appendChild(proxy);var d=button.closest('dialog');if(d){if(d.close)d.close();else d.removeAttribute('open');d.classList.remove('closing');d.style.left='';d.style.top='';d.style.margin='auto';}setTimeout(function(){proxy.click();setTimeout(function(){proxy.remove();},0);},0);return false;}
+function dragnetHiddenOnlyAction(button){try{var meta=JSON.parse(decodeURIComponent(button.getAttribute('data-action-meta')||''));var inputs=JSON.parse(meta.Inputs||'[]');return {silent:inputs.length>0&&inputs.every(function(input){return String(input.Type||'').toLowerCase()==='hidden';}),label:meta.ActionButtonLabel||meta.Name||''};}catch(_){return {silent:false,label:''};}}
+function dragnetConfirmNativeAction(label){var started=Date.now();document.body.classList.add('dragnet-auto-action');function done(){setTimeout(function(){document.body.classList.remove('dragnet-auto-action');},180);}function tick(){var buttons=Array.from(document.querySelectorAll('button')).filter(function(btn){return !btn.closest('dialog.dragnet-modal')&&btn.offsetParent!==null;});var match=buttons.reverse().find(function(btn){return btn.textContent.trim()===label;});if(match){match.click();done();return;}if(Date.now()-started<1500){requestAnimationFrame(tick);return;}done();}requestAnimationFrame(tick);}
+function dragnetLaunchDynamicAction(button,event){if(event){event.preventDefault();event.stopImmediatePropagation();}var action=dragnetHiddenOnlyAction(button);var proxy=button.cloneNode(true);proxy.removeAttribute('onclick');proxy.removeAttribute('onpointerdown');proxy.removeAttribute('id');proxy.style.display='none';document.body.appendChild(proxy);var d=button.closest('dialog');if(d&&!action.silent){d.removeAttribute('open');d.classList.remove('closing');d.style.left='';d.style.top='';d.style.margin='auto';dragnetSyncShade();}setTimeout(function(){proxy.click();if(action.silent&&action.label){dragnetConfirmNativeAction(action.label);}setTimeout(function(){proxy.remove();},0);},0);return false;}
+function dragnetNotifyStatus(message,ok){var body=document.querySelector('#dragnet-notification-modal .dragnet-modal-body');if(!body)return;var note=document.getElementById('dragnet-notification-status');if(!note){note=document.createElement('div');note.id='dragnet-notification-status';note.className='rounded-md border px-3 py-2 text-sm mb-2';body.prepend(note);}note.classList.toggle('text-success',!!ok);note.classList.toggle('text-danger',!ok);note.textContent=message;}
+function dragnetAcknowledgeNotification(action,id,actorClientId,button){if(button){button.disabled=true;}fetch('/api/dragnet/notifications/acknowledge',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Requested-With':'DragnetWebfront'},body:JSON.stringify({action:action,notificationId:id||null,actorClientId:actorClientId||null})}).then(function(r){return r.json().then(function(j){return {ok:r.ok,data:j};});}).then(function(result){dragnetNotifyStatus(result.data.message||'Dragnet notification updated.',result.ok);if(!result.ok){if(button)button.disabled=false;return;}if(action==='AcknowledgeAll'){document.querySelectorAll('[data-dragnet-notification]').forEach(function(row){row.remove();});}else if(id){var row=document.querySelector('[data-dragnet-notification="'+CSS.escape(id)+'"]');if(row)row.remove();}if(!document.querySelector('[data-dragnet-notification]')){var list=document.getElementById('dragnet-notification-list');if(list)list.innerHTML='<div class="rounded-md bg-surface-alt/20 px-4 py-5 text-center text-muted">No unread Dragnet notifications.</div>';document.querySelectorAll('[data-dragnet-notification-control]').forEach(function(control){control.remove();});}}).catch(function(){dragnetNotifyStatus('Could not acknowledge Dragnet notification.',false);if(button)button.disabled=false;});return false;}
 function dragnetLedgerPage(page){document.querySelectorAll('[data-ledger-page]').forEach(function(row){row.hidden=row.getAttribute('data-ledger-page')!==String(page);});document.querySelectorAll('[data-ledger-current]').forEach(function(el){el.textContent=page;});}
 function dragnetFilterEvents(filter){document.querySelectorAll('[data-event-filters]').forEach(function(row){var filters=row.getAttribute('data-event-filters').split(' ');row.hidden=filters.indexOf(filter)<0;});document.querySelectorAll('[data-dragnet-filter]').forEach(function(btn){var active=btn.getAttribute('data-dragnet-filter')===filter;btn.classList.toggle('bg-action-primary',active);btn.classList.toggle('text-foreground',active);btn.classList.toggle('border-action-primary',active);btn.classList.toggle('text-muted',!active);});}
 function dragnetFilterAudit(value){var query=(value||'').trim().toLowerCase();document.querySelectorAll('[data-audit-search]').forEach(function(row){row.hidden=query!==''&&row.getAttribute('data-audit-search').indexOf(query)<0;});}
 document.addEventListener('mousedown',function(e){var head=e.target.closest('.dragnet-modal-head');if(!head||e.target.closest('button'))return;var d=head.closest('dialog');if(!d)return;var r=d.getBoundingClientRect();var x=e.clientX-r.left;var y=e.clientY-r.top;d.style.margin='0';d.style.left=r.left+'px';d.style.top=r.top+'px';function move(ev){d.style.left=Math.max(8,Math.min(window.innerWidth-r.width-8,ev.clientX-x))+'px';d.style.top=Math.max(8,Math.min(window.innerHeight-r.height-8,ev.clientY-y))+'px';}function up(){document.removeEventListener('mousemove',move);document.removeEventListener('mouseup',up);}document.addEventListener('mousemove',move);document.addEventListener('mouseup',up);});
-document.addEventListener('click',function(e){var d=e.target;if(d instanceof HTMLDialogElement&&d.classList.contains('dragnet-modal'))dragnetCloseDialog(d);});
 </script>
 """);
     }
@@ -3611,19 +3621,6 @@ document.addEventListener('click',function(e){var d=e.target;if(d instanceof HTM
             .Split(' ', StringSplitOptions.RemoveEmptyEntries)
             .Contains(filter.ToString(), StringComparer.OrdinalIgnoreCase);
 
-    private static DragnetStoredEvent? ResolveSelectedEvent(
-        IReadOnlyList<DragnetStoredEvent> events,
-        string? selectedEventId)
-    {
-        if (string.IsNullOrWhiteSpace(selectedEventId))
-        {
-            return null;
-        }
-
-        return events.FirstOrDefault(item =>
-            item.Event.EventId.StartsWith(selectedEventId, StringComparison.OrdinalIgnoreCase));
-    }
-
     private static void AppendFilterLinks(StringBuilder html, DragnetEventFilter activeFilter)
     {
         html.AppendLine("<div class=\"flex flex-wrap gap-2\">");
@@ -3632,7 +3629,7 @@ document.addEventListener('click',function(e){var d=e.target;if(d instanceof HTM
             var activeClass = filter == activeFilter
                 ? "bg-action-primary text-foreground border-action-primary"
                 : "border-line text-muted hover:bg-surface-hover";
-            html.Append("<button type=\"button\" data-dragnet-filter=\"");
+            html.Append("<button type=\"button\" data-enhance-nav=\"false\" data-dragnet-filter=\"");
             html.Append(Encode(filter.ToString()));
             html.Append("\" class=\"inline-flex items-center px-3 py-1.5 rounded-md border text-sm ");
             html.Append(activeClass);
@@ -3649,43 +3646,13 @@ document.addEventListener('click',function(e){var d=e.target;if(d instanceof HTM
     private static void AppendEventLink(
         StringBuilder html,
         string eventId,
-        string label,
-        DragnetEventFilter filter)
+        string label)
     {
-        html.Append("<a data-enhance-nav=\"false\" class=\"text-primary hover:underline\" href=\"");
-        html.Append(BuildDashboardUri(filter, eventId));
-        html.Append("\">");
+        html.Append("<button type=\"button\" class=\"text-primary hover:underline\" onclick=\"dragnetOpenModal('dragnet-event-detail-");
+        html.Append(Encode(eventId));
+        html.Append("')\">");
         html.Append(Encode(label));
-        html.Append("</a>");
-    }
-
-    private static string BuildDashboardUri(
-        DragnetEventFilter filter,
-        string? eventId = null)
-    {
-        var uri = BuildModuleUri("events", filter);
-        return string.IsNullOrWhiteSpace(eventId)
-            ? uri
-            : $"{uri}&eventId={Uri.EscapeDataString(eventId)}";
-    }
-
-    private static string BuildModuleUri(
-        string module,
-        DragnetEventFilter? filter = null,
-        int? ledgerPage = null)
-    {
-        var uri = $"/Interaction/Render/{NavigationInteractionId}?module={Uri.EscapeDataString(module)}";
-        if (filter is not null)
-        {
-            uri += $"&filter={filter}";
-        }
-
-        if (ledgerPage is not null)
-        {
-            uri += $"&ledgerPage={ledgerPage.Value}";
-        }
-
-        return uri;
+        html.Append("</button>");
     }
 
     private static string FilterLabel(DragnetEventFilter filter) => filter switch

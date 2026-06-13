@@ -1126,7 +1126,7 @@ static async Task TestNotificationWebhookAsync()
     await service.NotifyUpdateInstalledAsync(
         "0.1.0-beta.21",
         "https://github.com/SebzIO/iw4madmin-dragnet/releases/tag/v0.1.0-beta.21",
-        "- Added operational visibility\n- Fixed peer recovery",
+        "<ul><li>Added operational visibility</li><li>Fixed <strong>peer recovery</strong></li></ul>",
         CancellationToken.None);
 
     Assert.Equal(2, handler.RequestCount,
@@ -1148,6 +1148,17 @@ static async Task TestNotificationWebhookAsync()
             field.GetProperty("name").GetString() == "ʀᴇʟᴇᴀꜱᴇ ɴᴏᴛᴇꜱ" &&
             field.GetProperty("value").GetString()!.Contains("operational visibility", StringComparison.Ordinal)),
         "update Discord embed should include GitHub release notes");
+    var releaseNotes = updateFields.Single(field =>
+            field.GetProperty("name").GetString() == "ʀᴇʟᴇᴀꜱᴇ ɴᴏᴛᴇꜱ")
+        .GetProperty("value")
+        .GetString()!;
+    Assert.Contains("- Added operational visibility", releaseNotes,
+        "update Discord embed should convert HTML list items to Discord markdown bullets");
+    Assert.Contains("- Fixed **peer recovery**", releaseNotes,
+        "update Discord embed should preserve useful markdown emphasis");
+    Assert.False(releaseNotes.Contains("<li>", StringComparison.OrdinalIgnoreCase) ||
+                 releaseNotes.Contains("<ul>", StringComparison.OrdinalIgnoreCase),
+        "update Discord embed should not expose HTML release note tags");
     Assert.True(updateFields.Any(field =>
             field.GetProperty("name").GetString() == "ʀᴇʟᴇᴀꜱᴇ" &&
             field.GetProperty("value").GetString()!.Contains("View on GitHub", StringComparison.Ordinal)),
@@ -2304,10 +2315,15 @@ static async Task TestWebfrontDashboardRendersAsync()
         "dashboard should include the proxy action modal handoff helper");
     Assert.False(html.Contains("dragnetPrepareDynamicAction", StringComparison.Ordinal),
         "dashboard should not use the pointer-down handoff that can cancel actions");
-    Assert.Contains(
-        "%22InteractionId%22%3A%22Dragnet%3A%3ANotification%22%2C%22ActionButtonLabel%22%3A%22Acknowledge%22%2C%22Name%22%3A%22Acknowledge%22%2C%22ShouldRefresh%22%3A%22true%22",
-        html,
-        "notification acknowledgements should refresh the dashboard after success");
+    Assert.Contains("function dragnetAcknowledgeNotification(action,id,actorClientId,button)", html,
+        "notification acknowledgements should use the Dragnet API helper");
+    Assert.Contains("actorClientId:actorClientId||null", html,
+        "notification acknowledgements should carry the IW4MAdmin interaction actor id");
+    Assert.Contains("/api/dragnet/notifications/acknowledge", html,
+        "notification acknowledgements should post to the Dragnet API");
+    Assert.False(
+        html.Contains("%22InteractionId%22%3A%22Dragnet%3A%3ANotification%22", StringComparison.Ordinal),
+        "notification acknowledgements should not open IW4MAdmin's dynamic action modal");
     Assert.Contains("<span class=\"rounded-full bg-surface-alt px-1.5 text-xs text-muted\">1</span>", html,
         "dashboard should display the administrator's unread count as an icon badge");
     Assert.False(html.Contains("Acknowledgements are personal", StringComparison.Ordinal),
@@ -2360,20 +2376,19 @@ static async Task TestWebfrontDashboardRendersAsync()
         html,
         "dashboard filter links should force a fresh interaction render when query parameters change");
     Assert.Contains(
-        $"module=events&amp;filter={DragnetEventFilter.Pending}&amp;eventId={bulkEvent.EventId}",
+        $"dragnetOpenModal('dragnet-event-detail-{bulkEvent.EventId}')",
         html,
-        "notification event links should navigate to the exact event in the events module");
+        "notification event links should open the exact event detail module");
 
     html = await interaction.Action(0, null, null, new Dictionary<string, string>
     {
         ["module"] = "events",
-        ["filter"] = DragnetEventFilter.All.ToString(),
-        ["eventId"] = bulkEvent.EventId
+        ["filter"] = DragnetEventFilter.All.ToString()
     }, CancellationToken.None);
     Assert.Contains($"id=\"dragnet-event-{bulkEvent.EventId}\"", html,
         "requested notification event should be included in the rendered event list");
-    Assert.Contains($"document.getElementById('dragnet-event-{bulkEvent.EventId}')", html,
-        "events module should scroll the requested event into view");
+    Assert.Contains($"id=\"dragnet-event-detail-{bulkEvent.EventId}\"", html,
+        "events module should render the requested event detail modal");
 
     var localEvent = CreateEnvelope(originId: identity.OriginId, eventType: DragnetEventType.BanCreated) with
     {

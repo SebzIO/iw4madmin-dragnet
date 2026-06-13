@@ -1,4 +1,6 @@
+using System.Net;
 using System.Net.Http.Json;
+using System.Text.RegularExpressions;
 using Data.Models.Client;
 using Dragnet.Configuration;
 using Dragnet.Models;
@@ -412,10 +414,34 @@ public sealed class DragnetNotificationService : IDisposable
             .Replace("\r\n", "\n", StringComparison.Ordinal)
             .Replace('\r', '\n')
             .Trim();
+        normalized = Regex.Replace(normalized, @"<\s*br\s*/?\s*>", "\n", RegexOptions.IgnoreCase);
+        normalized = Regex.Replace(normalized, @"<\s*/\s*p\s*>", "\n\n", RegexOptions.IgnoreCase);
+        normalized = Regex.Replace(normalized, @"<\s*p(?:\s+[^>]*)?>", "", RegexOptions.IgnoreCase);
+        normalized = Regex.Replace(normalized, @"<\s*/?\s*(ul|ol)(?:\s+[^>]*)?>", "\n", RegexOptions.IgnoreCase);
+        normalized = Regex.Replace(normalized, @"<\s*li(?:\s+[^>]*)?>", "- ", RegexOptions.IgnoreCase);
+        normalized = Regex.Replace(normalized, @"<\s*/\s*li\s*>", "\n", RegexOptions.IgnoreCase);
+        normalized = Regex.Replace(normalized, @"<\s*(strong|b)(?:\s+[^>]*)?>", "**", RegexOptions.IgnoreCase);
+        normalized = Regex.Replace(normalized, @"<\s*/\s*(strong|b)\s*>", "**", RegexOptions.IgnoreCase);
+        normalized = Regex.Replace(normalized, @"<\s*(em|i)(?:\s+[^>]*)?>", "*", RegexOptions.IgnoreCase);
+        normalized = Regex.Replace(normalized, @"<\s*/\s*(em|i)\s*>", "*", RegexOptions.IgnoreCase);
+        normalized = Regex.Replace(normalized, @"<\s*code(?:\s+[^>]*)?>", "`", RegexOptions.IgnoreCase);
+        normalized = Regex.Replace(normalized, @"<\s*/\s*code\s*>", "`", RegexOptions.IgnoreCase);
+        normalized = Regex.Replace(normalized, @"<\s*h[1-6](?:\s+[^>]*)?>", "\n**", RegexOptions.IgnoreCase);
+        normalized = Regex.Replace(normalized, @"<\s*/\s*h[1-6]\s*>", "**\n", RegexOptions.IgnoreCase);
+        normalized = Regex.Replace(normalized, @"<\s*a\s+[^>]*href\s*=\s*[""'](?<href>[^""']+)[""'][^>]*>(?<text>.*?)<\s*/\s*a\s*>",
+            match => $"[{StripHtml(match.Groups["text"].Value)}]({match.Groups["href"].Value})",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        normalized = Regex.Replace(normalized, @"<[^>]+>", "", RegexOptions.IgnoreCase);
+        normalized = WebUtility.HtmlDecode(normalized);
+        normalized = Regex.Replace(normalized, @"[ \t]+\n", "\n");
+        normalized = Regex.Replace(normalized, @"\n{3,}", "\n\n").Trim();
         return string.IsNullOrWhiteSpace(normalized)
             ? "No release notes were provided."
             : normalized;
     }
+
+    private static string StripHtml(string value) =>
+        WebUtility.HtmlDecode(Regex.Replace(value, @"<[^>]+>", "", RegexOptions.IgnoreCase)).Trim();
 
     private static List<object> CreateEventFields(DragnetNotification notification, string action)
     {
