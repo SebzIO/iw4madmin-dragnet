@@ -2234,6 +2234,14 @@ static async Task TestWebfrontDashboardRendersAsync()
         "dashboard should not link to removed network profile pages");
     Assert.Contains("Notification inbox", html, "dashboard should include the notification inbox");
     Assert.Contains("data-tip=\"Notifications\"", html, "dashboard should expose notifications as an icon tooltip");
+    Assert.Contains("onpointerdown=\"dragnetPrepareDynamicAction(this)\"", html,
+        "notification actions should release the Dragnet dialog before IW4MAdmin opens its action modal");
+    Assert.Contains("function dragnetPrepareDynamicAction(button)", html,
+        "dashboard should include the native action modal handoff helper");
+    Assert.Contains(
+        "%22InteractionId%22%3A%22Dragnet%3A%3ANotification%22%2C%22ActionButtonLabel%22%3A%22Acknowledge%22%2C%22Name%22%3A%22Acknowledge%22%2C%22ShouldRefresh%22%3A%22true%22",
+        html,
+        "notification acknowledgements should refresh the dashboard after success");
     Assert.Contains("<span class=\"rounded-full bg-surface-alt px-1.5 text-xs text-muted\">1</span>", html,
         "dashboard should display the administrator's unread count as an icon badge");
     Assert.False(html.Contains("Acknowledgements are personal", StringComparison.Ordinal),
