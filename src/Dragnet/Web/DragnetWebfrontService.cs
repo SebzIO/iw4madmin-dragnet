@@ -342,9 +342,19 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             outdatedPeers +
             unknownVersionPeers;
         var filteredEvents = FilterEvents(events, filter).Take(50).ToList();
-        var eventRows = events.Take(50).ToList();
-        var bulkApprovableEvents = filteredEvents.Where(IsBulkApprovable).ToList();
         var selectedEvent = ResolveSelectedEvent(events, selectedEventId) ?? filteredEvents.FirstOrDefault();
+        var eventRows = selectedEvent is null
+            ? events.Take(50).ToList()
+            : events
+                .Where(item => item.Event.EventId.Equals(
+                    selectedEvent.Event.EventId,
+                    StringComparison.OrdinalIgnoreCase))
+                .Concat(events.Where(item => !item.Event.EventId.Equals(
+                    selectedEvent.Event.EventId,
+                    StringComparison.OrdinalIgnoreCase)))
+                .Take(50)
+                .ToList();
+        var bulkApprovableEvents = filteredEvents.Where(IsBulkApprovable).ToList();
         IReadOnlyList<DragnetNotification> unreadNotifications = [];
         if (_notificationService is not null)
         {
@@ -538,7 +548,16 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
 
         foreach (var item in eventRows)
         {
-            html.Append("<div class=\"rounded-md border border-line bg-surface-alt/20 px-3 py-2 hover:bg-surface-alt/30\" data-event-filters=\"");
+            html.Append("<div id=\"dragnet-event-");
+            html.Append(Encode(item.Event.EventId));
+            html.Append("\" class=\"rounded-md border px-3 py-2 hover:bg-surface-alt/30 ");
+            html.Append(selectedEvent is not null &&
+                        item.Event.EventId.Equals(selectedEvent.Event.EventId, StringComparison.OrdinalIgnoreCase)
+                ? "border-action-primary bg-surface-alt/30"
+                : "border-line bg-surface-alt/20");
+            html.Append("\" data-event-id=\"");
+            html.Append(Encode(item.Event.EventId));
+            html.Append("\" data-event-filters=\"");
             html.Append(Encode(GetEventFilterClasses(item)));
             html.Append("\"");
             if (!EventMatchesFilter(item, filter))
@@ -1344,12 +1363,12 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             ["InteractionId"] = ReviewInteractionId,
             ["ActionButtonLabel"] = "Retry import",
             ["Name"] = "Retry import",
-            ["ShouldRefresh"] = "false",
+            ["ShouldRefresh"] = "true",
             ["Inputs"] = BuildReviewInputs(eventId, "RetryImport", includeReason: false)
         };
 
         var encodedMeta = Uri.EscapeDataString(JsonSerializer.Serialize(meta));
-        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer ml-2\" data-action=\"DynamicAction\" data-action-meta=\"");
+        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer ml-2\" data-action=\"DynamicAction\" onclick=\"return dragnetLaunchDynamicAction(this,event)\" data-action-meta=\"");
         html.Append(Encode(encodedMeta));
         html.Append("\"><span class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ph-arrow-clockwise mr-1\"></i>Retry import</span></button>");
     }
@@ -1366,8 +1385,8 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         html.Append("</span><button type=\"button\" class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\" onclick=\"document.querySelectorAll('.dragnet-bulk-ban').forEach(function(c){c.checked=true;})\"><i class=\"ph ph-check-square mr-1\"></i>Select all</button>");
         html.Append("<button type=\"button\" class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-action-primary bg-action-primary text-foreground text-sm\" onclick=\"(function(){var ids=Array.from(document.querySelectorAll('.dragnet-bulk-ban:checked')).map(function(c){return c.value;});if(ids.length===0){alert('Select at least one trusted pending ban.');return;}var inputs=[{Name:'ReviewAction',Type:'hidden',Value:'BulkApproveBan'},{Name:'EventIds',Type:'hidden',Value:JSON.stringify(ids)}];var meta={InteractionId:'");
         html.Append(ReviewInteractionId);
-        html.Append("',ActionButtonLabel:'Approve selected',Name:'Approve selected bans',ShouldRefresh:'false',Inputs:JSON.stringify(inputs)};var trigger=document.getElementById('dragnet-bulk-trigger');trigger.dataset.actionMeta=encodeURIComponent(JSON.stringify(meta));trigger.click();})()\"><i class=\"ph ph-checks mr-1\"></i>Approve selected</button>");
-        html.Append("<button id=\"dragnet-bulk-trigger\" type=\"button\" class=\"profile-action hidden\" data-action=\"DynamicAction\" data-action-meta=\"\"></button></div>");
+        html.Append("',ActionButtonLabel:'Approve selected',Name:'Approve selected bans',ShouldRefresh:'true',Inputs:JSON.stringify(inputs)};var trigger=document.getElementById('dragnet-bulk-trigger');trigger.dataset.actionMeta=encodeURIComponent(JSON.stringify(meta));trigger.click();})()\"><i class=\"ph ph-checks mr-1\"></i>Approve selected</button>");
+        html.Append("<button id=\"dragnet-bulk-trigger\" type=\"button\" class=\"profile-action hidden\" data-action=\"DynamicAction\" onclick=\"return dragnetLaunchDynamicAction(this,event)\" data-action-meta=\"\"></button></div>");
     }
 
     private static void AppendNotificationInbox(
@@ -1397,7 +1416,9 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             html.Append("</div></div><div class=\"flex items-center gap-2\">");
             if (!string.IsNullOrWhiteSpace(notification.EventId))
             {
-                html.Append("<button type=\"button\" class=\"inline-flex items-center justify-center w-10 px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\" title=\"Open events\" aria-label=\"Open events\" onclick=\"dragnetOpenModal('dragnet-events-modal')\"><i class=\"ph ph-arrow-square-out\"></i></button>");
+                html.Append("<a data-enhance-nav=\"false\" class=\"inline-flex items-center justify-center w-10 px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\" title=\"Open event\" aria-label=\"Open event\" href=\"");
+                html.Append(Encode(BuildDashboardUri(filter, notification.EventId)));
+                html.Append("\"><i class=\"ph ph-arrow-square-out\"></i></a>");
             }
             AppendNotificationActionButton(
                 html,
@@ -1553,7 +1574,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             ["Inputs"] = JsonSerializer.Serialize(inputs)
         };
         var encodedMeta = Uri.EscapeDataString(JsonSerializer.Serialize(meta));
-        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer\" data-action=\"DynamicAction\" onpointerdown=\"dragnetPrepareDynamicAction(this)\" onclick=\"dragnetPrepareDynamicAction(this)\" data-action-meta=\"");
+        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer\" data-action=\"DynamicAction\" onclick=\"return dragnetLaunchDynamicAction(this,event)\" data-action-meta=\"");
         html.Append(Encode(encodedMeta));
         html.Append("\"><span class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ");
         html.Append(Encode(icon));
@@ -1594,12 +1615,12 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             ["InteractionId"] = ReviewInteractionId,
             ["ActionButtonLabel"] = label,
             ["Name"] = label,
-            ["ShouldRefresh"] = "false",
+            ["ShouldRefresh"] = "true",
             ["Inputs"] = JsonSerializer.Serialize(inputs)
         };
 
         var encodedMeta = Uri.EscapeDataString(JsonSerializer.Serialize(meta));
-        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer ml-2\" data-action=\"DynamicAction\" data-action-meta=\"");
+        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer ml-2\" data-action=\"DynamicAction\" onclick=\"return dragnetLaunchDynamicAction(this,event)\" data-action-meta=\"");
         html.Append(Encode(encodedMeta));
         html.Append("\"><span class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ph-link mr-1\"></i>");
         html.Append(Encode(label));
@@ -1690,7 +1711,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             ["InteractionId"] = TrustInteractionId,
             ["ActionButtonLabel"] = label,
             ["Name"] = label,
-            ["ShouldRefresh"] = "false",
+            ["ShouldRefresh"] = "true",
             ["Inputs"] = BuildTrustInputs(envelope, trustAction)
         };
 
@@ -1699,7 +1720,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         html.Append(Encode(label));
         html.Append("\" aria-label=\"");
         html.Append(Encode(label));
-        html.Append("\" data-action=\"DynamicAction\" data-action-meta=\"");
+        html.Append("\" data-action=\"DynamicAction\" onclick=\"return dragnetLaunchDynamicAction(this,event)\" data-action-meta=\"");
         html.Append(Encode(encodedMeta));
         html.Append("\"><span class=\"inline-flex items-center justify-center w-10 px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ");
         html.Append(Encode(icon));
@@ -1804,7 +1825,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             ["InteractionId"] = PeerInteractionId,
             ["ActionButtonLabel"] = label,
             ["Name"] = label,
-            ["ShouldRefresh"] = "false",
+            ["ShouldRefresh"] = "true",
             ["Inputs"] = BuildPeerInputs(peer, peerAction)
         };
 
@@ -1813,7 +1834,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         html.Append(Encode(label));
         html.Append("\" aria-label=\"");
         html.Append(Encode(label));
-        html.Append("\" data-action=\"DynamicAction\" data-action-meta=\"");
+        html.Append("\" data-action=\"DynamicAction\" onclick=\"return dragnetLaunchDynamicAction(this,event)\" data-action-meta=\"");
         html.Append(Encode(encodedMeta));
         html.Append("\"><span class=\"inline-flex items-center justify-center w-10 px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ");
         html.Append(Encode(icon));
@@ -1990,7 +2011,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             ["InteractionId"] = ReviewInteractionId,
             ["ActionButtonLabel"] = label,
             ["Name"] = label,
-            ["ShouldRefresh"] = "false",
+            ["ShouldRefresh"] = "true",
             ["Inputs"] = BuildReviewInputs(eventId, action, includeReason)
         };
 
@@ -1999,7 +2020,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         html.Append(Encode(label));
         html.Append("\" aria-label=\"");
         html.Append(Encode(label));
-        html.Append("\" data-action=\"DynamicAction\" data-action-meta=\"");
+        html.Append("\" data-action=\"DynamicAction\" onclick=\"return dragnetLaunchDynamicAction(this,event)\" data-action-meta=\"");
         html.Append(Encode(encodedMeta));
         html.Append("\"><span class=\"inline-flex items-center justify-center w-10 px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ");
         html.Append(Encode(icon));
@@ -2260,7 +2281,7 @@ details[open] > summary .dragnet-chevron,.dragnet-chevron.open{transform:rotate(
 function dragnetOpenModal(id){var d=document.getElementById(id);if(!d)return;d.classList.remove('closing');if(d.showModal)d.showModal();else d.setAttribute('open','open');}
 function dragnetCloseDialog(d){if(!d)return;d.classList.add('closing');setTimeout(function(){if(d.close)d.close();else d.removeAttribute('open');d.classList.remove('closing');d.style.left='';d.style.top='';d.style.margin='auto';},160);}
 function dragnetCloseModal(button){dragnetCloseDialog(button.closest('dialog'));}
-function dragnetPrepareDynamicAction(button){var d=button.closest('dialog');if(!d)return;if(d.close)d.close();else d.removeAttribute('open');d.classList.remove('closing');d.style.left='';d.style.top='';d.style.margin='auto';}
+function dragnetLaunchDynamicAction(button,event){if(event){event.preventDefault();event.stopImmediatePropagation();}var proxy=button.cloneNode(true);proxy.removeAttribute('onclick');proxy.removeAttribute('onpointerdown');proxy.removeAttribute('id');proxy.style.display='none';document.body.appendChild(proxy);var d=button.closest('dialog');if(d){if(d.close)d.close();else d.removeAttribute('open');d.classList.remove('closing');d.style.left='';d.style.top='';d.style.margin='auto';}setTimeout(function(){proxy.click();setTimeout(function(){proxy.remove();},0);},0);return false;}
 function dragnetLedgerPage(page){document.querySelectorAll('[data-ledger-page]').forEach(function(row){row.hidden=row.getAttribute('data-ledger-page')!==String(page);});document.querySelectorAll('[data-ledger-current]').forEach(function(el){el.textContent=page;});}
 function dragnetFilterEvents(filter){document.querySelectorAll('[data-event-filters]').forEach(function(row){var filters=row.getAttribute('data-event-filters').split(' ');row.hidden=filters.indexOf(filter)<0;});document.querySelectorAll('[data-dragnet-filter]').forEach(function(btn){var active=btn.getAttribute('data-dragnet-filter')===filter;btn.classList.toggle('bg-action-primary',active);btn.classList.toggle('text-foreground',active);btn.classList.toggle('border-action-primary',active);btn.classList.toggle('text-muted',!active);});}
 function dragnetFilterAudit(value){var query=(value||'').trim().toLowerCase();document.querySelectorAll('[data-audit-search]').forEach(function(row){row.hidden=query!==''&&row.getAttribute('data-audit-search').indexOf(query)<0;});}
@@ -2500,7 +2521,16 @@ document.addEventListener('click',function(e){var d=e.target;if(d instanceof HTM
 
         html.Append("<script>setTimeout(function(){dragnetOpenModal('");
         html.Append(Encode(id));
-        html.AppendLine("')},0);</script>");
+        html.Append("');");
+        if (id == "dragnet-events-modal" &&
+            meta.TryGetValue("eventId", out var eventId) &&
+            !string.IsNullOrWhiteSpace(eventId))
+        {
+            html.Append("setTimeout(function(){var row=document.getElementById('dragnet-event-");
+            html.Append(Encode(eventId));
+            html.Append("');if(row){row.hidden=false;row.scrollIntoView({block:'center',behavior:'smooth'});}},80);");
+        }
+        html.AppendLine("},0);</script>");
     }
 
     private void AppendDashboardNavigation(
@@ -2719,7 +2749,7 @@ document.addEventListener('click',function(e){var d=e.target;if(d instanceof HTM
             ["Inputs"] = BuildSetupInputs()
         };
         var encodedMeta = Uri.EscapeDataString(JsonSerializer.Serialize(meta));
-        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer\" data-action=\"DynamicAction\" data-action-meta=\"");
+        html.Append("<button type=\"button\" class=\"profile-action cursor-pointer\" data-action=\"DynamicAction\" onclick=\"return dragnetLaunchDynamicAction(this,event)\" data-action-meta=\"");
         html.Append(Encode(encodedMeta));
         html.Append("\"><span class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ph-gear mr-1\"></i>Configure</span></button>");
     }

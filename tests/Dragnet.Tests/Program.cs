@@ -2298,10 +2298,12 @@ static async Task TestWebfrontDashboardRendersAsync()
     Assert.Contains("dragnetFilterAudit", html, "audit timeline should provide client-side search");
     Assert.Contains("data-tip=\"Audit\"", html, "dashboard navigation should expose the audit timeline");
     Assert.Contains("data-tip=\"Notifications\"", html, "dashboard should expose notifications as an icon tooltip");
-    Assert.Contains("onpointerdown=\"dragnetPrepareDynamicAction(this)\"", html,
-        "notification actions should release the Dragnet dialog before IW4MAdmin opens its action modal");
-    Assert.Contains("function dragnetPrepareDynamicAction(button)", html,
-        "dashboard should include the native action modal handoff helper");
+    Assert.Contains("onclick=\"return dragnetLaunchDynamicAction(this,event)\"", html,
+        "modal actions should use the deferred IW4MAdmin action handoff");
+    Assert.Contains("function dragnetLaunchDynamicAction(button,event)", html,
+        "dashboard should include the proxy action modal handoff helper");
+    Assert.False(html.Contains("dragnetPrepareDynamicAction", StringComparison.Ordinal),
+        "dashboard should not use the pointer-down handoff that can cancel actions");
     Assert.Contains(
         "%22InteractionId%22%3A%22Dragnet%3A%3ANotification%22%2C%22ActionButtonLabel%22%3A%22Acknowledge%22%2C%22Name%22%3A%22Acknowledge%22%2C%22ShouldRefresh%22%3A%22true%22",
         html,
@@ -2336,6 +2338,10 @@ static async Task TestWebfrontDashboardRendersAsync()
     Assert.Contains("Pending deliveries", html, "dashboard should summarize incomplete event delivery");
     Assert.Contains("Delivery", html, "peer table should expose delivery coverage");
     Assert.Contains("Verify sync", html, "peer actions should expose delivery verification");
+    Assert.Contains(
+        "%22InteractionId%22%3A%22Dragnet%3A%3APeer%22%2C%22ActionButtonLabel%22%3A%22Verify%20sync%22%2C%22Name%22%3A%22Verify%20sync%22%2C%22ShouldRefresh%22%3A%22true%22",
+        html,
+        "peer actions should refresh after their visible action result");
     Assert.Contains("Resync", html, "peer actions should expose event replay");
     Assert.Contains("Refresh coverage", html, "capable peers should expose attestation refresh");
     Assert.Contains("Select all", html, "dashboard should expose selecting all eligible pending bans");
@@ -2353,6 +2359,21 @@ static async Task TestWebfrontDashboardRendersAsync()
         "data-enhance-nav=\"false\"",
         html,
         "dashboard filter links should force a fresh interaction render when query parameters change");
+    Assert.Contains(
+        $"module=events&amp;filter={DragnetEventFilter.Pending}&amp;eventId={bulkEvent.EventId}",
+        html,
+        "notification event links should navigate to the exact event in the events module");
+
+    html = await interaction.Action(0, null, null, new Dictionary<string, string>
+    {
+        ["module"] = "events",
+        ["filter"] = DragnetEventFilter.All.ToString(),
+        ["eventId"] = bulkEvent.EventId
+    }, CancellationToken.None);
+    Assert.Contains($"id=\"dragnet-event-{bulkEvent.EventId}\"", html,
+        "requested notification event should be included in the rendered event list");
+    Assert.Contains($"document.getElementById('dragnet-event-{bulkEvent.EventId}')", html,
+        "events module should scroll the requested event into view");
 
     var localEvent = CreateEnvelope(originId: identity.OriginId, eventType: DragnetEventType.BanCreated) with
     {
