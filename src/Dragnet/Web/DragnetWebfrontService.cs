@@ -231,6 +231,24 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
 .dragnet-public table{min-width:1040px}
 .dragnet-public th{color:#bfb2cb;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
 .dragnet-public td,.dragnet-public th{vertical-align:middle}
+.dragnet-ledger-wrap{max-width:100%;overflow-x:auto}
+.dragnet-ledger-table{font-size:13px;line-height:1.25;table-layout:fixed;min-width:1320px;width:1320px}
+.dragnet-ledger-table th{padding:10px 14px}
+.dragnet-ledger-table td{padding:12px 14px}
+.dragnet-ledger-table th,.dragnet-ledger-table td{overflow:hidden}
+.dragnet-ledger-table th:nth-child(1),.dragnet-ledger-table td:nth-child(1){width:190px}
+.dragnet-ledger-table th:nth-child(2),.dragnet-ledger-table td:nth-child(2){width:240px}
+.dragnet-ledger-table th:nth-child(3),.dragnet-ledger-table td:nth-child(3){width:92px}
+.dragnet-ledger-table th:nth-child(4),.dragnet-ledger-table td:nth-child(4){width:92px}
+.dragnet-ledger-table th:nth-child(5),.dragnet-ledger-table td:nth-child(5){width:146px}
+.dragnet-ledger-table th:nth-child(6),.dragnet-ledger-table td:nth-child(6){width:146px}
+.dragnet-ledger-table th:nth-child(7),.dragnet-ledger-table td:nth-child(7){width:98px}
+.dragnet-ledger-table th:nth-child(8),.dragnet-ledger-table td:nth-child(8){width:92px}
+.dragnet-ledger-table th:nth-child(9),.dragnet-ledger-table td:nth-child(9){width:224px}
+.dragnet-ledger-table .dragnet-status-badge{min-width:86px;max-width:104px;padding:2px 7px;font-size:11px}
+.dragnet-ledger-player{max-width:150px}
+.dragnet-ledger-origin{max-width:210px}
+.dragnet-ledger-muted{margin-top:3px;font-size:11px;line-height:1.2}
 </style>
 """);
         html.AppendLine("</head><body class=\"dragnet-public\"><main class=\"dragnet-public-shell\">");
@@ -542,8 +560,8 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             {
                 html.Append(" hidden");
             }
-            html.AppendLine("><div class=\"flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between\">");
-            html.Append("<div class=\"flex items-start gap-3 min-w-0\">");
+            html.AppendLine("><div class=\"dragnet-event-row\">");
+            html.Append("<div class=\"dragnet-event-primary\">");
             if (IsBulkApprovable(item))
             {
                 html.Append("<input type=\"checkbox\" class=\"dragnet-bulk-ban mt-1\" aria-label=\"Select ban for ");
@@ -554,22 +572,23 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             }
 
             html.Append("<div class=\"min-w-0\"><div class=\"font-medium truncate\">");
-            AppendEventLink(html, item.Event.EventId, item.Event.PlayerName);
+            AppendEventLink(html, item.Event.EventId, Shorten(item.Event.PlayerName, 24));
             html.Append("</div><div class=\"mt-1 text-xs text-muted truncate\">");
-            html.Append(Encode(IsLocalEvent(item.Event) ? "Local" : item.Event.OriginName));
+            html.Append(Encode(Shorten(IsLocalEvent(item.Event) ? "Local" : item.Event.OriginName, 28)));
             html.Append(" · ");
             html.Append(Encode(DescribeEventAge(item.Event, now)));
             if (item.ReviewedAtUtc is not null)
             {
                 html.Append(" · reviewed by ");
-                html.Append(Encode(item.ReviewedByName ?? "Unknown"));
+                html.Append(Encode(Shorten(item.ReviewedByName ?? "Unknown", 24)));
             }
             html.Append("</div></div></div>");
-            html.Append("<div class=\"flex flex-wrap items-center gap-2 lg:justify-center\">");
+            html.Append("<div class=\"dragnet-event-badges\">");
+            AppendRiskBadge(html, DragnetRiskClassifier.Assess(item.Event));
             AppendEventTypeBadge(html, item.Event.EventType);
             AppendReviewStateBadge(html, item.ReviewState);
             AppendImportStatus(html, item, IsLocalEvent(item.Event));
-            html.Append("</div><div class=\"flex items-center justify-end gap-1 whitespace-nowrap\">");
+            html.Append("</div><div class=\"dragnet-event-actions\">");
             AppendTrustButtons(html, item.Event);
             AppendReviewButtons(html, item);
             html.AppendLine("</div></div></div>");
@@ -1135,6 +1154,8 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
 
         html.AppendLine("<div class=\"grid grid-cols-1 lg:grid-cols-3 gap-2 p-2\">");
         AppendDetailCell(html, "Type", $"{envelope.EventType} / {envelope.PenaltyKind}");
+        var risk = DragnetRiskClassifier.Assess(envelope);
+        AppendDetailCell(html, "Score", $"{risk.Label} - {risk.Summary}");
         AppendDetailCell(html, "Review state", item.ReviewState.ToString());
         AppendDetailCell(html, "Import", DescribeImport(item));
         AppendDetailCell(
@@ -1366,7 +1387,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         var encodedMeta = Uri.EscapeDataString(JsonSerializer.Serialize(meta));
         html.Append("<button type=\"button\" class=\"profile-action cursor-pointer ml-2\" data-action=\"DynamicAction\" onclick=\"return dragnetLaunchDynamicAction(this,event)\" data-action-meta=\"");
         html.Append(Encode(encodedMeta));
-        html.Append("\"><span class=\"inline-flex items-center px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ph-arrow-clockwise mr-1\"></i>Retry import</span></button>");
+        html.Append("\"><span class=\"inline-flex items-center justify-center w-10 px-3 py-1.5 rounded-md border border-line hover:bg-surface-hover text-sm\"><i class=\"ph ph-arrow-clockwise\"></i></span></button>");
     }
 
     private static void AppendBulkReviewControls(StringBuilder html, int eligibleCount)
@@ -1477,59 +1498,21 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         var acknowledgementPercent = deliverableEvents.Count == 0
             ? 100
             : (int)Math.Round(acknowledged * 100d / deliverableEvents.Count);
-        var healthPhase = peer.ConsecutiveFailures == 0
-            ? 0
-            : Math.Min(18, peer.ConsecutiveFailures * 3);
-        var latencyPhase = peer.AverageHeartbeatLatencyMs is null
-            ? 0
-            : Math.Min(24, (int)Math.Round(peer.AverageHeartbeatLatencyMs.Value / 80d));
+        var graph = BuildPeerGraph(peer, acknowledged, deliverableEvents.Count, pending, now);
 
         html.AppendLine("<div class=\"dragnet-peer-detail\">");
         html.AppendLine("<div class=\"p-4\">");
         html.AppendLine("<div class=\"rounded-md p-3\" style=\"background:linear-gradient(135deg,rgba(69,163,255,.16),rgba(82,210,115,.10) 46%,rgba(240,184,75,.10));border:1px solid rgba(143,199,255,.28)\">");
         html.AppendLine("<div class=\"flex flex-col gap-2 md:flex-row md:items-center md:justify-between text-xs text-muted\"><span>Heartbeat, delivery acknowledgement, and retry pressure</span><span>live peer signal</span></div>");
-        html.AppendLine("<div class=\"mt-2 flex flex-wrap gap-2 text-xs\"><span class=\"inline-flex items-center gap-1\"><span style=\"width:10px;height:10px;border-radius:999px;background:#45a3ff\"></span>Heartbeat</span><span class=\"inline-flex items-center gap-1\"><span style=\"width:10px;height:10px;border-radius:999px;background:#52d273\"></span>Acknowledged</span><span class=\"inline-flex items-center gap-1\"><span style=\"width:10px;height:10px;border-radius:999px;background:#a78bfa\"></span>Latency</span><span class=\"inline-flex items-center gap-1\"><span style=\"width:10px;height:10px;border-radius:999px;background:#f0b84b\"></span>Pending</span><span class=\"inline-flex items-center gap-1\"><span style=\"width:10px;height:10px;border-radius:999px;background:#ff6b6b\"></span>Failure pressure</span></div>");
-        html.AppendLine("<svg class=\"dragnet-sine\" viewBox=\"0 0 420 74\" role=\"img\" aria-label=\"Peer activity wave\">");
-        html.AppendLine("<path d=\"M0 61 H420 M0 37 H420 M0 13 H420\" stroke=\"currentColor\" stroke-opacity=\"0.08\" stroke-width=\"1\"/>");
-        html.AppendLine("<path d=\"M0 37 C 35 12, 70 12, 105 37 S 175 62, 210 37 S 280 12, 315 37 S 385 62, 420 37\" fill=\"none\" stroke=\"#45a3ff\" stroke-opacity=\"0.30\" stroke-width=\"3\"/>");
-        html.AppendLine("<path d=\"M0 54 C 35 44, 70 44, 105 54 S 175 64, 210 54 S 280 44, 315 54 S 385 64, 420 54\" fill=\"none\" stroke=\"#52d273\" stroke-opacity=\"0.70\" stroke-width=\"2\"/>");
-        html.Append("<path d=\"M0 ");
-        html.Append(24 + latencyPhase);
-        html.Append(" C 35 ");
-        html.Append(18 + latencyPhase);
-        html.Append(", 70 ");
-        html.Append(18 + latencyPhase);
-        html.Append(", 105 ");
-        html.Append(24 + latencyPhase);
-        html.Append(" S 175 ");
-        html.Append(36 + latencyPhase);
-        html.Append(", 210 ");
-        html.Append(24 + latencyPhase);
-        html.Append(" S 280 ");
-        html.Append(18 + latencyPhase);
-        html.Append(", 315 ");
-        html.Append(24 + latencyPhase);
-        html.Append(" S 385 ");
-        html.Append(36 + latencyPhase);
-        html.Append(", 420 ");
-        html.Append(24 + latencyPhase);
-        html.AppendLine("\" fill=\"none\" stroke=\"#a78bfa\" stroke-opacity=\"0.80\" stroke-width=\"2\"/>");
-        html.Append("<path d=\"M0 ");
-        html.Append(37 + healthPhase);
-        html.Append(" C 35 ");
-        html.Append(12 + healthPhase);
-        html.Append(", 70 ");
-        html.Append(12 + healthPhase);
-        html.Append(", 105 ");
-        html.Append(37 + healthPhase);
-        html.Append(" S 175 ");
-        html.Append(62 - healthPhase);
-        html.Append(", 210 37 S 280 ");
-        html.Append(12 + healthPhase);
-        html.Append(", 315 37 S 385 ");
-        html.Append(62 - healthPhase);
-        html.AppendLine(", 420 37\" fill=\"none\" stroke=\"#f0b84b\" stroke-width=\"3\"/>");
-        html.AppendLine("</svg>");
+        html.AppendLine("<div class=\"dragnet-peer-graph mt-3\"><div class=\"dragnet-graph-legend text-muted\"><span><i class=\"dragnet-graph-dot\" style=\"background:#45a3ff\"></i>Heartbeat</span><span><i class=\"dragnet-graph-dot\" style=\"background:#52d273\"></i>Acknowledged</span><span><i class=\"dragnet-graph-dot\" style=\"background:#a78bfa\"></i>Latency</span><span><i class=\"dragnet-graph-dot\" style=\"background:#f0b84b\"></i>Pending</span><span><i class=\"dragnet-graph-dot\" style=\"background:#ff6b6b\"></i>Failure pressure</span></div>");
+        html.AppendLine("<svg class=\"dragnet-sine\" viewBox=\"0 0 720 132\" role=\"img\" aria-label=\"Live peer activity graph\">");
+        html.AppendLine("<path d=\"M0 118 H720 M0 88 H720 M0 58 H720 M0 28 H720\" stroke=\"currentColor\" stroke-opacity=\"0.08\" stroke-width=\"1\"/>");
+        AppendGraphPath(html, graph.HeartbeatPath, "#45a3ff", 3, 0.65);
+        AppendGraphPath(html, graph.AcknowledgedPath, "#52d273", 2, 0.78);
+        AppendGraphPath(html, graph.LatencyPath, "#a78bfa", 2, 0.82);
+        AppendGraphPath(html, graph.PendingPath, "#f0b84b", 3, 0.9);
+        AppendGraphPath(html, graph.FailurePath, "#ff6b6b", 2, 0.9);
+        html.AppendLine("</svg></div>");
         html.Append("<div class=\"grid grid-cols-2 md:grid-cols-5 gap-2 text-xs\"><div><span class=\"text-muted\">Health</span><div class=\"font-semibold\">");
         html.Append(health.Score);
         html.Append("/100</div></div><div><span class=\"text-muted\">Latency</span><div class=\"font-semibold\">");
@@ -1585,6 +1568,121 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         html.Append(Encode(label));
         html.Append("</span></button>");
     }
+
+    private static PeerGraphPaths BuildPeerGraph(
+        DragnetPeerRecord peer,
+        int acknowledged,
+        int deliverableCount,
+        int pending,
+        DateTimeOffset now)
+    {
+        const int samples = 18;
+        var telemetry = (peer.TelemetryEvents ?? [])
+            .OrderByDescending(item => item.OccurredAtUtc)
+            .Take(samples)
+            .OrderBy(item => item.OccurredAtUtc)
+            .ToList();
+        var latencyBaseline = Math.Max(1d, peer.AverageHeartbeatLatencyMs ?? peer.LastHeartbeatLatencyMs ?? 100d);
+        var ackPercent = deliverableCount == 0 ? 1d : Math.Clamp(acknowledged / (double)deliverableCount, 0d, 1d);
+        var pendingPercent = deliverableCount == 0 ? 0d : Math.Clamp(pending / (double)deliverableCount, 0d, 1d);
+        var failurePressure = Math.Clamp(peer.ConsecutiveFailures / 5d, 0d, 1d);
+        var agePressure = peer.LastSeenUtc == default
+            ? 0d
+            : Math.Clamp((now - peer.LastSeenUtc).TotalMinutes / 30d, 0d, 1d);
+
+        var heartbeat = new List<double>();
+        var acknowledgedSeries = new List<double>();
+        var latency = new List<double>();
+        var pendingSeries = new List<double>();
+        var failure = new List<double>();
+
+        for (var index = 0; index < samples; index++)
+        {
+            var telemetryIndex = index - (samples - telemetry.Count);
+            var point = telemetryIndex >= 0 ? telemetry[telemetryIndex] : null;
+            var recency = index / (double)Math.Max(1, samples - 1);
+            var pulse = 0.08 * Math.Sin(index * 1.35);
+            var isFailure = point?.Type is DragnetPeerTelemetryEventType.Failed or DragnetPeerTelemetryEventType.Quarantined;
+            var isSuccess = point?.Type is DragnetPeerTelemetryEventType.Connected or DragnetPeerTelemetryEventType.Recovered;
+            var pointLatency = point?.LatencyMs ?? peer.LastHeartbeatLatencyMs ?? peer.AverageHeartbeatLatencyMs ?? latencyBaseline;
+
+            heartbeat.Add(Math.Clamp((isFailure ? 0.34 : isSuccess ? 0.92 : 0.72 - agePressure * 0.38) + pulse, 0.05, 1d));
+            acknowledgedSeries.Add(Math.Clamp(ackPercent - pendingPercent * 0.18 + recency * 0.05 + pulse / 2d, 0.05, 1d));
+            latency.Add(Math.Clamp(pointLatency / Math.Max(250d, latencyBaseline * 2.5d), 0.05, 1d));
+            pendingSeries.Add(Math.Clamp(pendingPercent + (1d - recency) * 0.10 + pulse / 2d, 0.05, 1d));
+            failure.Add(Math.Clamp((isFailure ? 0.85 : failurePressure * 0.65 + agePressure * 0.20) + Math.Max(0, pulse), 0.03, 1d));
+        }
+
+        return new PeerGraphPaths(
+            BuildGraphPath(heartbeat, invert: false),
+            BuildGraphPath(acknowledgedSeries, invert: false),
+            BuildGraphPath(latency, invert: true),
+            BuildGraphPath(pendingSeries, invert: true),
+            BuildGraphPath(failure, invert: true));
+    }
+
+    private static string BuildGraphPath(IReadOnlyList<double> values, bool invert)
+    {
+        const double width = 720;
+        const double top = 14;
+        const double height = 104;
+        var points = values.Select((value, index) =>
+        {
+            var x = values.Count == 1 ? 0 : index * width / (values.Count - 1);
+            var normalized = Math.Clamp(value, 0d, 1d);
+            var y = invert
+                ? top + normalized * height
+                : top + (1d - normalized) * height;
+            return (X: x, Y: y);
+        }).ToList();
+
+        if (points.Count == 0)
+        {
+            return "";
+        }
+
+        var path = new StringBuilder();
+        path.Append(FormattableString.Invariant($"M {points[0].X:0.#} {points[0].Y:0.#}"));
+        for (var index = 1; index < points.Count; index++)
+        {
+            var previous = points[index - 1];
+            var current = points[index];
+            var midX = (previous.X + current.X) / 2d;
+            path.Append(FormattableString.Invariant($" C {midX:0.#} {previous.Y:0.#}, {midX:0.#} {current.Y:0.#}, {current.X:0.#} {current.Y:0.#}"));
+        }
+
+        return path.ToString();
+    }
+
+    private static void AppendGraphPath(
+        StringBuilder html,
+        string path,
+        string color,
+        int width,
+        double opacity)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        html.Append("<path d=\"");
+        html.Append(Encode(path));
+        html.Append("\" fill=\"none\" stroke=\"");
+        html.Append(color);
+        html.Append("\" stroke-width=\"");
+        html.Append(width);
+        html.Append("\" stroke-opacity=\"");
+        html.Append(FormattableString.Invariant($"{opacity:0.##}"));
+        html.AppendLine("\"/>");
+    }
+
+    private sealed record PeerGraphPaths(
+        string HeartbeatPath,
+        string AcknowledgedPath,
+        string LatencyPath,
+        string PendingPath,
+        string FailurePath);
 
     private static void AppendEvidenceButton(StringBuilder html, DragnetStoredEvent item)
     {
@@ -2001,6 +2099,19 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         html.Append("</span></span>");
     }
 
+    private static void AppendRiskBadge(StringBuilder html, DragnetRiskAssessment risk)
+    {
+        html.Append("<span class=\"dragnet-status-badge ");
+        html.Append(risk.ColorClass);
+        html.Append("\" title=\"");
+        html.Append(Encode(risk.Summary));
+        html.Append("\"><i class=\"ph ");
+        html.Append(risk.Icon);
+        html.Append("\"></i><span>");
+        html.Append(Encode(risk.Label));
+        html.Append("</span></span>");
+    }
+
     private static void AppendActionButton(
         StringBuilder html,
         string eventId,
@@ -2241,14 +2352,14 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
 @media(min-width:1024px){.lg\:flex-row{flex-direction:row}.lg\:items-center{align-items:center}.lg\:justify-between{justify-content:space-between}.lg\:justify-center{justify-content:center}.lg\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(min-width:1280px){.xl\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}.xl\:col-span-3{grid-column:span 3/span 3}}
 .dragnet-top-nav{position:sticky;top:4rem}
-.dragnet-modal{position:fixed;inset:0;margin:auto;width:fit-content;min-width:min(620px,calc(100vw - 32px));max-width:min(1120px,calc(100vw - 32px));max-height:86vh;overflow:visible;border:1px solid var(--color-line,#3a3042);border-radius:12px;background:#17111d;color:inherit;padding:0;opacity:0;transform:scale(.94);transition:opacity .16s ease,transform .16s ease,width .18s ease,max-height .22s ease;z-index:1200}
+.dragnet-modal{position:fixed;inset:0;margin:auto;width:fit-content;min-width:min(620px,calc(100vw - 32px));max-width:min(1120px,calc(100vw - 32px));max-height:86vh;overflow:hidden;border:1px solid var(--color-line,#3a3042);border-radius:12px;background:#17111d;color:inherit;padding:0;opacity:0;transform:scale(.94);transition:opacity .16s ease,transform .16s ease,width .18s ease,max-height .22s ease;z-index:1200}
 .dragnet-modal[open]{opacity:1;transform:scale(1);animation:dragnetZoomIn .16s ease}
 .dragnet-modal.closing{opacity:0;transform:scale(.94)}
 .dragnet-modal-shade{position:fixed;inset:0;background:rgba(0,0,0,.66);z-index:1190}
 .bg-surface.rounded-lg.shadow-xl.w-full.max-w-lg.overflow-hidden.transform.transition-all.flex.flex-col.max-h-\[90vh\]{position:relative;z-index:2200}
 body.dragnet-auto-action .bg-surface.rounded-lg.shadow-xl.w-full.max-w-lg.overflow-hidden.transform.transition-all.flex.flex-col.max-h-\[90vh\]{opacity:0!important;pointer-events:none!important;transform:scale(.96)!important}
 .dragnet-modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--color-line,#3a3042);cursor:move;user-select:none}
-.dragnet-modal-body{padding:16px;overflow:auto;max-height:calc(86vh - 58px)}
+.dragnet-modal-body{padding:16px;overflow:auto;max-height:calc(86vh - 58px);box-sizing:border-box;scrollbar-gutter:stable both-edges}
 #dragnet-peer-modal{width:min(1040px,calc(100vw - 32px));min-width:0}
 #dragnet-peer-modal .dragnet-modal-body{overflow-x:hidden}
 .dragnet-modal-close{border:1px solid var(--color-line,#3a3042);border-radius:8px;padding:6px 10px}
@@ -2258,7 +2369,34 @@ body.dragnet-auto-action .bg-surface.rounded-lg.shadow-xl.w-full.max-w-lg.overfl
 .dragnet-modal table tbody tr:last-child{border-bottom:0}
 .dragnet-modal table th,.dragnet-modal table td{border-right:1px solid rgba(255,255,255,.07)}
 .dragnet-modal table th:last-child,.dragnet-modal table td:last-child{border-right:0}
-.dragnet-status-badge{display:inline-flex;align-items:center;gap:6px;border:1px solid currentColor;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700;white-space:nowrap}
+.dragnet-status-badge{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid currentColor;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700;white-space:nowrap;min-width:112px;max-width:112px;overflow:hidden}
+.dragnet-status-badge span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dragnet-ledger-wrap{max-width:100%;overflow-x:auto}
+.dragnet-ledger-table{font-size:13px;line-height:1.25;table-layout:fixed;min-width:1320px;width:1320px}
+.dragnet-ledger-table th{padding:10px 14px}
+.dragnet-ledger-table td{padding:12px 14px}
+.dragnet-ledger-table th,.dragnet-ledger-table td{overflow:hidden}
+.dragnet-ledger-table th:nth-child(1),.dragnet-ledger-table td:nth-child(1){width:190px}
+.dragnet-ledger-table th:nth-child(2),.dragnet-ledger-table td:nth-child(2){width:240px}
+.dragnet-ledger-table th:nth-child(3),.dragnet-ledger-table td:nth-child(3){width:92px}
+.dragnet-ledger-table th:nth-child(4),.dragnet-ledger-table td:nth-child(4){width:92px}
+.dragnet-ledger-table th:nth-child(5),.dragnet-ledger-table td:nth-child(5){width:146px}
+.dragnet-ledger-table th:nth-child(6),.dragnet-ledger-table td:nth-child(6){width:146px}
+.dragnet-ledger-table th:nth-child(7),.dragnet-ledger-table td:nth-child(7){width:98px}
+.dragnet-ledger-table th:nth-child(8),.dragnet-ledger-table td:nth-child(8){width:92px}
+.dragnet-ledger-table th:nth-child(9),.dragnet-ledger-table td:nth-child(9){width:224px}
+.dragnet-ledger-table .dragnet-status-badge{min-width:86px;max-width:104px;padding:2px 7px;font-size:11px}
+.dragnet-ledger-player{max-width:150px}
+.dragnet-ledger-origin{max-width:210px}
+.dragnet-ledger-muted{margin-top:3px;font-size:11px;line-height:1.2}
+.dragnet-event-row{display:grid;grid-template-columns:minmax(190px,1.1fr) minmax(410px,auto) minmax(150px,auto);gap:14px;align-items:center}
+.dragnet-event-primary{display:flex;align-items:flex-start;gap:12px;min-width:0}
+.dragnet-event-badges{display:grid;grid-template-columns:repeat(4,112px);gap:8px;align-items:center;justify-content:center}
+.dragnet-event-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;min-width:0;white-space:nowrap}
+.dragnet-event-tabs{position:relative;display:flex;align-items:center;gap:2px;border-bottom:1px solid rgba(255,255,255,.10);padding:0 2px}
+.dragnet-event-tabs:after{content:"";position:absolute;left:var(--tab-left,0);bottom:-1px;width:var(--tab-width,0);height:2px;background:#f72585;border-radius:2px;transition:left .18s ease,width .18s ease,opacity .18s ease;opacity:var(--tab-opacity,1)}
+.dragnet-event-tab{position:relative;border:0;background:transparent;color:var(--color-muted,#a9a1b5);padding:8px 10px;font-size:13px;font-weight:600;white-space:nowrap}
+.dragnet-event-tab:hover,.dragnet-event-tab.active{color:var(--color-foreground,#f6f2fb)}
 .dragnet-detail-card{border:1px solid var(--color-line,#3a3042);border-radius:8px;background:rgba(255,255,255,.035);padding:12px}
 .dragnet-detail-label{display:flex;align-items:center;gap:6px;color:var(--color-muted,#a9a1b5);font-size:12px}
 .dragnet-detail-value{margin-top:6px;color:var(--color-foreground,#f6f2fb);font-weight:600;line-height:1.35;word-break:break-word}
@@ -2275,9 +2413,14 @@ details[open] > summary .dragnet-chevron,.dragnet-chevron.open{transform:rotate(
 .dragnet-peer-actions .profile-action{margin-left:0}
 .dragnet-peer-detail{grid-column:1/-1;max-height:0;overflow:hidden;transition:max-height .24s ease}
 .dragnet-peer-row.open .dragnet-peer-detail{max-height:760px}
-.dragnet-sine{width:100%;height:74px}
+.dragnet-peer-graph{display:grid;grid-template-columns:150px minmax(0,1fr);gap:14px;align-items:stretch}
+.dragnet-graph-legend{display:flex;flex-direction:column;gap:6px;font-size:12px}
+.dragnet-graph-legend span{display:flex;align-items:center;gap:7px;white-space:nowrap}
+.dragnet-graph-dot{width:10px;height:10px;border-radius:999px;display:inline-block}
+.dragnet-sine{width:100%;height:132px;display:block}
 .dragnet-diagnostics-peer-grid{display:grid;grid-template-columns:minmax(0,1.5fr) repeat(4,minmax(90px,.7fr));gap:12px}
 @media(max-width:900px){.dragnet-peer-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.dragnet-peer-actions{text-align:left}.dragnet-peer-actions>div{justify-content:flex-start}}
+@media(max-width:900px){.dragnet-event-row{grid-template-columns:minmax(0,1fr)}.dragnet-event-badges{grid-template-columns:repeat(2,112px);justify-content:start}.dragnet-event-actions{justify-content:flex-start}.dragnet-event-tabs{overflow-x:auto}.dragnet-peer-graph{grid-template-columns:minmax(0,1fr)}.dragnet-graph-legend{flex-direction:row;flex-wrap:wrap}}
 @media(max-width:900px){.dragnet-diagnostics-peer-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.dragnet-diagnostics-peer-grid>div:first-child{grid-column:1/-1}}
 @media(max-width:560px){.dragnet-modal{min-width:calc(100vw - 16px);max-width:calc(100vw - 16px)}.dragnet-modal-head{align-items:flex-start}.dragnet-peer-row,.dragnet-diagnostics-peer-grid{grid-template-columns:minmax(0,1fr)}.dragnet-diagnostics-peer-grid>div:first-child{grid-column:auto}}
 @keyframes dragnetZoomIn{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:scale(1)}}
@@ -2294,9 +2437,14 @@ function dragnetLaunchDynamicAction(button,event){if(event){event.preventDefault
 function dragnetNotifyStatus(message,ok){var body=document.querySelector('#dragnet-notification-modal .dragnet-modal-body');if(!body)return;var note=document.getElementById('dragnet-notification-status');if(!note){note=document.createElement('div');note.id='dragnet-notification-status';note.className='rounded-md border px-3 py-2 text-sm mb-2';body.prepend(note);}note.classList.toggle('text-success',!!ok);note.classList.toggle('text-danger',!ok);note.textContent=message;}
 function dragnetAcknowledgeNotification(action,id,actorClientId,button){if(button){button.disabled=true;}fetch('/api/dragnet/notifications/acknowledge',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Requested-With':'DragnetWebfront'},body:JSON.stringify({action:action,notificationId:id||null,actorClientId:actorClientId||null})}).then(function(r){return r.json().then(function(j){return {ok:r.ok,data:j};});}).then(function(result){dragnetNotifyStatus(result.data.message||'Dragnet notification updated.',result.ok);if(!result.ok){if(button)button.disabled=false;return;}if(action==='AcknowledgeAll'){document.querySelectorAll('[data-dragnet-notification]').forEach(function(row){row.remove();});}else if(id){var row=document.querySelector('[data-dragnet-notification="'+CSS.escape(id)+'"]');if(row)row.remove();}if(!document.querySelector('[data-dragnet-notification]')){var list=document.getElementById('dragnet-notification-list');if(list)list.innerHTML='<div class="rounded-md bg-surface-alt/20 px-4 py-5 text-center text-muted">No unread Dragnet notifications.</div>';document.querySelectorAll('[data-dragnet-notification-control]').forEach(function(control){control.remove();});}}).catch(function(){dragnetNotifyStatus('Could not acknowledge Dragnet notification.',false);if(button)button.disabled=false;});return false;}
 function dragnetLedgerPage(page){document.querySelectorAll('[data-ledger-page]').forEach(function(row){row.hidden=row.getAttribute('data-ledger-page')!==String(page);});document.querySelectorAll('[data-ledger-current]').forEach(function(el){el.textContent=page;});}
-function dragnetFilterEvents(filter){document.querySelectorAll('[data-event-filters]').forEach(function(row){var filters=row.getAttribute('data-event-filters').split(' ');row.hidden=filters.indexOf(filter)<0;});document.querySelectorAll('[data-dragnet-filter]').forEach(function(btn){var active=btn.getAttribute('data-dragnet-filter')===filter;btn.classList.toggle('bg-action-primary',active);btn.classList.toggle('text-foreground',active);btn.classList.toggle('border-action-primary',active);btn.classList.toggle('text-muted',!active);});}
+function dragnetMoveEventTab(tab){var wrap=tab&&tab.closest('.dragnet-event-tabs');if(!wrap||!tab)return;var wr=wrap.getBoundingClientRect();var tr=tab.getBoundingClientRect();wrap.style.setProperty('--tab-left',(tr.left-wr.left+wrap.scrollLeft)+'px');wrap.style.setProperty('--tab-width',tr.width+'px');wrap.style.setProperty('--tab-opacity','1');}
+function dragnetActiveEventTab(){document.querySelectorAll('.dragnet-event-tabs').forEach(function(wrap){var active=wrap.querySelector('.dragnet-event-tab.active')||wrap.querySelector('.dragnet-event-tab');if(active)dragnetMoveEventTab(active);});}
+function dragnetFilterEvents(filter){document.querySelectorAll('[data-event-filters]').forEach(function(row){var filters=row.getAttribute('data-event-filters').split(' ');row.hidden=filters.indexOf(filter)<0;});document.querySelectorAll('[data-dragnet-filter]').forEach(function(btn){var active=btn.getAttribute('data-dragnet-filter')===filter;btn.classList.toggle('active',active);btn.setAttribute('aria-selected',active?'true':'false');if(active)dragnetMoveEventTab(btn);});}
 function dragnetFilterAudit(value){var query=(value||'').trim().toLowerCase();document.querySelectorAll('[data-audit-search]').forEach(function(row){row.hidden=query!==''&&row.getAttribute('data-audit-search').indexOf(query)<0;});}
 document.addEventListener('mousedown',function(e){var head=e.target.closest('.dragnet-modal-head');if(!head||e.target.closest('button'))return;var d=head.closest('dialog');if(!d)return;var r=d.getBoundingClientRect();var x=e.clientX-r.left;var y=e.clientY-r.top;d.style.margin='0';d.style.left=r.left+'px';d.style.top=r.top+'px';function move(ev){d.style.left=Math.max(8,Math.min(window.innerWidth-r.width-8,ev.clientX-x))+'px';d.style.top=Math.max(8,Math.min(window.innerHeight-r.height-8,ev.clientY-y))+'px';}function up(){document.removeEventListener('mousemove',move);document.removeEventListener('mouseup',up);}document.addEventListener('mousemove',move);document.addEventListener('mouseup',up);});
+document.addEventListener('mouseover',function(e){var tab=e.target.closest('.dragnet-event-tab');if(tab)dragnetMoveEventTab(tab);});
+document.addEventListener('mouseout',function(e){if(e.target.closest('.dragnet-event-tabs'))dragnetActiveEventTab();});
+setTimeout(dragnetActiveEventTab,0);
 </script>
 """);
     }
@@ -2348,7 +2496,7 @@ document.addEventListener('mousedown',function(e){var head=e.target.closest('.dr
         const int pageSize = 8;
         var pageCount = Math.Max(1, (int)Math.Ceiling(snapshot.Bans.Count / (double)pageSize));
         page = Math.Clamp(page, 1, pageCount);
-        html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/20 overflow-x-auto\"><table class=\"w-full text-left text-sm\"><thead class=\"text-muted\"><tr><th class=\"px-4 py-2\">Player</th><th class=\"px-4 py-2\">Origin</th><th class=\"px-4 py-2\">Type</th><th class=\"px-4 py-2\">Platform</th><th class=\"px-4 py-2\">Status</th><th class=\"px-4 py-2\">Accepted</th><th class=\"px-4 py-2\">Servers</th><th class=\"px-4 py-2\">Issued</th></tr></thead><tbody>");
+        html.AppendLine("<div class=\"dragnet-ledger-wrap rounded-md border border-line bg-surface-alt/20\"><table class=\"dragnet-ledger-table text-left\"><thead class=\"text-muted\"><tr><th>Player</th><th>Origin</th><th>Type</th><th>Platform</th><th>Score</th><th>Status</th><th>Accepted</th><th>Servers</th><th>Issued</th></tr></thead><tbody>");
         var index = 0;
         foreach (var ban in snapshot.Bans)
         {
@@ -2360,34 +2508,36 @@ document.addEventListener('mousedown',function(e){var head=e.target.closest('.dr
             {
                 html.Append(" hidden");
             }
-            html.Append("><td class=\"px-4 py-2 font-medium\"><button type=\"button\" class=\"text-primary hover:underline\" onclick=\"dragnetOpenModal('ledger-detail-");
+            html.Append("><td class=\"font-medium\"><div class=\"dragnet-ledger-player truncate\"><button type=\"button\" class=\"text-primary hover:underline\" onclick=\"dragnetOpenModal('ledger-detail-");
             html.Append(Encode(ban.EventId));
             html.Append("')\">");
-            html.Append(Encode(ban.PlayerName));
-            html.Append("</button><div class=\"text-xs text-muted\">");
+            html.Append(Encode(Shorten(ban.PlayerName, 20)));
+            html.Append("</button></div><div class=\"dragnet-ledger-muted text-muted truncate\">");
             html.Append(Encode(ban.PlayerNetworkId));
-            html.Append("</div></td><td class=\"px-4 py-2\">");
-            html.Append("<div class=\"font-medium text-foreground\"><i class=\"ph ph-globe mr-1 text-muted\"></i>");
+            html.Append("</div></td><td>");
+            html.Append("<div class=\"dragnet-ledger-origin font-medium text-foreground truncate\"><i class=\"ph ph-globe mr-1 text-muted\"></i>");
             html.Append(Encode(ban.OriginName));
-            html.Append("</div><div class=\"mt-1 text-xs text-muted\"><i class=\"ph ph-server mr-1\"></i>");
+            html.Append("</div><div class=\"dragnet-ledger-muted text-muted truncate\"><i class=\"ph ph-server mr-1\"></i>");
             html.Append(Encode(ban.OriginServerName));
-            html.Append("</div></td><td class=\"px-4 py-2\">");
+            html.Append("</div></td><td>");
             html.Append(Encode(ban.PenaltyKind));
-            html.Append("</td><td class=\"px-4 py-2\">");
+            html.Append("</td><td>");
             html.Append(Encode(string.IsNullOrWhiteSpace(ban.PlayerGame) ? "Unknown" : ban.PlayerGame));
-            html.Append("</td><td class=\"px-4 py-2\">");
+            html.Append("</td><td>");
+            AppendRiskBadge(html, DragnetRiskClassifier.Assess(ban.Reason));
+            html.Append("</td><td>");
             AppendLedgerStatusIcon(html, ban.Status);
-            html.Append("</td><td class=\"px-4 py-2\">");
+            html.Append("</td><td>");
             html.Append(Encode($"{ban.AcceptedNetworkCount} / {ban.EligibleNetworkCount}"));
-            html.Append("</td><td class=\"px-4 py-2\">");
+            html.Append("</td><td>");
             html.Append(ban.EnforcedServerCount);
-            html.Append("</td><td class=\"px-4 py-2 text-muted\">");
+            html.Append("</td><td class=\"text-muted whitespace-nowrap\">");
             html.Append(Encode(FormatLedgerIssuedTime(ban.CreatedAtUtc)));
             html.AppendLine("</td></tr>");
         }
         if (snapshot.Bans.Count == 0)
         {
-            html.AppendLine("<tr><td colspan=\"8\" class=\"px-4 py-6 text-center text-muted\">No bans in the public ledger.</td></tr>");
+            html.AppendLine("<tr><td colspan=\"9\" class=\"px-4 py-6 text-center text-muted\">No bans in the public ledger.</td></tr>");
         }
         html.AppendLine("</tbody></table></div>");
     }
@@ -2438,6 +2588,7 @@ document.addEventListener('mousedown',function(e){var head=e.target.closest('.dr
         html.Append("</div></div>");
         html.AppendLine("<div class=\"grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3\">");
         AppendLedgerDetailField(html, "ph-game-controller", "Platform", string.IsNullOrWhiteSpace(ban.PlayerGame) ? "Unknown game platform" : ban.PlayerGame, "The game platform this ledger entry was issued against.");
+        AppendLedgerDetailField(html, "ph-siren", "Score", $"{ban.RiskScore} - {ban.RiskSummary}", "Automated moderation score based on the ban reason.");
         AppendLedgerDetailField(html, "ph-globe", "Origin network", ban.OriginName, "The Dragnet network that created the ban.");
         AppendLedgerDetailField(html, "ph-server", "Origin server", ban.OriginServerName, "The server that first reported this penalty.");
         AppendLedgerDetailField(html, "ph-user-gear", "Issued by", ban.AdminName ?? "Unknown administrator", "The administrator name supplied by the origin network.");
@@ -3623,16 +3774,18 @@ document.addEventListener('mousedown',function(e){var head=e.target.closest('.dr
 
     private static void AppendFilterLinks(StringBuilder html, DragnetEventFilter activeFilter)
     {
-        html.AppendLine("<div class=\"flex flex-wrap gap-2\">");
+        html.AppendLine("<div class=\"dragnet-event-tabs\" role=\"tablist\" aria-label=\"Dragnet event filters\">");
         foreach (var filter in Enum.GetValues<DragnetEventFilter>())
         {
-            var activeClass = filter == activeFilter
-                ? "bg-action-primary text-foreground border-action-primary"
-                : "border-line text-muted hover:bg-surface-hover";
             html.Append("<button type=\"button\" data-enhance-nav=\"false\" data-dragnet-filter=\"");
             html.Append(Encode(filter.ToString()));
-            html.Append("\" class=\"inline-flex items-center px-3 py-1.5 rounded-md border text-sm ");
-            html.Append(activeClass);
+            html.Append("\" role=\"tab\" aria-selected=\"");
+            html.Append(filter == activeFilter ? "true" : "false");
+            html.Append("\" class=\"dragnet-event-tab");
+            if (filter == activeFilter)
+            {
+                html.Append(" active");
+            }
             html.Append("\" onclick=\"dragnetFilterEvents('");
             html.Append(Encode(filter.ToString()));
             html.Append("')\">");

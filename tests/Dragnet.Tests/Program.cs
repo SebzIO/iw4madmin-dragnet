@@ -26,6 +26,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("onboarding verifies public health and readiness", TestOnboardingReadinessAsync),
     ("directory lists only opted-in healthy networks", TestDirectoryListingsAsync),
     ("network profiles summarize trust review health and coverage", TestNetworkProfileAsync),
+    ("risk classifier scores ban reasons predictably", TestRiskClassifierAsync),
     ("notification inbox persists deduplicates and acknowledges per administrator", TestNotificationInboxAsync),
     ("notification webhook completes delivery for local events", TestNotificationWebhookAsync),
     ("operational audit persists searchable administrator activity", TestOperationalAuditAsync),
@@ -1068,6 +1069,19 @@ static async Task TestNotificationInboxAsync()
         "unread alerts for other administrators should survive a plugin restart");
 }
 
+static Task TestRiskClassifierAsync()
+{
+    Assert.Equal(DragnetRiskScore.NeedsAction, DragnetRiskClassifier.Assess("Wallhack and ESP").Score,
+        "cheating indicators should require action");
+    Assert.Equal(DragnetRiskScore.NeedsAction, DragnetRiskClassifier.Assess("exploiting with mod menu").Score,
+        "exploit indicators should require action");
+    Assert.Equal(DragnetRiskScore.Medium, DragnetRiskClassifier.Assess("racism and insulting chat").Score,
+        "racism or insulting language should be medium severity");
+    Assert.Equal(DragnetRiskScore.Low, DragnetRiskClassifier.Assess("bad name warning").Score,
+        "minor conduct reasons should remain low severity");
+    return Task.CompletedTask;
+}
+
 static async Task TestNotificationWebhookAsync()
 {
     await using var testDir = new TestDirectory();
@@ -1122,6 +1136,40 @@ static async Task TestNotificationWebhookAsync()
             .GetProperty("parse")
             .GetArrayLength(),
         "Discord webhook should suppress accidental mentions");
+    Assert.True(webhookFields.Any(field =>
+            field.GetProperty("name").GetString() == "ꜱᴄᴏʀᴇ" &&
+            field.GetProperty("value").GetString()!.Contains("Medium", StringComparison.Ordinal)),
+        "Discord embed should include the moderation score");
+
+    var urgentEnvelope = CreateEnvelope("local-webhook-urgent", DragnetEventType.BanCreated) with
+    {
+        PlayerName = "Urgent Player",
+        Reason = "Wallhack ESP"
+    };
+    await service.NotifyNewEventAsync(urgentEnvelope, CancellationToken.None);
+
+    Assert.Equal(2, handler.RequestCount,
+        "urgent ban notification should complete one webhook request before returning");
+    var urgentBody = handler.LastRequestBody ?? "";
+    using var urgentDocument = JsonDocument.Parse(urgentBody);
+    Assert.Equal("@here High priority Dragnet ban requires review.",
+        urgentDocument.RootElement.GetProperty("content").GetString(),
+        "high priority Dragnet bans should mention online administrators");
+    Assert.True(urgentDocument.RootElement
+            .GetProperty("allowed_mentions")
+            .GetProperty("parse")
+            .EnumerateArray()
+            .Any(item => item.GetString() == "everyone"),
+        "high priority Dragnet bans should allow the @here mention");
+    var urgentFields = urgentDocument.RootElement
+        .GetProperty("embeds")[0]
+        .GetProperty("fields")
+        .EnumerateArray()
+        .ToList();
+    Assert.True(urgentFields.Any(field =>
+            field.GetProperty("name").GetString() == "ꜱᴄᴏʀᴇ" &&
+            field.GetProperty("value").GetString()!.Contains("Needs action", StringComparison.Ordinal)),
+        "urgent Discord embeds should identify needs-action bans");
 
     await service.NotifyUpdateInstalledAsync(
         "0.1.0-beta.21",
@@ -1129,7 +1177,7 @@ static async Task TestNotificationWebhookAsync()
         "<ul><li>Added operational visibility</li><li>Fixed <strong>peer recovery</strong></li></ul>",
         CancellationToken.None);
 
-    Assert.Equal(2, handler.RequestCount,
+    Assert.Equal(3, handler.RequestCount,
         "update notification creation should complete one webhook request before returning");
     var updateBody = handler.LastRequestBody ?? "";
     using var updateDocument = JsonDocument.Parse(updateBody);

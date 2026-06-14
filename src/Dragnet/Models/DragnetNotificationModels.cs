@@ -22,6 +22,8 @@ public sealed record DragnetNotification
     public string? PlayerGame { get; init; }
     public string? AdminName { get; init; }
     public string? OriginServerName { get; init; }
+    public string? RiskScore { get; init; }
+    public string? RiskSummary { get; init; }
     public string? ReleaseUrl { get; init; }
     public string? ReleaseNotes { get; init; }
     public DateTimeOffset? ExpiresAtUtc { get; init; }

@@ -95,6 +95,7 @@ public sealed class DragnetNotificationService : IDisposable
             ? DragnetNotificationType.NewLift
             : DragnetNotificationType.NewBan;
         var label = envelope.EventType is DragnetEventType.BanLifted ? "lift" : "ban";
+        var risk = DragnetRiskClassifier.Assess(envelope);
         await AddAsync(new DragnetNotification
         {
             NotificationId = $"{type}:{envelope.EventId}",
@@ -108,6 +109,8 @@ public sealed class DragnetNotificationService : IDisposable
             PlayerGame = envelope.PlayerGame,
             AdminName = envelope.AdminName,
             OriginServerName = envelope.OriginServerName,
+            RiskScore = risk.Label,
+            RiskSummary = risk.Summary,
             ExpiresAtUtc = envelope.ExpiresAtUtc,
             CreatedAtUtc = DateTimeOffset.UtcNow
         }, token);
@@ -371,9 +374,11 @@ public sealed class DragnetNotificationService : IDisposable
                 });
             }
 
+            var shouldMentionAdmins = DragnetRiskClassifier.ShouldMentionAdmins(notification);
             using var response = await _httpClient.PostAsJsonAsync(uri, new
             {
                 username = "Dragnet",
+                content = shouldMentionAdmins ? "@here High priority Dragnet ban requires review." : null,
                 embeds = new[]
                 {
                     new
@@ -391,7 +396,7 @@ public sealed class DragnetNotificationService : IDisposable
                 },
                 allowed_mentions = new
                 {
-                    parse = Array.Empty<string>()
+                    parse = shouldMentionAdmins ? new[] { "everyone" } : Array.Empty<string>()
                 }
             }, token);
             response.EnsureSuccessStatusCode();
@@ -472,6 +477,25 @@ public sealed class DragnetNotificationService : IDisposable
             {
                 name = "ᴘʟᴀᴛꜰᴏʀᴍ",
                 value = DiscordValue(notification.PlayerGame),
+                inline = true
+            });
+        }
+        var risk = !string.IsNullOrWhiteSpace(notification.RiskScore)
+            ? new DragnetRiskAssessment(
+                Enum.TryParse<DragnetRiskScore>(notification.RiskScore.Replace(" ", "", StringComparison.Ordinal), true, out var parsed)
+                    ? parsed
+                    : DragnetRiskClassifier.Assess(notification.Reason).Score,
+                notification.RiskScore,
+                notification.RiskSummary ?? DragnetRiskClassifier.Assess(notification.Reason).Summary,
+                "",
+                "")
+            : DragnetRiskClassifier.Assess(notification.Reason);
+        if (notification.Type is DragnetNotificationType.NewBan or DragnetNotificationType.StaleReview or DragnetNotificationType.EvidenceUpdated)
+        {
+            fields.Add(new
+            {
+                name = "ꜱᴄᴏʀᴇ",
+                value = DiscordValue($"{risk.Label}\n{risk.Summary}"),
                 inline = true
             });
         }
