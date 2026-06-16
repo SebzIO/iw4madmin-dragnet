@@ -122,6 +122,21 @@ public sealed class DragnetController : ControllerBase
     public ActionResult<DragnetSetupGuideResponse> SetupGuide()
     {
         var endpoint = _configuration.PublicEndpoint?.TrimEnd('/');
+        var requiredProxyFeatures = _configuration.RequireHttps
+            ? new[]
+            {
+                "Valid HTTPS certificate for the public endpoint",
+                "Forward X-Forwarded-Proto as https",
+                "Allow POST requests to /dragnet/heartbeat",
+                "Enable WebSocket upgrade support for the IW4MAdmin webfront"
+            }
+            : new[]
+            {
+                "Public IP and port are reachable from the internet",
+                "Allow POST requests to /dragnet/heartbeat",
+                "Enable WebSocket upgrade support for the IW4MAdmin webfront"
+            };
+
         return Ok(new DragnetSetupGuideResponse
         {
             NetworkName = _configuration.OriginName,
@@ -132,13 +147,7 @@ public sealed class DragnetController : ControllerBase
             LedgerUrl = endpoint is null ? null : $"{endpoint}/ledger",
             OfficialBootstrapEndpoint = DragnetConfiguration.OfficialBootstrapEndpoint,
             DirectoryListingEnabled = _configuration.DirectoryListingEnabled,
-            RequiredProxyFeatures =
-            [
-                "Valid HTTPS certificate for the public endpoint",
-                "Forward X-Forwarded-Proto as https",
-                "Allow POST requests to /dragnet/heartbeat",
-                "Enable WebSocket upgrade support for the IW4MAdmin webfront"
-            ],
+            RequiredProxyFeatures = requiredProxyFeatures,
             VerificationSteps =
             [
                 "Confirm the health URL returns this origin fingerprint.",

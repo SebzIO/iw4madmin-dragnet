@@ -24,6 +24,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("peer gossip selection rotates fairly and persists", TestPeerGossipRotationAsync),
     ("statistics aggregate participating servers and shared bans", TestStatisticsAsync),
     ("onboarding verifies public health and readiness", TestOnboardingReadinessAsync),
+    ("onboarding supports direct HTTP IP endpoint when HTTPS is disabled", TestOnboardingHttpEndpointAsync),
     ("directory lists only opted-in healthy networks", TestDirectoryListingsAsync),
     ("network profiles summarize trust review health and coverage", TestNetworkProfileAsync),
     ("risk classifier scores ban reasons predictably", TestRiskClassifierAsync),
@@ -737,6 +738,42 @@ static async Task TestOnboardingReadinessAsync()
     Assert.True(status.EndpointSignatureVerified, "signed health response should pass proof check");
     Assert.True(status.EndpointVerified, "matching public health identity should verify endpoint");
     Assert.False(status.PeerConnected, "no peer should not pass connectivity check");
+}
+
+static async Task TestOnboardingHttpEndpointAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        OriginName = "Direct IP Network",
+        PublicEndpoint = "http://203.0.113.10:1624/dragnet",
+        RequireHttps = false,
+        UpdateCheckEnabled = false
+    };
+    var identityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "identity"));
+    var identity = identityService.LoadOrCreate(configuration.OriginName);
+    var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
+    await peerStore.LoadAsync(configuration, CancellationToken.None);
+    using var updateService = new DragnetUpdateService(
+        configuration,
+        new TestLogger<DragnetUpdateService>(),
+        new HttpClient(new StaticResponseHandler(System.Net.HttpStatusCode.OK, "{}")));
+    using var healthClient = new HttpClient(new StaticResponseHandler(
+        System.Net.HttpStatusCode.OK,
+        CreateSignedHealthResponse(identityService, identity, configuration.PublicEndpoint!)));
+    var onboarding = new DragnetOnboardingService(
+        configuration,
+        identity,
+        identityService,
+        peerStore,
+        updateService,
+        healthClient);
+
+    var status = await onboarding.GetStatusAsync(CancellationToken.None);
+    Assert.True(status.EndpointConfigured, "absolute HTTP endpoint should pass configuration check");
+    Assert.True(status.EndpointUsesHttps, "HTTP endpoint should pass transport check when HTTPS is disabled");
+    Assert.True(status.EndpointReachable, "successful health route should pass reachability check");
+    Assert.True(status.EndpointVerified, "matching signed HTTP health response should verify endpoint");
 }
 
 static async Task TestDirectoryListingsAsync()

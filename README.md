@@ -139,6 +139,17 @@ Example configuration:
 
 `PublicEndpoint` should be the externally reachable Dragnet base URL for this IW4MAdmin instance. Peers call `POST {PublicEndpoint}/heartbeat`.
 
+For direct IP deployments without a domain name or TLS certificate, set `RequireHttps` to `false` and use the IW4MAdmin public address and port:
+
+```json
+{
+  "PublicEndpoint": "http://203.0.113.10:1624/dragnet",
+  "RequireHttps": false
+}
+```
+
+Only use this mode when the operator intentionally accepts plaintext transport for Dragnet peer traffic. Evidence URLs, Discord/webhook URLs, update feeds, and directory website links still require HTTPS.
+
 `GET {PublicEndpoint}/health` is an anonymous, read-only installation check containing the Dragnet version, origin fingerprint, display name, monitored server count, public key, timestamp, and identity signature. The public key and signature prove that the response belongs to the advertised fingerprint; no private key is exposed.
 
 `GET {PublicEndpoint}/directory` is an anonymous, read-only list of live networks that explicitly set `DirectoryListingEnabled` to `true`. Listings contain the network name, Dragnet endpoint, optional region and website, monitored server count, plugin version, origin fingerprint, last-seen time, and verification status. They do not expose players, bans, trust configuration, private keys, or local review decisions.

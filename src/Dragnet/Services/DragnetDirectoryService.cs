@@ -29,7 +29,7 @@ public sealed class DragnetDirectoryService
         var entries = new List<DragnetDirectoryEntry>();
 
         if (_configuration.DirectoryListingEnabled &&
-            IsHttpsUrl(_configuration.PublicEndpoint))
+            IsAllowedEndpointUrl(_configuration.PublicEndpoint))
         {
             entries.Add(new DragnetDirectoryEntry
             {
@@ -52,7 +52,7 @@ public sealed class DragnetDirectoryService
             .Where(peer =>
                 peer.DirectoryListed &&
                 DragnetPeerHealth.IsActive(peer, now, _configuration.PeerStaleAfter) &&
-                IsHttpsUrl(peer.Endpoint))
+                IsAllowedEndpointUrl(peer.Endpoint))
             .Select(peer => new DragnetDirectoryEntry
             {
                 OriginId = peer.OriginId,
@@ -78,6 +78,11 @@ public sealed class DragnetDirectoryService
             .OrderBy(entry => entry.OriginName, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
+
+    private bool IsAllowedEndpointUrl(string? value) =>
+        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+        (uri.Scheme == Uri.UriSchemeHttps ||
+         (!_configuration.RequireHttps && uri.Scheme == Uri.UriSchemeHttp));
 
     private static bool IsHttpsUrl(string? value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri) &&

@@ -162,7 +162,7 @@ public sealed class DragnetCommand : Command
         var peers = (await _peerStore.ListAsync(CancellationToken.None)).Take(8).ToList();
         if (peers.Count == 0)
         {
-            gameEvent.Origin.Tell("No Dragnet peers are known. Add one with !dragnet peeradd <https-url> [originId].");
+            gameEvent.Origin.Tell($"No Dragnet peers are known. Add one with !dragnet peeradd <{EndpointSchemeHelp()}> [originId].");
             return;
         }
 
@@ -182,14 +182,14 @@ public sealed class DragnetCommand : Command
     {
         if (args.Length < 2)
         {
-            gameEvent.Origin.Tell("Usage: !dragnet peeradd <https-url> [expectedOriginId]");
+            gameEvent.Origin.Tell($"Usage: !dragnet peeradd <{EndpointSchemeHelp()}> [expectedOriginId]");
             return;
         }
 
         if (!Uri.TryCreate(args[1], UriKind.Absolute, out var uri) ||
-            uri.Scheme != Uri.UriSchemeHttps)
+            !IsAllowedEndpointScheme(uri))
         {
-            gameEvent.Origin.Tell("Dragnet peer endpoint must be an absolute HTTPS URL.");
+            gameEvent.Origin.Tell($"Dragnet peer endpoint must be an absolute {EndpointSchemeHelp()}.");
             return;
         }
 
@@ -336,8 +336,14 @@ public sealed class DragnetCommand : Command
 
     private void TellHelp(GameEvent gameEvent)
     {
-        gameEvent.Origin.Tell("Dragnet commands: pending, lifts, peers, peeradd <https-url> [originId], info <id>, approve <id>, deny <id> [reason], ignore <id>, trust <id>, trustauto <id>, untrust <id>, liftapprove <id>, liftdeny <id> [reason], identity");
+        gameEvent.Origin.Tell($"Dragnet commands: pending, lifts, peers, peeradd <{EndpointSchemeHelp()}> [originId], info <id>, approve <id>, deny <id> [reason], ignore <id>, trust <id>, trustauto <id>, untrust <id>, liftapprove <id>, liftdeny <id> [reason], identity");
     }
+
+    private bool IsAllowedEndpointScheme(Uri uri) =>
+        uri.Scheme == Uri.UriSchemeHttps ||
+        (!_configuration.RequireHttps && uri.Scheme == Uri.UriSchemeHttp);
+
+    private string EndpointSchemeHelp() => _configuration.RequireHttps ? "https-url" : "http-or-https-url";
 
     private static string GetReviewerName(GameEvent gameEvent) =>
         gameEvent.Origin.CleanedName ??

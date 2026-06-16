@@ -106,7 +106,7 @@ public sealed class DragnetLedgerService
                 {
                     NetworkOriginId = network.OriginId,
                     NetworkName = attestation?.NetworkName ?? network.Name,
-                    PublicEndpoint = NormalizeHttpsUrl(attestation?.PublicEndpoint ?? network.Endpoint),
+                    PublicEndpoint = NormalizeEndpointUrl(attestation?.PublicEndpoint ?? network.Endpoint),
                     ServerCount = attestation?.ServerCount ?? network.ServerCount,
                     ServerNames = attestation?.ServerNames ?? [],
                     Status = attestation?.Status.ToString() ?? "Unreported",
@@ -231,6 +231,14 @@ public sealed class DragnetLedgerService
         Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
         uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
         !string.IsNullOrWhiteSpace(uri.Host)
+            ? uri.ToString().TrimEnd('/')
+            : null;
+
+    private string? NormalizeEndpointUrl(string? value) =>
+        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+        !string.IsNullOrWhiteSpace(uri.Host) &&
+        (uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+         (!_configuration.RequireHttps && uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)))
             ? uri.ToString().TrimEnd('/')
             : null;
 }

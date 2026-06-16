@@ -230,7 +230,7 @@ public sealed class DragnetTransportService : IDisposable
                 {
                     await _peerStore.MarkErrorAsync(
                         peer.OriginId,
-                        "Peer endpoint must be absolute HTTPS",
+                        EndpointRequirementMessage(),
                         token,
                         _configuration.PeerFailureThreshold,
                         _configuration.PeerQuarantineAfter,
@@ -526,7 +526,7 @@ public sealed class DragnetTransportService : IDisposable
                         attestation.NetworkOriginId,
                         attestation.EventId),
                     StringComparison.OrdinalIgnoreCase) ||
-                !IsValidOptionalHttpsUrl(attestation.PublicEndpoint) ||
+                !IsValidOptionalEndpointUrl(attestation.PublicEndpoint) ||
                 !string.Equals(
                     attestation.NetworkOriginId,
                     DragnetIdentityService.CreateOriginId(attestation.NetworkPublicKeyPem),
@@ -639,7 +639,7 @@ public sealed class DragnetTransportService : IDisposable
         if (!string.IsNullOrWhiteSpace(request.Sender.PublicEndpoint) &&
             !IsAllowedEndpoint(request.Sender.PublicEndpoint))
         {
-            throw new InvalidOperationException("Heartbeat sender endpoint must be absolute HTTPS.");
+            throw new InvalidOperationException($"Heartbeat sender endpoint must be {EndpointRequirementMessage()}.");
         }
 
         foreach (var peer in request.KnownPeers)
@@ -655,7 +655,7 @@ public sealed class DragnetTransportService : IDisposable
             if (!string.IsNullOrWhiteSpace(peer.PublicEndpoint) &&
                 !IsAllowedEndpoint(peer.PublicEndpoint))
             {
-                throw new InvalidOperationException("Known peer endpoint must be absolute HTTPS.");
+                throw new InvalidOperationException($"Known peer endpoint must be {EndpointRequirementMessage()}.");
             }
 
             ValidateDirectoryMetadata(peer);
@@ -821,10 +821,11 @@ public sealed class DragnetTransportService : IDisposable
         !string.IsNullOrWhiteSpace(uri.Host) &&
         value!.Length <= 2048;
 
-    private static bool IsValidOptionalHttpsUrl(string? value) =>
+    private bool IsValidOptionalEndpointUrl(string? value) =>
         string.IsNullOrWhiteSpace(value) ||
         Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
-        uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
+        (uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+         (!_configuration.RequireHttps && uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))) &&
         !string.IsNullOrWhiteSpace(uri.Host) &&
         value.Length <= 2048;
 
@@ -880,8 +881,12 @@ public sealed class DragnetTransportService : IDisposable
             return false;
         }
 
-        return !_configuration.RequireHttps || uri.Scheme == Uri.UriSchemeHttps;
+        return uri.Scheme == Uri.UriSchemeHttps ||
+               (!_configuration.RequireHttps && uri.Scheme == Uri.UriSchemeHttp);
     }
+
+    private string EndpointRequirementMessage() =>
+        _configuration.RequireHttps ? "absolute HTTPS" : "absolute HTTP or HTTPS";
 
     private static void ValidateDirectoryMetadata(DragnetPeerInfo peer)
     {

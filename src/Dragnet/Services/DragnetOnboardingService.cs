@@ -122,7 +122,8 @@ public sealed class DragnetOnboardingService
                                         "Unnamed Dragnet Origin",
                                         StringComparison.OrdinalIgnoreCase),
                 EndpointConfigured: endpointUri is not null,
-                EndpointUsesHttps: endpointUri?.Scheme == Uri.UriSchemeHttps,
+                EndpointUsesHttps: endpointUri?.Scheme == Uri.UriSchemeHttps ||
+                                   (!_configuration.RequireHttps && endpointUri?.Scheme == Uri.UriSchemeHttp),
                 EndpointReachable: endpointReachable,
                 EndpointIdentityMatched: endpointIdentityMatched,
                 EndpointSignatureVerified: endpointSignatureVerified,
