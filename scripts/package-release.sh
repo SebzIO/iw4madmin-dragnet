@@ -12,6 +12,7 @@ if [[ -z "${PACKAGE_VERSION}" ]]; then
       -getProperty:Version
   )"
 fi
+PACKAGE_VERSION="${PACKAGE_VERSION#v}"
 
 PACKAGE_NAME="Dragnet.IW4MAdmin.Plugin-${PACKAGE_VERSION}"
 ARTIFACT_DIR="${ROOT_DIR}/artifacts"
@@ -23,7 +24,11 @@ if [[ "${SKIP_RESTORE:-0}" != "1" ]]; then
   dotnet restore "${ROOT_DIR}/src/Dragnet/Dragnet.csproj"
 fi
 
-dotnet build "${ROOT_DIR}/src/Dragnet/Dragnet.csproj" -c "${CONFIGURATION}" --no-restore
+dotnet build "${ROOT_DIR}/src/Dragnet/Dragnet.csproj" \
+  -c "${CONFIGURATION}" \
+  --no-restore \
+  -p:Version="${PACKAGE_VERSION}" \
+  -p:InformationalVersion="${PACKAGE_VERSION}"
 
 rm -rf "${PACKAGE_DIR}"
 mkdir -p "${PACKAGE_DIR}/Plugins" "${PACKAGE_DIR}/Configuration"
