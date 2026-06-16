@@ -2572,8 +2572,8 @@ static async Task TestUpdateReleaseFeedFallbackAsync()
                     <?xml version="1.0" encoding="UTF-8"?>
                     <feed xmlns="http://www.w3.org/2005/Atom">
                       <entry>
-                        <link rel="alternate" href="https://example.test/releases/v0.2.1"/>
-                        <title>v0.2.1</title>
+                        <link rel="alternate" href="https://example.test/releases/tag/v0.2.1"/>
+                        <title>v0.2.0-rerelease</title>
                       </entry>
                     </feed>
                     """,
@@ -2592,7 +2592,7 @@ static async Task TestUpdateReleaseFeedFallbackAsync()
     }
 
     var status = updateService.Status;
-    Assert.Equal("0.2.1", status.LatestVersion, "feed release tag should be normalized");
+    Assert.Equal("0.2.1", status.LatestVersion, "feed release tag should be parsed from the release URL");
     Assert.True(status.UpdateAvailable, "feed fallback should report a newer release");
     Assert.Null(status.CheckError, "successful feed fallback should clear API failure");
 }

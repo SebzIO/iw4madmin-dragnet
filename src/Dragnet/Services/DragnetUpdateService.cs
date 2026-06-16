@@ -312,12 +312,12 @@ public sealed class DragnetUpdateService : IDisposable
         var document = XDocument.Parse(body);
         XNamespace atom = "http://www.w3.org/2005/Atom";
         var entry = document.Root?.Element(atom + "entry");
-        var tag = entry?.Element(atom + "title")?.Value;
         var releaseUrl = entry?.Elements(atom + "link")
             .FirstOrDefault(element =>
                 string.Equals((string?)element.Attribute("rel"), "alternate", StringComparison.OrdinalIgnoreCase))
             ?.Attribute("href")
             ?.Value;
+        var tag = ExtractTagFromReleaseUrl(releaseUrl) ?? entry?.Element(atom + "title")?.Value;
         var releaseNotes = entry?.Element(atom + "content")?.Value;
 
         return CreateMetadata(
@@ -543,6 +543,26 @@ public sealed class DragnetUpdateService : IDisposable
         var escapedTag = Uri.EscapeDataString(tag.Trim());
         var escapedName = Uri.EscapeDataString(ExpectedPackageName(tag));
         return $"{DragnetBuildInfo.RepositoryUrl}/releases/download/{escapedTag}/{escapedName}";
+    }
+
+    private static string? ExtractTagFromReleaseUrl(string? releaseUrl)
+    {
+        if (string.IsNullOrWhiteSpace(releaseUrl) ||
+            !Uri.TryCreate(releaseUrl, UriKind.Absolute, out var uri))
+        {
+            return null;
+        }
+
+        var marker = "/releases/tag/";
+        var path = Uri.UnescapeDataString(uri.AbsolutePath);
+        var markerIndex = path.IndexOf(marker, StringComparison.Ordinal);
+        if (markerIndex < 0)
+        {
+            return null;
+        }
+
+        var tag = path[(markerIndex + marker.Length)..].Trim('/');
+        return string.IsNullOrWhiteSpace(tag) ? null : tag;
     }
 
     private static bool IsOfficialReleaseAsset(string? assetUrl, string tag)
