@@ -50,6 +50,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("update service reads GitHub release metadata", TestUpdateReleaseMetadataAsync),
     ("update service falls back to GitHub release feed", TestUpdateReleaseFeedFallbackAsync),
     ("update service refreshes stale dashboard loads once", TestUpdatePageLoadRefreshAsync),
+    ("update service reports failed asset URL", TestUpdateInstallFailureReportsAssetUrlAsync),
     ("update service safely stages official releases and notifies administrators", TestAutomaticUpdateInstallAsync)
 };
 
@@ -2626,6 +2627,63 @@ static async Task TestUpdatePageLoadRefreshAsync()
 
     Assert.Equal(1, handler.RequestCount, "concurrent and recent page loads should share the cached update check");
     Assert.Equal("0.2.0", updateService.Status.LatestVersion, "page-load refresh should populate release metadata");
+}
+
+static async Task TestUpdateInstallFailureReportsAssetUrlAsync()
+{
+    await using var testDir = new TestDirectory();
+    var deployedPath = System.IO.Path.Combine(testDir.Path, "Dragnet.dll");
+    File.Copy(typeof(DragnetUpdateService).Assembly.Location, deployedPath);
+    var tag = "v9.9.9";
+    var assetUrl =
+        $"https://github.com/SebzIO/iw4madmin-dragnet/releases/download/{tag}/" +
+        $"Dragnet.IW4MAdmin.Plugin-{tag}.zip";
+    var configuration = new DragnetConfiguration
+    {
+        UpdateCheckEnabled = true,
+        AutoUpdateEnabled = true,
+        ReleaseApiUrl = "https://api.example.test/releases/latest"
+    };
+    using var httpClient = new HttpClient(new RoutingResponseHandler(request =>
+    {
+        if (request.RequestUri == new Uri(configuration.ReleaseApiUrl))
+        {
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    $$"""
+                    {
+                      "tag_name": "{{tag}}",
+                      "html_url": "https://github.com/SebzIO/iw4madmin-dragnet/releases/tag/{{tag}}",
+                      "assets": [
+                        {
+                          "name": "Dragnet.IW4MAdmin.Plugin-{{tag}}.zip",
+                          "browser_download_url": "{{assetUrl}}"
+                        }
+                      ]
+                    }
+                    """)
+            };
+        }
+
+        return new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+        {
+            Content = new StringContent("""{"message":"Not Found"}""")
+        };
+    }));
+    using var updateService = new DragnetUpdateService(
+        configuration,
+        new TestLogger<DragnetUpdateService>(),
+        httpClient,
+        pluginPath: deployedPath,
+        currentVersion: "0.1.0-beta.1");
+
+    await updateService.RefreshForPageLoadAsync(CancellationToken.None);
+
+    Assert.NotNull(updateService.Status.InstallError, "failed download should be exposed as an install error");
+    Assert.Contains(assetUrl, updateService.Status.InstallError!, "install error should include the failed asset URL");
+    Assert.Contains("GitHub release response", updateService.Status.InstallError!, "install error should include metadata source");
+    Assert.Contains("404", updateService.Status.InstallError!, "install error should include response status");
 }
 
 static async Task TestAutomaticUpdateInstallAsync()

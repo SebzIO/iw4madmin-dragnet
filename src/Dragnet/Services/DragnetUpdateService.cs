@@ -346,7 +346,8 @@ public sealed class DragnetUpdateService : IDisposable
                 ? DragnetBuildInfo.RepositoryUrl + "/releases"
                 : releaseUrl,
             assetUrl,
-            releaseNotes);
+            releaseNotes,
+            source);
     }
 
     private async Task InstallUpdateAsync(
@@ -359,7 +360,8 @@ public sealed class DragnetUpdateService : IDisposable
             var assetUrl = metadata.AssetUrl ?? BuildOfficialAssetUrl(metadata.Tag);
             if (!IsOfficialReleaseAsset(assetUrl, metadata.Tag))
             {
-                throw new InvalidOperationException("Release package URL is not an official Dragnet GitHub asset.");
+                throw new InvalidOperationException(
+                    $"Release package URL from {metadata.Source} is not an official Dragnet GitHub asset: {assetUrl}");
             }
 
             var pluginDirectory = Path.GetDirectoryName(_pluginPath);
@@ -380,7 +382,13 @@ public sealed class DragnetUpdateService : IDisposable
                 assetUrl,
                 HttpCompletionOption.ResponseHeadersRead,
                 token);
-            response.EnsureSuccessStatusCode();
+            if (!response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStringAsync(token);
+                throw new HttpRequestException(
+                    $"Download failed from {metadata.Source} asset {assetUrl}: {DescribeFailure(response, body)}");
+            }
+
             const long maximumPackageBytes = 25L * 1024 * 1024;
             if (response.Content.Headers.ContentLength is > maximumPackageBytes)
             {
@@ -847,7 +855,8 @@ public sealed class DragnetUpdateService : IDisposable
         string Tag,
         string ReleaseUrl,
         string? AssetUrl,
-        string? ReleaseNotes);
+        string? ReleaseNotes,
+        string Source);
 }
 
 public enum DragnetUpdateStage
