@@ -2549,6 +2549,8 @@ static async Task TestUpdateReleaseMetadataAsync()
         "https://example.test/releases/v0.2.0",
         status.ReleaseUrl,
         "release URL should be retained");
+    Assert.Equal("GitHub release response", status.MetadataSource, "API release source should be retained");
+    Assert.False(status.ReleaseAssetResolvedByApi, "missing API asset should report constructed asset fallback");
 }
 
 static async Task TestUpdateReleaseFeedFallbackAsync()
@@ -2596,6 +2598,10 @@ static async Task TestUpdateReleaseFeedFallbackAsync()
     Assert.Equal("0.2.1", status.LatestVersion, "feed release tag should be parsed from the release URL");
     Assert.True(status.UpdateAvailable, "feed fallback should report a newer release");
     Assert.Null(status.CheckError, "successful feed fallback should clear API failure");
+    Assert.Equal("GitHub release feed", status.MetadataSource, "feed fallback source should be retained");
+    Assert.False(status.ReleaseAssetResolvedByApi, "feed fallback should construct the asset URL");
+    Assert.Contains("/releases/download/v0.2.1/", status.ReleaseAssetUrl ?? "",
+        "feed fallback should expose the constructed asset URL");
 }
 
 static async Task TestUpdatePageLoadRefreshAsync()
@@ -2627,6 +2633,8 @@ static async Task TestUpdatePageLoadRefreshAsync()
 
     Assert.Equal(1, handler.RequestCount, "concurrent and recent page loads should share the cached update check");
     Assert.Equal("0.2.0", updateService.Status.LatestVersion, "page-load refresh should populate release metadata");
+    Assert.Equal("GitHub release response", updateService.Status.MetadataSource,
+        "page-load refresh should retain update metadata source");
 }
 
 static async Task TestUpdateInstallFailureReportsAssetUrlAsync()

@@ -226,6 +226,9 @@ public sealed class DragnetController : ControllerBase
             UpdateCheckEnabled = update.CheckEnabled,
             UpdateCheckedAtUtc = update.CheckedAtUtc,
             UpdateCheckError = update.CheckError,
+            UpdateMetadataSource = update.MetadataSource,
+            UpdateReleaseAssetUrl = update.ReleaseAssetUrl,
+            UpdateReleaseAssetResolvedByApi = update.ReleaseAssetResolvedByApi,
             AutoUpdateEnabled = update.AutoUpdateEnabled,
             InstalledUpdateVersion = update.InstalledVersion,
             UpdateInstalledAtUtc = update.InstalledAtUtc,
@@ -432,6 +435,12 @@ public sealed record DragnetStatusResponse
     public DateTimeOffset? UpdateCheckedAtUtc { get; init; }
 
     public string? UpdateCheckError { get; init; }
+
+    public string? UpdateMetadataSource { get; init; }
+
+    public string? UpdateReleaseAssetUrl { get; init; }
+
+    public bool UpdateReleaseAssetResolvedByApi { get; init; }
 
     public required bool AutoUpdateEnabled { get; init; }
 

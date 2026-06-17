@@ -219,7 +219,10 @@ public sealed class DragnetUpdateService : IDisposable
                 InstalledVersion = priorStatus.InstalledVersion,
                 InstalledAtUtc = priorStatus.InstalledAtUtc,
                 RestartRequired = priorStatus.RestartRequired,
-                InstallError = priorStatus.InstallError
+                InstallError = priorStatus.InstallError,
+                MetadataSource = metadata.Source,
+                ReleaseAssetUrl = metadata.AssetUrl,
+                ReleaseAssetResolvedByApi = IsAssetResolvedByApi(metadata)
             });
             if (updateAvailable)
             {
@@ -358,6 +361,12 @@ public sealed class DragnetUpdateService : IDisposable
         try
         {
             var assetUrl = metadata.AssetUrl ?? BuildOfficialAssetUrl(metadata.Tag);
+            SetStatus(Status with
+            {
+                MetadataSource = metadata.Source,
+                ReleaseAssetUrl = assetUrl,
+                ReleaseAssetResolvedByApi = IsAssetResolvedByApi(metadata)
+            });
             if (!IsOfficialReleaseAsset(assetUrl, metadata.Tag))
             {
                 throw new InvalidOperationException(
@@ -572,6 +581,10 @@ public sealed class DragnetUpdateService : IDisposable
         var tag = path[(markerIndex + marker.Length)..].Trim('/');
         return string.IsNullOrWhiteSpace(tag) ? null : tag;
     }
+
+    private static bool IsAssetResolvedByApi(ReleaseMetadata metadata) =>
+        metadata.AssetUrl is not null &&
+        metadata.Source.Equals("GitHub release response", StringComparison.Ordinal);
 
     private static bool IsOfficialReleaseAsset(string? assetUrl, string tag)
     {
@@ -902,6 +915,9 @@ public sealed record DragnetUpdateStatus(
     public DateTimeOffset? InstalledAtUtc { get; init; }
     public bool RestartRequired { get; init; }
     public string? InstallError { get; init; }
+    public string? MetadataSource { get; init; }
+    public string? ReleaseAssetUrl { get; init; }
+    public bool ReleaseAssetResolvedByApi { get; init; }
 
     public static DragnetUpdateStatus Initial { get; } = new(
         DragnetBuildInfo.Version,

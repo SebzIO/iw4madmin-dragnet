@@ -42,7 +42,10 @@ public static class DragnetDiagnosticsService
                 RestartRequired = update.RestartRequired,
                 LastCheckedAtUtc = update.CheckedAtUtc,
                 CheckError = update.CheckError,
-                InstallError = update.InstallError
+                InstallError = update.InstallError,
+                MetadataSource = update.MetadataSource,
+                ReleaseAssetUrl = update.ReleaseAssetUrl,
+                ReleaseAssetResolvedByApi = update.ReleaseAssetResolvedByApi
             },
             Configuration = new DragnetSanitizedConfiguration
             {
@@ -166,6 +169,9 @@ public sealed record DragnetDiagnosticsUpdate
     public DateTimeOffset? LastCheckedAtUtc { get; init; }
     public string? CheckError { get; init; }
     public string? InstallError { get; init; }
+    public string? MetadataSource { get; init; }
+    public string? ReleaseAssetUrl { get; init; }
+    public bool ReleaseAssetResolvedByApi { get; init; }
 }
 
 public sealed record DragnetSanitizedConfiguration

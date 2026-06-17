@@ -3705,6 +3705,19 @@ setTimeout(dragnetActiveEventTab,0);
         html.Append("<div class=\"mt-1 text-xs text-muted\">Auto-update ");
         html.Append(update.AutoUpdateEnabled ? "enabled" : "disabled");
         html.AppendLine("</div>");
+        if (!string.IsNullOrWhiteSpace(update.MetadataSource))
+        {
+            html.Append("<div class=\"mt-1 text-xs text-muted break-words\">Source: ");
+            html.Append(Encode(update.MetadataSource));
+            html.Append(update.ReleaseAssetResolvedByApi ? " · asset from API" : " · constructed asset URL");
+            html.AppendLine("</div>");
+        }
+        if (!string.IsNullOrWhiteSpace(update.ReleaseAssetUrl))
+        {
+            html.Append("<div class=\"mt-1 text-xs text-muted break-all\">Asset: ");
+            html.Append(Encode(update.ReleaseAssetUrl));
+            html.AppendLine("</div>");
+        }
         if (update.UpdateAvailable && !string.IsNullOrWhiteSpace(update.ReleaseUrl))
         {
             html.Append("<a class=\"mt-1 text-primary hover:underline break-words\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"");
