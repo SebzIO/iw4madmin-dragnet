@@ -46,6 +46,8 @@ public sealed class Plugin : IPluginV2
         DragnetImportService importService,
         DragnetEventStore eventStore,
         DragnetPeerStore peerStore,
+        DragnetTrustService trustService,
+        DragnetReviewService reviewService,
         DragnetTransportService transportService,
         DragnetStatisticsService statisticsService,
         DragnetAttestationService attestationService,
@@ -63,6 +65,7 @@ public sealed class Plugin : IPluginV2
         _importService = importService;
         _eventStore = eventStore;
         _peerStore = peerStore;
+        DragnetMenuBridge.Configure(peerStore, trustService, reviewService);
         _transportService = transportService;
         _statisticsService = statisticsService;
         _attestationService = attestationService;
