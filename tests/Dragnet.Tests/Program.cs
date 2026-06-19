@@ -24,6 +24,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("peer gossip selection rotates fairly and persists", TestPeerGossipRotationAsync),
     ("statistics aggregate participating servers and shared bans", TestStatisticsAsync),
     ("onboarding verifies public health and readiness", TestOnboardingReadinessAsync),
+    ("onboarding supports direct HTTP IP endpoint when HTTPS is disabled", TestOnboardingHttpEndpointAsync),
     ("directory lists only opted-in healthy networks", TestDirectoryListingsAsync),
     ("network profiles summarize trust review health and coverage", TestNetworkProfileAsync),
     ("risk classifier scores ban reasons predictably", TestRiskClassifierAsync),
@@ -49,6 +50,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("update service reads GitHub release metadata", TestUpdateReleaseMetadataAsync),
     ("update service falls back to GitHub release feed", TestUpdateReleaseFeedFallbackAsync),
     ("update service refreshes stale dashboard loads once", TestUpdatePageLoadRefreshAsync),
+    ("update service reports failed asset URL", TestUpdateInstallFailureReportsAssetUrlAsync),
     ("update service safely stages official releases and notifies administrators", TestAutomaticUpdateInstallAsync)
 };
 
@@ -737,6 +739,42 @@ static async Task TestOnboardingReadinessAsync()
     Assert.True(status.EndpointSignatureVerified, "signed health response should pass proof check");
     Assert.True(status.EndpointVerified, "matching public health identity should verify endpoint");
     Assert.False(status.PeerConnected, "no peer should not pass connectivity check");
+}
+
+static async Task TestOnboardingHttpEndpointAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        OriginName = "Direct IP Network",
+        PublicEndpoint = "http://203.0.113.10:1624/dragnet",
+        RequireHttps = false,
+        UpdateCheckEnabled = false
+    };
+    var identityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "identity"));
+    var identity = identityService.LoadOrCreate(configuration.OriginName);
+    var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
+    await peerStore.LoadAsync(configuration, CancellationToken.None);
+    using var updateService = new DragnetUpdateService(
+        configuration,
+        new TestLogger<DragnetUpdateService>(),
+        new HttpClient(new StaticResponseHandler(System.Net.HttpStatusCode.OK, "{}")));
+    using var healthClient = new HttpClient(new StaticResponseHandler(
+        System.Net.HttpStatusCode.OK,
+        CreateSignedHealthResponse(identityService, identity, configuration.PublicEndpoint!)));
+    var onboarding = new DragnetOnboardingService(
+        configuration,
+        identity,
+        identityService,
+        peerStore,
+        updateService,
+        healthClient);
+
+    var status = await onboarding.GetStatusAsync(CancellationToken.None);
+    Assert.True(status.EndpointConfigured, "absolute HTTP endpoint should pass configuration check");
+    Assert.True(status.EndpointUsesHttps, "HTTP endpoint should pass transport check when HTTPS is disabled");
+    Assert.True(status.EndpointReachable, "successful health route should pass reachability check");
+    Assert.True(status.EndpointVerified, "matching signed HTTP health response should verify endpoint");
 }
 
 static async Task TestDirectoryListingsAsync()
@@ -2511,6 +2549,8 @@ static async Task TestUpdateReleaseMetadataAsync()
         "https://example.test/releases/v0.2.0",
         status.ReleaseUrl,
         "release URL should be retained");
+    Assert.Equal("GitHub release response", status.MetadataSource, "API release source should be retained");
+    Assert.False(status.ReleaseAssetResolvedByApi, "missing API asset should report constructed asset fallback");
 }
 
 static async Task TestUpdateReleaseFeedFallbackAsync()
@@ -2535,8 +2575,8 @@ static async Task TestUpdateReleaseFeedFallbackAsync()
                     <?xml version="1.0" encoding="UTF-8"?>
                     <feed xmlns="http://www.w3.org/2005/Atom">
                       <entry>
-                        <link rel="alternate" href="https://example.test/releases/v0.2.1"/>
-                        <title>v0.2.1</title>
+                        <link rel="alternate" href="https://example.test/releases/tag/v0.2.1"/>
+                        <title>v0.2.0-rerelease</title>
                       </entry>
                     </feed>
                     """,
@@ -2555,9 +2595,13 @@ static async Task TestUpdateReleaseFeedFallbackAsync()
     }
 
     var status = updateService.Status;
-    Assert.Equal("0.2.1", status.LatestVersion, "feed release tag should be normalized");
+    Assert.Equal("0.2.1", status.LatestVersion, "feed release tag should be parsed from the release URL");
     Assert.True(status.UpdateAvailable, "feed fallback should report a newer release");
     Assert.Null(status.CheckError, "successful feed fallback should clear API failure");
+    Assert.Equal("GitHub release feed", status.MetadataSource, "feed fallback source should be retained");
+    Assert.False(status.ReleaseAssetResolvedByApi, "feed fallback should construct the asset URL");
+    Assert.Contains("/releases/download/v0.2.1/", status.ReleaseAssetUrl ?? "",
+        "feed fallback should expose the constructed asset URL");
 }
 
 static async Task TestUpdatePageLoadRefreshAsync()
@@ -2589,6 +2633,65 @@ static async Task TestUpdatePageLoadRefreshAsync()
 
     Assert.Equal(1, handler.RequestCount, "concurrent and recent page loads should share the cached update check");
     Assert.Equal("0.2.0", updateService.Status.LatestVersion, "page-load refresh should populate release metadata");
+    Assert.Equal("GitHub release response", updateService.Status.MetadataSource,
+        "page-load refresh should retain update metadata source");
+}
+
+static async Task TestUpdateInstallFailureReportsAssetUrlAsync()
+{
+    await using var testDir = new TestDirectory();
+    var deployedPath = System.IO.Path.Combine(testDir.Path, "Dragnet.dll");
+    File.Copy(typeof(DragnetUpdateService).Assembly.Location, deployedPath);
+    var tag = "v9.9.9";
+    var assetUrl =
+        $"https://github.com/SebzIO/iw4madmin-dragnet/releases/download/{tag}/" +
+        $"Dragnet.IW4MAdmin.Plugin-{tag}.zip";
+    var configuration = new DragnetConfiguration
+    {
+        UpdateCheckEnabled = true,
+        AutoUpdateEnabled = true,
+        ReleaseApiUrl = "https://api.example.test/releases/latest"
+    };
+    using var httpClient = new HttpClient(new RoutingResponseHandler(request =>
+    {
+        if (request.RequestUri == new Uri(configuration.ReleaseApiUrl))
+        {
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    $$"""
+                    {
+                      "tag_name": "{{tag}}",
+                      "html_url": "https://github.com/SebzIO/iw4madmin-dragnet/releases/tag/{{tag}}",
+                      "assets": [
+                        {
+                          "name": "Dragnet.IW4MAdmin.Plugin-{{tag}}.zip",
+                          "browser_download_url": "{{assetUrl}}"
+                        }
+                      ]
+                    }
+                    """)
+            };
+        }
+
+        return new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+        {
+            Content = new StringContent("""{"message":"Not Found"}""")
+        };
+    }));
+    using var updateService = new DragnetUpdateService(
+        configuration,
+        new TestLogger<DragnetUpdateService>(),
+        httpClient,
+        pluginPath: deployedPath,
+        currentVersion: "0.1.0-beta.1");
+
+    await updateService.RefreshForPageLoadAsync(CancellationToken.None);
+
+    Assert.NotNull(updateService.Status.InstallError, "failed download should be exposed as an install error");
+    Assert.Contains(assetUrl, updateService.Status.InstallError!, "install error should include the failed asset URL");
+    Assert.Contains("GitHub release response", updateService.Status.InstallError!, "install error should include metadata source");
+    Assert.Contains("404", updateService.Status.InstallError!, "install error should include response status");
 }
 
 static async Task TestAutomaticUpdateInstallAsync()

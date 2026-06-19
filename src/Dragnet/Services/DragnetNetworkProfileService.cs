@@ -137,7 +137,7 @@ public sealed class DragnetNetworkProfileService
         {
             OriginId = originId,
             OriginName = identityName,
-            Endpoint = NormalizeHttpsUrl(endpoint),
+            Endpoint = NormalizeEndpointUrl(endpoint),
             Website = NormalizeHttpsUrl(isLocal ? _configuration.DirectoryWebsite : peer?.Website),
             Region = isLocal ? _configuration.DirectoryRegion : peer?.Region,
             Version = isLocal ? DragnetBuildInfo.Version : peer?.Version,
@@ -362,6 +362,14 @@ public sealed class DragnetNetworkProfileService
         Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
         uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
         !string.IsNullOrWhiteSpace(uri.Host)
+            ? uri.ToString().TrimEnd('/')
+            : null;
+
+    private string? NormalizeEndpointUrl(string? value) =>
+        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+        !string.IsNullOrWhiteSpace(uri.Host) &&
+        (uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+         (!_configuration.RequireHttps && uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)))
             ? uri.ToString().TrimEnd('/')
             : null;
 }

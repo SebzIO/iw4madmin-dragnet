@@ -943,6 +943,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         meta.TryGetValue("DirectoryListingEnabled", out var directoryListingValue);
         meta.TryGetValue("DirectoryRegion", out var directoryRegion);
         meta.TryGetValue("DirectoryWebsite", out var directoryWebsite);
+        meta.TryGetValue("RequireHttps", out var requireHttpsValue);
         meta.TryGetValue("NotificationsEnabled", out var notificationsEnabledValue);
         meta.TryGetValue("StalePendingReviewHours", out var staleReviewHoursValue);
         meta.TryGetValue("PeerQuarantineMinutes", out var peerQuarantineMinutesValue);
@@ -965,10 +966,15 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             return "Network name must be 120 characters or fewer.";
         }
 
+        var requireHttps = requireHttpsValue is null
+            ? _configuration.RequireHttps
+            : IsEnabledValue(requireHttpsValue);
         if (!Uri.TryCreate(publicEndpoint, UriKind.Absolute, out var publicUri) ||
-            publicUri.Scheme != Uri.UriSchemeHttps)
+            !IsAllowedEndpointScheme(publicUri, requireHttps))
         {
-            return "Public endpoint must be an absolute HTTPS URL.";
+            return requireHttps
+                ? "Public endpoint must be an absolute HTTPS URL."
+                : "Public endpoint must be an absolute HTTP or HTTPS URL.";
         }
 
         var directoryListingEnabled = IsEnabledValue(directoryListingValue);
@@ -1019,9 +1025,11 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         if (!string.IsNullOrWhiteSpace(bootstrapEndpoint))
         {
             if (!Uri.TryCreate(bootstrapEndpoint, UriKind.Absolute, out var bootstrapUri) ||
-                bootstrapUri.Scheme != Uri.UriSchemeHttps)
+                !IsAllowedEndpointScheme(bootstrapUri, requireHttps))
             {
-                return "Bootstrap endpoint must be an absolute HTTPS URL.";
+                return requireHttps
+                    ? "Bootstrap endpoint must be an absolute HTTPS URL."
+                    : "Bootstrap endpoint must be an absolute HTTP or HTTPS URL.";
             }
 
             if (bootstrapEndpoint.Equals(publicEndpoint, StringComparison.OrdinalIgnoreCase))
@@ -1044,6 +1052,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
 
         _configuration.OriginName = originName;
         _configuration.PublicEndpoint = publicEndpoint;
+        _configuration.RequireHttps = requireHttps;
         _configuration.DirectoryListingEnabled = directoryListingEnabled;
         _configuration.DirectoryRegion = string.IsNullOrWhiteSpace(directoryRegion) ? null : directoryRegion;
         _configuration.DirectoryWebsite = string.IsNullOrWhiteSpace(directoryWebsite) ? null : directoryWebsite;
@@ -2819,8 +2828,10 @@ setTimeout(dragnetActiveEventTab,0);
             status.IdentityConfigured ? _configuration.OriginName : "Choose a recognizable community name");
         AppendOnboardingCheck(html, "Public endpoint", status.EndpointConfigured,
             status.EndpointConfigured ? _configuration.PublicEndpoint! : "Configure the external /dragnet URL");
-        AppendOnboardingCheck(html, "HTTPS", status.EndpointUsesHttps,
-            status.EndpointUsesHttps ? "Endpoint uses HTTPS" : "A valid TLS endpoint is required");
+        AppendOnboardingCheck(html, "Transport", status.EndpointUsesHttps,
+            status.EndpointUsesHttps
+                ? _configuration.RequireHttps ? "Endpoint uses HTTPS" : "Endpoint transport is allowed by configuration"
+                : _configuration.RequireHttps ? "A valid TLS endpoint is required" : "Use an HTTP or HTTPS endpoint");
         AppendOnboardingCheck(html, "Endpoint route", status.EndpointReachable,
             status.EndpointReachable
                 ? "Public health route responds successfully"
@@ -2859,9 +2870,21 @@ setTimeout(dragnetActiveEventTab,0);
         AppendGuideValue(html, "Bootstrap", DragnetConfiguration.OfficialBootstrapEndpoint);
         html.AppendLine("</div>");
         html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/30 p-4 text-sm space-y-2\">");
-        AppendGuideCheck(html, "TLS certificate valid");
+        if (_configuration.RequireHttps)
+        {
+            AppendGuideCheck(html, "TLS certificate valid");
+        }
+        else
+        {
+            AppendGuideCheck(html, "Public IP and port forwarded directly");
+        }
+
         AppendGuideCheck(html, "POST /dragnet/heartbeat forwarded");
-        AppendGuideCheck(html, "X-Forwarded-Proto set to https");
+        if (_configuration.RequireHttps)
+        {
+            AppendGuideCheck(html, "X-Forwarded-Proto set to https");
+        }
+
         AppendGuideCheck(html, "WebSocket upgrades enabled");
         html.AppendLine("</div></div></div>");
     }
@@ -2881,6 +2904,10 @@ setTimeout(dragnetActiveEventTab,0);
         html.Append(Encode(label));
         html.AppendLine("</span></div>");
     }
+
+    private static bool IsAllowedEndpointScheme(Uri uri, bool requireHttps) =>
+        uri.Scheme == Uri.UriSchemeHttps ||
+        (!requireHttps && uri.Scheme == Uri.UriSchemeHttp);
 
     private static void AppendOnboardingCheck(
         StringBuilder html,
@@ -2934,7 +2961,16 @@ setTimeout(dragnetActiveEventTab,0);
                 ["Name"] = "PublicEndpoint",
                 ["Label"] = "Public Dragnet endpoint",
                 ["Value"] = _configuration.PublicEndpoint ?? "",
-                ["Placeholder"] = "https://admin.example.com/dragnet"
+                ["Placeholder"] = _configuration.RequireHttps
+                    ? "https://admin.example.com/dragnet"
+                    : "http://203.0.113.10:1624/dragnet"
+            },
+            new()
+            {
+                ["Name"] = "RequireHttps",
+                ["Label"] = "Require HTTPS for Dragnet transport (yes/no)",
+                ["Value"] = _configuration.RequireHttps ? "yes" : "no",
+                ["Placeholder"] = "yes"
             },
             new()
             {
@@ -3669,6 +3705,19 @@ setTimeout(dragnetActiveEventTab,0);
         html.Append("<div class=\"mt-1 text-xs text-muted\">Auto-update ");
         html.Append(update.AutoUpdateEnabled ? "enabled" : "disabled");
         html.AppendLine("</div>");
+        if (!string.IsNullOrWhiteSpace(update.MetadataSource))
+        {
+            html.Append("<div class=\"mt-1 text-xs text-muted break-words\">Source: ");
+            html.Append(Encode(update.MetadataSource));
+            html.Append(update.ReleaseAssetResolvedByApi ? " · asset from API" : " · constructed asset URL");
+            html.AppendLine("</div>");
+        }
+        if (!string.IsNullOrWhiteSpace(update.ReleaseAssetUrl))
+        {
+            html.Append("<div class=\"mt-1 text-xs text-muted break-all\">Asset: ");
+            html.Append(Encode(update.ReleaseAssetUrl));
+            html.AppendLine("</div>");
+        }
         if (update.UpdateAvailable && !string.IsNullOrWhiteSpace(update.ReleaseUrl))
         {
             html.Append("<a class=\"mt-1 text-primary hover:underline break-words\" target=\"_blank\" rel=\"noopener noreferrer\" href=\"");

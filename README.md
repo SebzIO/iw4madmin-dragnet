@@ -139,6 +139,17 @@ Example configuration:
 
 `PublicEndpoint` should be the externally reachable Dragnet base URL for this IW4MAdmin instance. Peers call `POST {PublicEndpoint}/heartbeat`.
 
+For direct IP deployments without a domain name or TLS certificate, set `RequireHttps` to `false` and use the IW4MAdmin public address and port:
+
+```json
+{
+  "PublicEndpoint": "http://203.0.113.10:1624/dragnet",
+  "RequireHttps": false
+}
+```
+
+Only use this mode when the operator intentionally accepts plaintext transport for Dragnet peer traffic. Evidence URLs, Discord/webhook URLs, update feeds, and directory website links still require HTTPS.
+
 `GET {PublicEndpoint}/health` is an anonymous, read-only installation check containing the Dragnet version, origin fingerprint, display name, monitored server count, public key, timestamp, and identity signature. The public key and signature prove that the response belongs to the advertised fingerprint; no private key is exposed.
 
 `GET {PublicEndpoint}/directory` is an anonymous, read-only list of live networks that explicitly set `DirectoryListingEnabled` to `true`. Listings contain the network name, Dragnet endpoint, optional region and website, monitored server count, plugin version, origin fingerprint, last-seen time, and verification status. They do not expose players, bans, trust configuration, private keys, or local review decisions.
@@ -213,6 +224,68 @@ If you already know the peer's origin fingerprint, pin it:
 After the first successful heartbeat, each peer advertises the other peers it knows and the graph can expand without every server manually listing every other server.
 
 The official bootstrap is a discovery convenience, not a trust authority. Every remote origin remains untrusted until a local operator explicitly trusts it.
+
+## Direct IP / No Domain
+
+Dragnet can run without a domain name when the IW4MAdmin webfront is reachable directly by public IP and port. This mode uses plaintext HTTP for Dragnet peer traffic, so HTTPS remains the recommended default when a domain and certificate are available.
+
+IW4MAdmin needs to bind on a public interface:
+
+```json
+{
+  "Webfront": {
+    "Enabled": true,
+    "BindUrl": "http://0.0.0.0:1624",
+    "ManualUrl": "http://203.0.113.10:1624"
+  }
+}
+```
+
+Expose the same TCP port from Docker or Portainer:
+
+```yaml
+services:
+  iw4madmin:
+    ports:
+      - "1624:1624/tcp"
+```
+
+Open the host firewall and provider security group for TCP `1624`:
+
+```bash
+sudo ufw allow 1624/tcp
+```
+
+Then configure Dragnet:
+
+```json
+{
+  "PublicEndpoint": "http://203.0.113.10:1624/dragnet",
+  "RequireHttps": false,
+  "BootstrapPeers": [
+    {
+      "Endpoint": "https://mw2.sebz.xyz/dragnet",
+      "ExpectedOriginId": null,
+      "Enabled": true
+    }
+  ]
+}
+```
+
+Peers can also be added manually with an HTTP endpoint when `RequireHttps` is disabled:
+
+```text
+!dragnet peeradd http://203.0.113.10:1624/dragnet
+```
+
+The expected public checks are:
+
+```text
+http://203.0.113.10:1624/dragnet/health
+http://203.0.113.10:1624/dragnet/setup-guide
+```
+
+Evidence URLs, Discord/webhook URLs, update feeds, and directory website links still require HTTPS. Only Dragnet peer transport endpoints become HTTP-capable in this mode.
 
 ## Reverse Proxy
 

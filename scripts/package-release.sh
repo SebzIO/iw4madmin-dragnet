@@ -4,6 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIGURATION="${CONFIGURATION:-Release}"
 PACKAGE_VERSION="${PACKAGE_VERSION:-}"
+VERSION_READER_DIR=""
+
+cleanup() {
+  if [[ -n "${VERSION_READER_DIR}" ]]; then
+    rm -rf "${VERSION_READER_DIR}"
+  fi
+}
+trap cleanup EXIT
 
 if [[ -z "${PACKAGE_VERSION}" ]]; then
   PACKAGE_VERSION="$(
@@ -12,6 +20,7 @@ if [[ -z "${PACKAGE_VERSION}" ]]; then
       -getProperty:Version
   )"
 fi
+PACKAGE_VERSION="${PACKAGE_VERSION#v}"
 
 PACKAGE_NAME="Dragnet.IW4MAdmin.Plugin-${PACKAGE_VERSION}"
 ARTIFACT_DIR="${ROOT_DIR}/artifacts"
@@ -23,7 +32,11 @@ if [[ "${SKIP_RESTORE:-0}" != "1" ]]; then
   dotnet restore "${ROOT_DIR}/src/Dragnet/Dragnet.csproj"
 fi
 
-dotnet build "${ROOT_DIR}/src/Dragnet/Dragnet.csproj" -c "${CONFIGURATION}" --no-restore
+dotnet build "${ROOT_DIR}/src/Dragnet/Dragnet.csproj" \
+  -c "${CONFIGURATION}" \
+  --no-restore \
+  -p:Version="${PACKAGE_VERSION}" \
+  -p:InformationalVersion="${PACKAGE_VERSION}"
 
 rm -rf "${PACKAGE_DIR}"
 mkdir -p "${PACKAGE_DIR}/Plugins" "${PACKAGE_DIR}/Configuration"
@@ -47,4 +60,57 @@ INSTALL
 rm -f "${ZIP_PATH}"
 (cd "${ARTIFACT_DIR}" && zip -qr "${ZIP_PATH}" "${PACKAGE_NAME}")
 
+mapfile -t zip_entries < <(unzip -Z1 "${ZIP_PATH}")
+expected_dll_entry="${PACKAGE_NAME}/Plugins/Dragnet.dll"
+dll_entry_count=0
+for entry in "${zip_entries[@]}"; do
+  if [[ "${entry}" != "${PACKAGE_NAME}"/* ]]; then
+    echo "ERROR: package contains unexpected root entry: ${entry}" >&2
+    exit 1
+  fi
+
+  if [[ "${entry}" == "${expected_dll_entry}" ]]; then
+    dll_entry_count=$((dll_entry_count + 1))
+  fi
+done
+
+if [[ "${dll_entry_count}" -ne 1 ]]; then
+  echo "ERROR: package must contain exactly one ${expected_dll_entry}; found ${dll_entry_count}" >&2
+  exit 1
+fi
+
+VERSION_READER_DIR="$(mktemp -d)"
+cat > "${VERSION_READER_DIR}/VersionReader.csproj" <<'CSPROJ'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>
+CSPROJ
+cat > "${VERSION_READER_DIR}/Program.cs" <<'CS'
+using System.Diagnostics;
+
+if (args.Length != 1)
+{
+    return 2;
+}
+
+Console.Write(FileVersionInfo.GetVersionInfo(args[0]).ProductVersion ?? "");
+return 0;
+CS
+
+packaged_version="$(
+  dotnet run --project "${VERSION_READER_DIR}/VersionReader.csproj" -- "${PLUGIN_DLL}" \
+    | tr -d '\r' \
+    | cut -d '+' -f 1
+)"
+if [[ "${packaged_version}" != "${PACKAGE_VERSION}" ]]; then
+  echo "ERROR: packaged DLL ProductVersion ${packaged_version} does not match package version ${PACKAGE_VERSION}" >&2
+  exit 1
+fi
+
+echo "Validated ${ZIP_PATH}"
 echo "Created ${ZIP_PATH}"

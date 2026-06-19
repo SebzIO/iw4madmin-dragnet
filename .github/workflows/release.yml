@@ -36,6 +36,19 @@ jobs:
       - name: Run tests
         run: dotnet run --no-restore --project tests/Dragnet.Tests/Dragnet.Tests.csproj
 
+      - name: Validate release name
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_NAME: ${{ github.event.release.name }}
+        run: |
+          expected="${RELEASE_TAG#v}"
+          actual="${RELEASE_NAME#v}"
+          if [ "${actual}" != "${expected}" ]; then
+            echo "Release name must match tag. expected=${expected} actual=${actual}" >&2
+            exit 1
+          fi
+
       - name: Package plugin
         run: SKIP_RESTORE=1 PACKAGE_VERSION="${PACKAGE_VERSION}" ./scripts/package-release.sh
         env:

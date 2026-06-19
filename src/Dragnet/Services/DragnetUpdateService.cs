@@ -219,7 +219,10 @@ public sealed class DragnetUpdateService : IDisposable
                 InstalledVersion = priorStatus.InstalledVersion,
                 InstalledAtUtc = priorStatus.InstalledAtUtc,
                 RestartRequired = priorStatus.RestartRequired,
-                InstallError = priorStatus.InstallError
+                InstallError = priorStatus.InstallError,
+                MetadataSource = metadata.Source,
+                ReleaseAssetUrl = metadata.AssetUrl,
+                ReleaseAssetResolvedByApi = IsAssetResolvedByApi(metadata)
             });
             if (updateAvailable)
             {
@@ -312,12 +315,12 @@ public sealed class DragnetUpdateService : IDisposable
         var document = XDocument.Parse(body);
         XNamespace atom = "http://www.w3.org/2005/Atom";
         var entry = document.Root?.Element(atom + "entry");
-        var tag = entry?.Element(atom + "title")?.Value;
         var releaseUrl = entry?.Elements(atom + "link")
             .FirstOrDefault(element =>
                 string.Equals((string?)element.Attribute("rel"), "alternate", StringComparison.OrdinalIgnoreCase))
             ?.Attribute("href")
             ?.Value;
+        var tag = ExtractTagFromReleaseUrl(releaseUrl) ?? entry?.Element(atom + "title")?.Value;
         var releaseNotes = entry?.Element(atom + "content")?.Value;
 
         return CreateMetadata(
@@ -346,7 +349,8 @@ public sealed class DragnetUpdateService : IDisposable
                 ? DragnetBuildInfo.RepositoryUrl + "/releases"
                 : releaseUrl,
             assetUrl,
-            releaseNotes);
+            releaseNotes,
+            source);
     }
 
     private async Task InstallUpdateAsync(
@@ -357,9 +361,16 @@ public sealed class DragnetUpdateService : IDisposable
         try
         {
             var assetUrl = metadata.AssetUrl ?? BuildOfficialAssetUrl(metadata.Tag);
+            SetStatus(Status with
+            {
+                MetadataSource = metadata.Source,
+                ReleaseAssetUrl = assetUrl,
+                ReleaseAssetResolvedByApi = IsAssetResolvedByApi(metadata)
+            });
             if (!IsOfficialReleaseAsset(assetUrl, metadata.Tag))
             {
-                throw new InvalidOperationException("Release package URL is not an official Dragnet GitHub asset.");
+                throw new InvalidOperationException(
+                    $"Release package URL from {metadata.Source} is not an official Dragnet GitHub asset: {assetUrl}");
             }
 
             var pluginDirectory = Path.GetDirectoryName(_pluginPath);
@@ -380,7 +391,13 @@ public sealed class DragnetUpdateService : IDisposable
                 assetUrl,
                 HttpCompletionOption.ResponseHeadersRead,
                 token);
-            response.EnsureSuccessStatusCode();
+            if (!response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStringAsync(token);
+                throw new HttpRequestException(
+                    $"Download failed from {metadata.Source} asset {assetUrl}: {DescribeFailure(response, body)}");
+            }
+
             const long maximumPackageBytes = 25L * 1024 * 1024;
             if (response.Content.Headers.ContentLength is > maximumPackageBytes)
             {
@@ -544,6 +561,30 @@ public sealed class DragnetUpdateService : IDisposable
         var escapedName = Uri.EscapeDataString(ExpectedPackageName(tag));
         return $"{DragnetBuildInfo.RepositoryUrl}/releases/download/{escapedTag}/{escapedName}";
     }
+
+    private static string? ExtractTagFromReleaseUrl(string? releaseUrl)
+    {
+        if (string.IsNullOrWhiteSpace(releaseUrl) ||
+            !Uri.TryCreate(releaseUrl, UriKind.Absolute, out var uri))
+        {
+            return null;
+        }
+
+        var marker = "/releases/tag/";
+        var path = Uri.UnescapeDataString(uri.AbsolutePath);
+        var markerIndex = path.IndexOf(marker, StringComparison.Ordinal);
+        if (markerIndex < 0)
+        {
+            return null;
+        }
+
+        var tag = path[(markerIndex + marker.Length)..].Trim('/');
+        return string.IsNullOrWhiteSpace(tag) ? null : tag;
+    }
+
+    private static bool IsAssetResolvedByApi(ReleaseMetadata metadata) =>
+        metadata.AssetUrl is not null &&
+        metadata.Source.Equals("GitHub release response", StringComparison.Ordinal);
 
     private static bool IsOfficialReleaseAsset(string? assetUrl, string tag)
     {
@@ -827,7 +868,8 @@ public sealed class DragnetUpdateService : IDisposable
         string Tag,
         string ReleaseUrl,
         string? AssetUrl,
-        string? ReleaseNotes);
+        string? ReleaseNotes,
+        string Source);
 }
 
 public enum DragnetUpdateStage
@@ -873,6 +915,9 @@ public sealed record DragnetUpdateStatus(
     public DateTimeOffset? InstalledAtUtc { get; init; }
     public bool RestartRequired { get; init; }
     public string? InstallError { get; init; }
+    public string? MetadataSource { get; init; }
+    public string? ReleaseAssetUrl { get; init; }
+    public bool ReleaseAssetResolvedByApi { get; init; }
 
     public static DragnetUpdateStatus Initial { get; } = new(
         DragnetBuildInfo.Version,
