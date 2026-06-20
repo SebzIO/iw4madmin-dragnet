@@ -148,6 +148,24 @@ public sealed class DragnetNotificationService : IDisposable
         CancellationToken token) =>
         NotifyUpdateInstalledAsync(version, null, null, token);
 
+    public Task NotifyUpdateAvailableAsync(
+        string version,
+        string? releaseUrl,
+        string? releaseNotes,
+        CancellationToken token) =>
+        AddAsync(new DragnetNotification
+        {
+            NotificationId = $"{DragnetNotificationType.UpdateAvailable}:{version}",
+            Type = DragnetNotificationType.UpdateAvailable,
+            EventId = "",
+            Title = $"Dragnet {version} update available",
+            Message = "A new Dragnet release is available.",
+            OriginName = "Local Dragnet",
+            ReleaseUrl = releaseUrl,
+            ReleaseNotes = releaseNotes,
+            CreatedAtUtc = DateTimeOffset.UtcNow
+        }, token);
+
     public Task NotifyUpdateInstalledAsync(
         string version,
         string? releaseUrl,
@@ -284,10 +302,10 @@ public sealed class DragnetNotificationService : IDisposable
             var lifts = unread.Count(item => item.Type is DragnetNotificationType.NewLift);
             var evidence = unread.Count(item => item.Type is DragnetNotificationType.EvidenceUpdated);
             var stale = unread.Count(item => item.Type is DragnetNotificationType.StaleReview);
-            var updates = unread.Count(item => item.Type is DragnetNotificationType.UpdateInstalled);
+            var updates = unread.Count(item => item.Type is DragnetNotificationType.UpdateAvailable or DragnetNotificationType.UpdateInstalled);
             client.Tell(
                 $"^5Dragnet:^7 {unread.Count} unread alert(s): {bans} ban(s), {lifts} lift(s), " +
-                $"{evidence} evidence update(s), {stale} stale review(s), {updates} installed update(s).");
+                $"{evidence} evidence update(s), {stale} stale review(s), {updates} update alert(s).");
             _lastInGameSummary[client.ClientId] = now;
         }
     }
@@ -308,6 +326,7 @@ public sealed class DragnetNotificationService : IDisposable
                 DragnetNotificationType.NewLift => "Ban lifted",
                 DragnetNotificationType.EvidenceUpdated => "Evidence updated",
                 DragnetNotificationType.StaleReview => "Review overdue",
+                DragnetNotificationType.UpdateAvailable => "Update available",
                 DragnetNotificationType.UpdateInstalled => "Update installed",
                 _ => notification.Type.ToString()
             };
@@ -317,10 +336,11 @@ public sealed class DragnetNotificationService : IDisposable
                 DragnetNotificationType.NewLift => 0x30A46C,
                 DragnetNotificationType.EvidenceUpdated => 0x3E63DD,
                 DragnetNotificationType.StaleReview => 0xF5A524,
+                DragnetNotificationType.UpdateAvailable => 0x3E63DD,
                 DragnetNotificationType.UpdateInstalled => 0x8E4EC6,
                 _ => 0x687076
             };
-            var fields = notification.Type is DragnetNotificationType.UpdateInstalled
+            var fields = notification.Type is DragnetNotificationType.UpdateAvailable or DragnetNotificationType.UpdateInstalled
                 ? CreateUpdateFields(action)
                 : CreateEventFields(notification, action);
             if (!string.IsNullOrWhiteSpace(notification.OriginServerName) ||
@@ -353,7 +373,7 @@ public sealed class DragnetNotificationService : IDisposable
                     inline = false
                 });
             }
-            if (notification.Type is DragnetNotificationType.UpdateInstalled &&
+            if (notification.Type is DragnetNotificationType.UpdateAvailable or DragnetNotificationType.UpdateInstalled &&
                 !string.IsNullOrWhiteSpace(notification.ReleaseNotes))
             {
                 fields.Add(new
@@ -363,7 +383,7 @@ public sealed class DragnetNotificationService : IDisposable
                     inline = false
                 });
             }
-            if (notification.Type is DragnetNotificationType.UpdateInstalled &&
+            if (notification.Type is DragnetNotificationType.UpdateAvailable or DragnetNotificationType.UpdateInstalled &&
                 !string.IsNullOrWhiteSpace(notification.ReleaseUrl))
             {
                 fields.Add(new

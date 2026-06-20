@@ -261,6 +261,7 @@ public sealed class Plugin : IPluginV2
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.NotificationInteractionId);
         _transportService.StopAsync().GetAwaiter().GetResult();
         _notificationService.StopAsync().GetAwaiter().GetResult();
+        _updateService.Dispose();
         _logger.LogInformation("Dragnet unloaded");
     }
 }

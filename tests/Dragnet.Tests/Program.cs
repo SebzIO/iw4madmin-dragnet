@@ -52,6 +52,7 @@ var tests = new (string Name, Func<Task> Test)[]
     ("update service reads GitHub release metadata", TestUpdateReleaseMetadataAsync),
     ("update service falls back to GitHub release feed", TestUpdateReleaseFeedFallbackAsync),
     ("update service refreshes stale dashboard loads once", TestUpdatePageLoadRefreshAsync),
+    ("update service notifies once when a release is available", TestUpdateAvailableNotificationAsync),
     ("update service reports failed asset URL", TestUpdateInstallFailureReportsAssetUrlAsync),
     ("update service safely stages official releases and notifies administrators", TestAutomaticUpdateInstallAsync)
 };
@@ -2560,6 +2561,8 @@ static async Task TestWebfrontDashboardRendersAsync()
         "dashboard should not use the pointer-down handoff that can cancel actions");
     Assert.Contains("function dragnetAcknowledgeNotification(action,id,actorClientId,button)", html,
         "notification acknowledgements should use the Dragnet API helper");
+    Assert.Contains("function dragnetUpdateNotificationCount()", html,
+        "notification acknowledgements should update the unread badge without a page refresh");
     Assert.Contains("actorClientId:actorClientId||null", html,
         "notification acknowledgements should carry the IW4MAdmin interaction actor id");
     Assert.Contains("/api/dragnet/notifications/acknowledge", html,
@@ -2567,7 +2570,9 @@ static async Task TestWebfrontDashboardRendersAsync()
     Assert.False(
         html.Contains("%22InteractionId%22%3A%22Dragnet%3A%3ANotification%22", StringComparison.Ordinal),
         "notification acknowledgements should not open IW4MAdmin's dynamic action modal");
-    Assert.Contains("<span class=\"rounded-full bg-surface-alt px-1.5 text-xs text-muted\">1</span>", html,
+    Assert.Contains("data-dragnet-notification-count=\"true\"", html,
+        "dashboard should mark the unread badge for live count updates");
+    Assert.Contains("<span class=\"rounded-full bg-surface-alt px-1.5 text-xs text-muted\" data-dragnet-notification-count=\"true\">1</span>", html,
         "dashboard should display the administrator's unread count as an icon badge");
     Assert.False(html.Contains("Acknowledgements are personal", StringComparison.Ordinal),
         "notification module should not render the old explanatory copy");
@@ -2797,6 +2802,67 @@ static async Task TestUpdatePageLoadRefreshAsync()
     Assert.Equal("0.2.0", updateService.Status.LatestVersion, "page-load refresh should populate release metadata");
     Assert.Equal("GitHub release response", updateService.Status.MetadataSource,
         "page-load refresh should retain update metadata source");
+}
+
+static async Task TestUpdateAvailableNotificationAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        UpdateCheckEnabled = true,
+        AutoUpdateEnabled = false,
+        PageLoadUpdateCheckMaxAge = TimeSpan.Zero,
+        ReleaseApiUrl = "https://api.example.test/releases/latest",
+        NotificationWebhookUrl = "https://discord.example.test/webhook"
+    };
+    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
+    await eventStore.LoadAsync(CancellationToken.None);
+    var notificationStore = new DragnetNotificationStore(System.IO.Path.Combine(testDir.Path, "notifications"));
+    await notificationStore.LoadAsync(CancellationToken.None);
+    var webhookHandler = new StaticResponseHandler(System.Net.HttpStatusCode.NoContent, "");
+    using var notificationService = new DragnetNotificationService(
+        configuration,
+        notificationStore,
+        eventStore,
+        () => null!,
+        new TestLogger<DragnetNotificationService>(),
+        httpClient: new HttpClient(webhookHandler));
+    using var updateHttpClient = new HttpClient(new StaticResponseHandler(
+        System.Net.HttpStatusCode.OK,
+        """
+        {
+          "tag_name": "v0.2.2",
+          "html_url": "https://github.com/SebzIO/iw4madmin-dragnet/releases/tag/v0.2.2",
+          "body": "- Background checks\n- Discord update alerts"
+        }
+        """));
+    using var updateService = new DragnetUpdateService(
+        configuration,
+        new TestLogger<DragnetUpdateService>(),
+        updateHttpClient,
+        notificationService: notificationService,
+        currentVersion: "0.1.0-beta.36");
+
+    await updateService.RefreshForPageLoadAsync(CancellationToken.None);
+    await updateService.RefreshForPageLoadAsync(CancellationToken.None);
+
+    var notifications = await notificationStore.ListAsync(CancellationToken.None);
+    var notification = notifications.Single();
+    Assert.Equal(DragnetNotificationType.UpdateAvailable, notification.Type,
+        "available releases should create an administrator notification");
+    Assert.Equal("UpdateAvailable:0.2.2", notification.NotificationId,
+        "available release notifications should deduplicate by advertised version");
+    Assert.Contains("Background checks", notification.ReleaseNotes ?? "",
+        "available update notifications should retain GitHub release notes");
+    Assert.Contains("/releases/tag/v0.2.2", notification.ReleaseUrl ?? "",
+        "available update notifications should retain the GitHub release URL");
+    Assert.Equal(1, webhookHandler.RequestCount,
+        "repeated checks for the same release should not resend Discord webhooks");
+    var webhookBody = webhookHandler.LastRequestBody ?? "";
+    Assert.Contains("Update available", webhookBody,
+        "Discord webhook should identify available releases");
+    Assert.Contains("Background checks", webhookBody,
+        "Discord webhook should include release notes for available releases");
 }
 
 static async Task TestUpdateInstallFailureReportsAssetUrlAsync()

@@ -6,6 +6,7 @@ public enum DragnetNotificationType
     NewLift,
     EvidenceUpdated,
     StaleReview,
+    UpdateAvailable,
     UpdateInstalled
 }
 

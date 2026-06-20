@@ -69,7 +69,7 @@ public sealed class DragnetConfiguration
 
     public bool AutoUpdateEnabled { get; set; } = true;
 
-    public TimeSpan UpdateCheckInterval { get; set; } = TimeSpan.FromHours(6);
+    public TimeSpan UpdateCheckInterval { get; set; } = TimeSpan.FromMinutes(5);
 
     public TimeSpan PageLoadUpdateCheckMaxAge { get; set; } = TimeSpan.FromMinutes(5);
 

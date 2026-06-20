@@ -232,6 +232,14 @@ public sealed class DragnetUpdateService : IDisposable
                     $"Release {latestVersion} is available.",
                     null,
                     deduplicate: true);
+                if (!_configuration.AutoUpdateEnabled && _notificationService is not null)
+                {
+                    await _notificationService.NotifyUpdateAvailableAsync(
+                        latestVersion,
+                        metadata.ReleaseUrl,
+                        metadata.ReleaseNotes,
+                        token);
+                }
             }
             if (updateAvailable &&
                 _configuration.AutoUpdateEnabled &&
@@ -841,7 +849,9 @@ public sealed class DragnetUpdateService : IDisposable
     }
 
     private static TimeSpan NormalizeInterval(TimeSpan interval) =>
-        interval < TimeSpan.FromMinutes(5) ? TimeSpan.FromMinutes(5) : interval;
+        interval <= TimeSpan.Zero || interval > TimeSpan.FromMinutes(5)
+            ? TimeSpan.FromMinutes(5)
+            : interval;
 
     private static TimeSpan NormalizePageLoadMaxAge(TimeSpan maxAge) =>
         maxAge < TimeSpan.FromMinutes(1) ? TimeSpan.FromMinutes(1) : maxAge;

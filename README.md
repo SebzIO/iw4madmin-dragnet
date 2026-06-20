@@ -126,7 +126,7 @@ Example configuration:
   "QuarantinedPeerProbeInterval": "00:10:00",
   "UpdateCheckEnabled": true,
   "AutoUpdateEnabled": true,
-  "UpdateCheckInterval": "06:00:00",
+  "UpdateCheckInterval": "00:05:00",
   "PageLoadUpdateCheckMaxAge": "00:05:00",
   "ReleaseApiUrl": "https://api.github.com/repos/SebzIO/iw4madmin-dragnet/releases/latest",
   "ReleaseFeedUrl": "https://github.com/SebzIO/iw4madmin-dragnet/releases.atom",
