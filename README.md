@@ -43,6 +43,9 @@ This repository is in the MVP testing stage. The current implementation:
 - records reviewer identity, decision time, state transition, and reason in a persistent audit trail
 - imports approved remote bans and lifts into IW4MAdmin
 - queues unknown-player imports and retries them automatically when the player becomes known locally
+- supports intelligence-only mode where incoming bans become admin-visible watchlist flags instead of imports
+- supports outbound-only mode for networks that want to contribute sanitized ban intelligence without consuming remote bans
+- advertises participation policy in peer metadata so other operators can see whether a network imports, watches, or only shares
 - registers the `!dragnet` / `!dn` command for local review state management
 - supports command-based peer seeding with `!dragnet peeradd`
 - omits IP addresses from the event model
@@ -110,6 +113,12 @@ Example configuration:
   "MaxEventsPerHeartbeat": 100,
   "MaxKnownPeersPerHeartbeat": 50,
   "ImportApprovedEvents": true,
+  "ParticipationMode": "ReviewAndImport",
+  "DefaultPublicCategory": "Other",
+  "DefaultPublicReason": null,
+  "WatchlistJoinAlertsEnabled": true,
+  "WatchlistAlertPermission": "Administrator",
+  "WatchlistJoinAlertCooldown": "00:10:00",
   "PeerHeartbeatInterval": "00:01:00",
   "PeerStaleAfter": "00:10:00",
   "PeerFailureThreshold": 3,
@@ -138,6 +147,14 @@ Example configuration:
 ```
 
 `PublicEndpoint` should be the externally reachable Dragnet base URL for this IW4MAdmin instance. Peers call `POST {PublicEndpoint}/heartbeat`.
+
+`ParticipationMode` controls how this network consumes remote Dragnet events:
+
+- `ReviewAndImport` is the default. Remote bans and lifts become local review items and can be manually or automatically approved according to trust settings.
+- `IntelligenceOnly` stores remote bans as watchlist flags. They are never imported into IW4MAdmin, but administrators can see them in the dashboard and receive private join alerts when a flagged GUID connects.
+- `OutboundOnly` shares this network's local bans and lifts while retaining remote events only as passive ledger/diagnostic data.
+
+`DefaultPublicCategory` and `DefaultPublicReason` let networks share sanitized context without revealing proprietary detection details. If no public reason is configured, Dragnet derives a broad category and generic public note from the IW4MAdmin reason. The original local reason remains available to the originating network and to legacy peers through the existing event field.
 
 For direct IP deployments without a domain name or TLS certificate, set `RequireHttps` to `false` and use the IW4MAdmin public address and port:
 

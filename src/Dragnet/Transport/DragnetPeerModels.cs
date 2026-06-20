@@ -21,6 +21,8 @@ public sealed record DragnetPeerInfo
 
     public string? Version { get; init; }
 
+    public string? ParticipationMode { get; init; }
+
     public string? PublicKeyPem { get; init; }
 
     public string? Signature { get; init; }
@@ -139,6 +141,8 @@ public sealed record DragnetPeerRecord
     public string? Website { get; set; }
 
     public string? Version { get; set; }
+
+    public string? ParticipationMode { get; set; }
 
     public string? PublicKeyPem { get; set; }
 

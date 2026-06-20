@@ -418,9 +418,7 @@ public sealed class DragnetTransportService : IDisposable
             acceptedEventIds.Add(envelope.EventId);
 
             var trust = _trustService.Evaluate(envelope);
-            var reviewState = envelope.EventType is DragnetEventType.BanLifted
-                ? DragnetReviewState.PendingLift
-                : DragnetReviewState.PendingBan;
+            var reviewState = GetInitialReviewState(envelope);
 
             var inserted = await _eventStore.UpsertAsync(new DragnetStoredEvent
             {
@@ -434,13 +432,21 @@ public sealed class DragnetTransportService : IDisposable
                     "Imported Dragnet event {EventId} from {OriginName}",
                     envelope.EventId,
                     envelope.OriginName);
-                if (_notificationService is not null)
+                if (envelope.EventType is DragnetEventType.BanLifted)
+                {
+                    await _eventStore.MarkRelatedWatchlistBansLiftedAsync(envelope, token);
+                }
+
+                if (_notificationService is not null &&
+                    _configuration.ParticipationMode is not DragnetParticipationMode.OutboundOnly)
                 {
                     await _notificationService.NotifyNewEventAsync(envelope, token);
                 }
             }
 
-            if (inserted && trust.AutoApprove)
+            if (inserted &&
+                _configuration.ParticipationMode is DragnetParticipationMode.ReviewAndImport &&
+                trust.AutoApprove)
             {
                 var action = envelope.EventType is DragnetEventType.BanLifted
                     ? DragnetReviewAction.ApproveLift
@@ -463,6 +469,20 @@ public sealed class DragnetTransportService : IDisposable
         }
 
         return acceptedEventIds;
+    }
+
+    private DragnetReviewState GetInitialReviewState(DragnetEventEnvelope envelope)
+    {
+        if (_configuration.ParticipationMode is DragnetParticipationMode.ReviewAndImport)
+        {
+            return envelope.EventType is DragnetEventType.BanLifted
+                ? DragnetReviewState.PendingLift
+                : DragnetReviewState.PendingBan;
+        }
+
+        return envelope.EventType is DragnetEventType.BanLifted
+            ? DragnetReviewState.WatchlistedLift
+            : DragnetReviewState.WatchlistedBan;
     }
 
     private async Task<IReadOnlyList<string>> ImportEvidenceUpdatesAsync(
@@ -676,6 +696,7 @@ public sealed class DragnetTransportService : IDisposable
             Region = NormalizeMetadata(_configuration.DirectoryRegion),
             Website = NormalizeMetadata(_configuration.DirectoryWebsite),
             Version = DragnetBuildInfo.Version,
+            ParticipationMode = _configuration.ParticipationMode.ToString(),
             PublicKeyPem = _identity.PublicKeyPem,
             SupportsDeliveryAcknowledgements = true,
             SupportsEvidenceUpdates = true,
@@ -711,6 +732,7 @@ public sealed class DragnetTransportService : IDisposable
                 Region = peer.Region,
                 Website = peer.Website,
                 Version = peer.Version,
+                ParticipationMode = peer.ParticipationMode,
                 PublicKeyPem = peer.PublicKeyPem,
                 Signature = peer.Signature,
                 SupportsDeliveryAcknowledgements = peer.SupportsDeliveryAcknowledgements,

@@ -149,7 +149,9 @@ public sealed class DragnetLedgerService
             PlayerName = envelope.PlayerName,
             PlayerNetworkId = envelope.PlayerNetworkId,
             PlayerGame = envelope.PlayerGame,
-            Reason = envelope.Reason,
+            Reason = string.IsNullOrWhiteSpace(envelope.PublicReason) ? envelope.Reason : envelope.PublicReason,
+            OriginReason = envelope.Reason,
+            PublicCategory = (envelope.PublicCategory ?? DragnetRiskClassifier.ClassifyCategory(envelope.Reason)).ToString(),
             RiskScore = DragnetRiskClassifier.Assess(envelope).Label,
             RiskSummary = DragnetRiskClassifier.Assess(envelope).Summary,
             OriginName = envelope.OriginName,
@@ -261,6 +263,8 @@ public sealed record DragnetLedgerBan
     public required string PlayerNetworkId { get; init; }
     public string? PlayerGame { get; init; }
     public required string Reason { get; init; }
+    public string? OriginReason { get; init; }
+    public required string PublicCategory { get; init; }
     public required string RiskScore { get; init; }
     public required string RiskSummary { get; init; }
     public required string OriginName { get; init; }

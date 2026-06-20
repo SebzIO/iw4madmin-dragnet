@@ -282,6 +282,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             : 1;
         var pendingBans = events.Count(item => item.ReviewState is DragnetReviewState.PendingBan);
         var pendingLifts = events.Count(item => item.ReviewState is DragnetReviewState.PendingLift);
+        var activeWatchlist = events.Count(item => item.ReviewState is DragnetReviewState.WatchlistedBan);
         var queuedImports = events.Count(item =>
             item.ImportError?.StartsWith("Queued:", StringComparison.OrdinalIgnoreCase) == true);
         var importFailures = events.Count(item =>
@@ -393,11 +394,12 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             filteredEvents.Count,
             updateAttentionCount,
             diagnosticsAttentionCount);
-        AppendOperationalHeader(html, updateStatus, now);
+        AppendOperationalHeader(html, updateStatus, _configuration.ParticipationMode, now);
         AppendOnboardingPanel(html, onboarding);
         html.AppendLine("<div class=\"grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-4\">");
         AppendMetric(html, "Pending bans", pendingBans.ToString());
         AppendMetric(html, "Pending lifts", pendingLifts.ToString());
+        AppendMetric(html, "Watchlist flags", activeWatchlist.ToString());
         AppendMetric(html, "Queued imports", queuedImports.ToString());
         AppendMetric(html, "Import failures", importFailures.ToString());
         AppendMetric(html, "Imported", importedEvents.ToString());
@@ -503,6 +505,8 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
                 html.Append(peer.LastAdvertisedAtUtc is null
                     ? "Never"
                     : Encode(DescribeAge(now - peer.LastAdvertisedAtUtc.Value)));
+                html.Append("</div><div class=\"dragnet-peer-meta\">Mode ");
+                html.Append(Encode(FormatParticipationMode(peer.ParticipationMode)));
                 html.AppendLine("</div></div>");
                 html.Append("<div class=\"dragnet-peer-cell\"><span class=\"dragnet-peer-label\">Delivery</span>");
                 AppendDeliveryStatus(html, peer, deliverableEvents, now);
@@ -1165,6 +1169,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         AppendDetailCell(html, "Type", $"{envelope.EventType} / {envelope.PenaltyKind}");
         var risk = DragnetRiskClassifier.Assess(envelope);
         AppendDetailCell(html, "Score", $"{risk.Label} - {risk.Summary}");
+        AppendDetailCell(html, "Category", (envelope.PublicCategory ?? DragnetRiskClassifier.ClassifyCategory(envelope.Reason)).ToString());
         AppendDetailCell(html, "Review state", item.ReviewState.ToString());
         AppendDetailCell(html, "Import", DescribeImport(item));
         AppendDetailCell(
@@ -1191,8 +1196,17 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         html.AppendLine("<div>");
         html.AppendLine("<div class=\"text-sm text-muted mb-1\">Reason</div>");
         html.Append("<div class=\"whitespace-pre-wrap\">");
-        html.Append(Encode(envelope.Reason));
+        html.Append(Encode(string.IsNullOrWhiteSpace(envelope.PublicReason) ? envelope.Reason : envelope.PublicReason));
         html.AppendLine("</div></div>");
+        if (!string.IsNullOrWhiteSpace(envelope.PublicReason) &&
+            !envelope.PublicReason.Equals(envelope.Reason, StringComparison.Ordinal))
+        {
+            html.AppendLine("<div>");
+            html.AppendLine("<div class=\"text-sm text-muted mb-1\">Origin reason</div>");
+            html.Append("<div class=\"whitespace-pre-wrap\">");
+            html.Append(Encode(envelope.Reason));
+            html.AppendLine("</div></div>");
+        }
 
         var evidenceUrl = item.EvidenceUpdate?.EvidenceUrl ?? envelope.EvidenceUrl;
         if (!string.IsNullOrWhiteSpace(evidenceUrl))
@@ -2070,6 +2084,8 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             DragnetReviewState.ApprovedBan or DragnetReviewState.ApprovedLift => ("ph-check-circle", "text-success", "Approved locally."),
             DragnetReviewState.DeniedBan or DragnetReviewState.DeniedLift => ("ph-x-circle", "text-danger", "Denied locally."),
             DragnetReviewState.IgnoredBan or DragnetReviewState.IgnoredLift => ("ph-eye-slash", "text-muted", "Ignored locally."),
+            DragnetReviewState.WatchlistedBan or DragnetReviewState.WatchlistedLift => ("ph-binoculars", "text-warning", "Stored as intelligence-only watchlist data."),
+            DragnetReviewState.WatchlistLifted => ("ph-eye-closed", "text-muted", "Watchlist flag was lifted by the origin network."),
             DragnetReviewState.ExpiredBan => ("ph-clock-counter-clockwise", "text-muted", "Expired before review."),
             _ => ("ph-dot-outline", "text-muted", state.ToString())
         };
@@ -2086,6 +2102,9 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         DragnetReviewState.DeniedLift => "Denied lift",
         DragnetReviewState.IgnoredBan => "Ignored ban",
         DragnetReviewState.IgnoredLift => "Ignored lift",
+        DragnetReviewState.WatchlistedBan => "Watchlist",
+        DragnetReviewState.WatchlistedLift => "Watch lift",
+        DragnetReviewState.WatchlistLifted => "Watch lifted",
         DragnetReviewState.ExpiredBan => "Expired ban",
         _ => state.ToString()
     };
@@ -2597,6 +2616,7 @@ setTimeout(dragnetActiveEventTab,0);
         html.Append("</div></div>");
         html.AppendLine("<div class=\"grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3\">");
         AppendLedgerDetailField(html, "ph-game-controller", "Platform", string.IsNullOrWhiteSpace(ban.PlayerGame) ? "Unknown game platform" : ban.PlayerGame, "The game platform this ledger entry was issued against.");
+        AppendLedgerDetailField(html, "ph-tag", "Category", ban.PublicCategory, "Public category supplied by the origin network or inferred from the reason.");
         AppendLedgerDetailField(html, "ph-siren", "Score", $"{ban.RiskScore} - {ban.RiskSummary}", "Automated moderation score based on the ban reason.");
         AppendLedgerDetailField(html, "ph-globe", "Origin network", ban.OriginName, "The Dragnet network that created the ban.");
         AppendLedgerDetailField(html, "ph-server", "Origin server", ban.OriginServerName, "The server that first reported this penalty.");
@@ -3639,6 +3659,7 @@ setTimeout(dragnetActiveEventTab,0);
     private static void AppendOperationalHeader(
         StringBuilder html,
         DragnetUpdateStatus update,
+        DragnetParticipationMode participationMode,
         DateTimeOffset now)
     {
         html.AppendLine("<div id=\"dragnet-status\" class=\"rounded-lg border border-line bg-surface/50 p-2\">");
@@ -3646,6 +3667,11 @@ setTimeout(dragnetActiveEventTab,0);
         html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/30 px-4 py-2\">");
         html.Append("<div class=\"text-xs text-muted\">Deployed version</div><div class=\"mt-1 font-semibold\">Dragnet ");
         html.Append(Encode(update.CurrentVersion));
+        html.AppendLine("</div></div>");
+
+        html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/30 px-4 py-2\">");
+        html.Append("<div class=\"text-xs text-muted\">Network mode</div><div class=\"mt-1 font-medium\">");
+        html.Append(Encode(FormatParticipationMode(participationMode.ToString())));
         html.AppendLine("</div></div>");
 
         html.AppendLine("<div class=\"rounded-md border border-line bg-surface-alt/30 px-4 py-2\">");
@@ -3763,7 +3789,11 @@ setTimeout(dragnetActiveEventTab,0);
         DragnetEventFilter.ImportFailed => remoteEvents.Where(item => !string.IsNullOrWhiteSpace(item.ImportError)),
         DragnetEventFilter.Imported => remoteEvents.Where(item => item.ImportedAtUtc is not null),
         DragnetEventFilter.Reviewed => remoteEvents.Where(item =>
-            item.ReviewState is not (DragnetReviewState.PendingBan or DragnetReviewState.PendingLift)),
+            item.ReviewState is not (DragnetReviewState.PendingBan or DragnetReviewState.PendingLift or
+                DragnetReviewState.WatchlistedBan or DragnetReviewState.WatchlistedLift or
+                DragnetReviewState.WatchlistLifted)),
+        DragnetEventFilter.Watchlist => remoteEvents.Where(item =>
+            item.ReviewState is DragnetReviewState.WatchlistedBan or DragnetReviewState.WatchlistedLift or DragnetReviewState.WatchlistLifted),
         DragnetEventFilter.Denied => remoteEvents.Where(item =>
             item.ReviewState is DragnetReviewState.DeniedBan or DragnetReviewState.DeniedLift),
         DragnetEventFilter.Ignored => remoteEvents.Where(item =>
@@ -3786,6 +3816,10 @@ setTimeout(dragnetActiveEventTab,0);
             if (item.ReviewState is DragnetReviewState.PendingBan or DragnetReviewState.PendingLift)
             {
                 filters.Add(DragnetEventFilter.Pending.ToString());
+            }
+            else if (item.ReviewState is DragnetReviewState.WatchlistedBan or DragnetReviewState.WatchlistedLift or DragnetReviewState.WatchlistLifted)
+            {
+                filters.Add(DragnetEventFilter.Watchlist.ToString());
             }
             else
             {
@@ -3863,12 +3897,23 @@ setTimeout(dragnetActiveEventTab,0);
         DragnetEventFilter.ImportFailed => "Import failed",
         DragnetEventFilter.Imported => "Imported",
         DragnetEventFilter.Reviewed => "Reviewed",
+        DragnetEventFilter.Watchlist => "Watchlist",
         DragnetEventFilter.Denied => "Denied",
         DragnetEventFilter.Ignored => "Ignored",
         DragnetEventFilter.Local => "Local",
         DragnetEventFilter.All => "All events",
         _ => filter.ToString()
     };
+
+    private static string FormatParticipationMode(string? participationMode) =>
+        participationMode switch
+        {
+            nameof(DragnetParticipationMode.ReviewAndImport) => "Manual review and import",
+            nameof(DragnetParticipationMode.IntelligenceOnly) => "Intelligence only",
+            nameof(DragnetParticipationMode.OutboundOnly) => "Outbound sharing only",
+            null or "" => "Unknown",
+            _ => participationMode
+        };
 
     private bool IsLocalEvent(DragnetEventEnvelope envelope) =>
         string.Equals(envelope.OriginId, _identity.OriginId, StringComparison.OrdinalIgnoreCase);
@@ -3958,6 +4003,7 @@ public enum DragnetEventFilter
     ImportFailed,
     Imported,
     Reviewed,
+    Watchlist,
     Denied,
     Ignored,
     Local,

@@ -65,7 +65,7 @@ public sealed class DragnetEventStore
             var changed = false;
             foreach (var storedEvent in _events.Values)
             {
-                if (storedEvent.ReviewState is DragnetReviewState.PendingBan &&
+                if (storedEvent.ReviewState is DragnetReviewState.PendingBan or DragnetReviewState.WatchlistedBan &&
                     storedEvent.Event.IsExpired(now))
                 {
                     storedEvent.ReviewState = DragnetReviewState.ExpiredBan;
@@ -178,6 +178,65 @@ public sealed class DragnetEventStore
             storedEvent.ImportedPenaltyId = importedPenaltyId;
             storedEvent.ImportedAtUtc = imported ? DateTimeOffset.UtcNow : null;
             storedEvent.ImportError = importError;
+            await SaveUnlockedAsync(token);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task<int> MarkRelatedWatchlistBansLiftedAsync(
+        DragnetEventEnvelope liftEvent,
+        CancellationToken token)
+    {
+        await _lock.WaitAsync(token);
+        try
+        {
+            var changed = 0;
+            foreach (var storedEvent in _events.Values)
+            {
+                if (storedEvent.ReviewState is not DragnetReviewState.WatchlistedBan ||
+                    storedEvent.Event.EventType is not DragnetEventType.BanCreated ||
+                    !storedEvent.Event.OriginId.Equals(liftEvent.OriginId, StringComparison.OrdinalIgnoreCase) ||
+                    !storedEvent.Event.PlayerNetworkId.Equals(liftEvent.PlayerNetworkId, StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(storedEvent.Event.PlayerGame, liftEvent.PlayerGame, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                storedEvent.ReviewState = DragnetReviewState.WatchlistLifted;
+                storedEvent.LastSeenUtc = DateTimeOffset.UtcNow;
+                changed++;
+            }
+
+            if (changed > 0)
+            {
+                await SaveUnlockedAsync(token);
+            }
+
+            return changed;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task SetWatchlistAlertedAsync(
+        string eventId,
+        DateTimeOffset alertedAtUtc,
+        CancellationToken token)
+    {
+        await _lock.WaitAsync(token);
+        try
+        {
+            if (!_events.TryGetValue(eventId, out var storedEvent))
+            {
+                return;
+            }
+
+            storedEvent.LastWatchlistAlertedAtUtc = alertedAtUtc;
             await SaveUnlockedAsync(token);
         }
         finally

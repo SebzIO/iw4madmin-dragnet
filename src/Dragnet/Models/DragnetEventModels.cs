@@ -17,6 +17,16 @@ public enum DragnetPenaltyKind
     Ban
 }
 
+public enum DragnetBanCategory
+{
+    Cheating,
+    BanEvasion,
+    ExploitAbuse,
+    Toxicity,
+    Security,
+    Other
+}
+
 public enum DragnetReviewState
 {
     PendingBan,
@@ -27,7 +37,10 @@ public enum DragnetReviewState
     PendingLift,
     ApprovedLift,
     DeniedLift,
-    IgnoredLift
+    IgnoredLift,
+    WatchlistedBan,
+    WatchlistedLift,
+    WatchlistLifted
 }
 
 public enum DragnetBanCoverageStatus
@@ -69,6 +82,10 @@ public sealed record DragnetEventEnvelope
 
     public required string Reason { get; init; }
 
+    public DragnetBanCategory? PublicCategory { get; init; }
+
+    public string? PublicReason { get; init; }
+
     public string? AdminName { get; init; }
 
     public string? EvidenceUrl { get; init; }
@@ -90,7 +107,12 @@ public sealed record DragnetEventEnvelope
 
     public string GetSigningPayload()
     {
-        var unsigned = this with { Signature = "" };
+        var unsigned = this with
+        {
+            PublicCategory = null,
+            PublicReason = null,
+            Signature = ""
+        };
         return JsonSerializer.Serialize(unsigned, DragnetJson.Options);
     }
 }
@@ -124,6 +146,8 @@ public sealed record DragnetStoredEvent
     public DragnetEvidenceUpdate? EvidenceUpdate { get; set; }
 
     public List<DragnetBanAttestation> BanAttestations { get; set; } = [];
+
+    public DateTimeOffset? LastWatchlistAlertedAtUtc { get; set; }
 }
 
 public sealed record DragnetEvidenceUpdate

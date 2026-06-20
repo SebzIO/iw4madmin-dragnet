@@ -1,4 +1,5 @@
 using Data.Models.Client;
+using Dragnet.Models;
 
 namespace Dragnet.Configuration;
 
@@ -29,6 +30,18 @@ public sealed class DragnetConfiguration
     public int MaxKnownPeersPerHeartbeat { get; set; } = 50;
 
     public bool ImportApprovedEvents { get; set; } = true;
+
+    public DragnetParticipationMode ParticipationMode { get; set; } = DragnetParticipationMode.ReviewAndImport;
+
+    public DragnetBanCategory DefaultPublicCategory { get; set; } = DragnetBanCategory.Other;
+
+    public string? DefaultPublicReason { get; set; }
+
+    public bool WatchlistJoinAlertsEnabled { get; set; } = true;
+
+    public EFClient.Permission WatchlistAlertPermission { get; set; } = EFClient.Permission.Administrator;
+
+    public TimeSpan WatchlistJoinAlertCooldown { get; set; } = TimeSpan.FromMinutes(10);
 
     public TimeSpan PeerHeartbeatInterval { get; set; } = TimeSpan.FromMinutes(1);
 
@@ -100,6 +113,13 @@ public sealed class DragnetPeerConfiguration
     public string? ExpectedOriginId { get; set; }
 
     public bool Enabled { get; set; } = true;
+}
+
+public enum DragnetParticipationMode
+{
+    ReviewAndImport,
+    IntelligenceOnly,
+    OutboundOnly
 }
 
 public sealed class DragnetTrustConfiguration

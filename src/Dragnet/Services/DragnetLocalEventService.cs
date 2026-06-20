@@ -197,6 +197,8 @@ public sealed class DragnetLocalEventService
             PlayerGame = client.GameName.ToString(),
             PlayerName = client.CleanedName ?? client.Name,
             Reason = penalty.AutomatedOffense ?? penalty.Offense,
+            PublicCategory = DeterminePublicCategory(penalty.AutomatedOffense ?? penalty.Offense),
+            PublicReason = CreatePublicReason(penalty.AutomatedOffense ?? penalty.Offense),
             AdminName = penalty.Punisher?.CurrentAlias?.Name,
             CreatedAtUtc = new DateTimeOffset(createdAtUtc),
             ExpiresAtUtc = expiresAtUtc is null ? null : new DateTimeOffset(expiresAtUtc.Value),
@@ -239,5 +241,33 @@ public sealed class DragnetLocalEventService
     {
         return penalty.Offense.StartsWith(ImportedReasonPrefix, StringComparison.OrdinalIgnoreCase) ||
                (penalty.AutomatedOffense?.StartsWith(ImportedReasonPrefix, StringComparison.OrdinalIgnoreCase) ?? false);
+    }
+
+    private DragnetBanCategory DeterminePublicCategory(string? reason)
+    {
+        if (_configuration.DefaultPublicCategory is not DragnetBanCategory.Other)
+        {
+            return _configuration.DefaultPublicCategory;
+        }
+
+        return DragnetRiskClassifier.ClassifyCategory(reason);
+    }
+
+    private string CreatePublicReason(string? reason)
+    {
+        if (!string.IsNullOrWhiteSpace(_configuration.DefaultPublicReason))
+        {
+            return _configuration.DefaultPublicReason.Trim();
+        }
+
+        return DeterminePublicCategory(reason) switch
+        {
+            DragnetBanCategory.Cheating => "Cheating or unfair gameplay detected by the origin network.",
+            DragnetBanCategory.BanEvasion => "Ban evasion detected by the origin network.",
+            DragnetBanCategory.ExploitAbuse => "Exploit abuse detected by the origin network.",
+            DragnetBanCategory.Toxicity => "Severe conduct violation handled by the origin network.",
+            DragnetBanCategory.Security => "Security or service abuse handled by the origin network.",
+            _ => "Moderation action shared by the origin network."
+        };
     }
 }

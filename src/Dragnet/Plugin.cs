@@ -20,6 +20,7 @@ public sealed class Plugin : IPluginV2
     private readonly DragnetLocalEventService _localEventService;
     private readonly DragnetEventStore _eventStore;
     private readonly DragnetImportService _importService;
+    private readonly DragnetWatchlistService _watchlistService;
     private readonly DragnetPeerStore _peerStore;
     private readonly DragnetTransportService _transportService;
     private readonly DragnetStatisticsService _statisticsService;
@@ -44,6 +45,7 @@ public sealed class Plugin : IPluginV2
         DragnetConfiguration configuration,
         DragnetLocalEventService localEventService,
         DragnetImportService importService,
+        DragnetWatchlistService watchlistService,
         DragnetEventStore eventStore,
         DragnetPeerStore peerStore,
         DragnetTrustService trustService,
@@ -63,6 +65,7 @@ public sealed class Plugin : IPluginV2
         _configuration = configuration;
         _localEventService = localEventService;
         _importService = importService;
+        _watchlistService = watchlistService;
         _eventStore = eventStore;
         _peerStore = peerStore;
         DragnetMenuBridge.Configure(peerStore, trustService, reviewService);
@@ -82,6 +85,8 @@ public sealed class Plugin : IPluginV2
         IManagementEventSubscriptions.ClientPenaltyRevoked += _localEventService.CapturePenaltyRevokeAsync;
         IManagementEventSubscriptions.ClientStateInitialized += _importService.RetryQueuedForClientAsync;
         IManagementEventSubscriptions.ClientStateAuthorized += _importService.RetryQueuedForClientAsync;
+        IManagementEventSubscriptions.ClientStateInitialized += _watchlistService.NotifyAdminsForClientAsync;
+        IManagementEventSubscriptions.ClientStateAuthorized += _watchlistService.NotifyAdminsForClientAsync;
 
         _logger.LogInformation(
             "Dragnet {Version} initialized as {OriginName} ({OriginId})",
@@ -150,6 +155,7 @@ public sealed class Plugin : IPluginV2
         });
         serviceCollection.AddSingleton<DragnetAttestationService>();
         serviceCollection.AddSingleton<DragnetImportService>();
+        serviceCollection.AddSingleton<DragnetWatchlistService>();
         serviceCollection.AddSingleton<DragnetReviewService>();
         serviceCollection.AddSingleton(serviceProvider =>
         {
@@ -245,6 +251,8 @@ public sealed class Plugin : IPluginV2
         IManagementEventSubscriptions.ClientPenaltyRevoked -= _localEventService.CapturePenaltyRevokeAsync;
         IManagementEventSubscriptions.ClientStateInitialized -= _importService.RetryQueuedForClientAsync;
         IManagementEventSubscriptions.ClientStateAuthorized -= _importService.RetryQueuedForClientAsync;
+        IManagementEventSubscriptions.ClientStateInitialized -= _watchlistService.NotifyAdminsForClientAsync;
+        IManagementEventSubscriptions.ClientStateAuthorized -= _watchlistService.NotifyAdminsForClientAsync;
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.NavigationInteractionId);
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.ReviewInteractionId);
         _interactionRegistration.UnregisterInteraction(DragnetWebfrontService.TrustInteractionId);

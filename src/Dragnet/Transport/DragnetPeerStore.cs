@@ -265,6 +265,7 @@ public sealed class DragnetPeerStore
                     Region = peerInfo.Region,
                     Website = peerInfo.Website,
                     Version = peerInfo.Version,
+                    ParticipationMode = peerInfo.ParticipationMode,
                     PublicKeyPem = peerInfo.PublicKeyPem,
                     Signature = peerInfo.Signature,
                     IdentityVerified = identityVerified,
@@ -520,6 +521,7 @@ public sealed class DragnetPeerStore
                 Region = preserveVerifiedMetadata ? previousProof!.Region : receiver.Region,
                 Website = preserveVerifiedMetadata ? previousProof!.Website : receiver.Website,
                 Version = preserveVerifiedMetadata ? previousProof!.Version : receiver.Version,
+                ParticipationMode = preserveVerifiedMetadata ? previousProof!.ParticipationMode : receiver.ParticipationMode,
                 PublicKeyPem = identityVerified ? receiver.PublicKeyPem : previousProof?.PublicKeyPem,
                 Signature = identityVerified ? receiver.Signature : previousProof?.Signature,
                 IdentityVerified = identityVerified || previouslyVerified,
@@ -1120,6 +1122,7 @@ public sealed class DragnetPeerStore
         record.Region = peerInfo.Region;
         record.Website = peerInfo.Website;
         record.Version = peerInfo.Version;
+        record.ParticipationMode = peerInfo.ParticipationMode;
         record.SupportsDeliveryAcknowledgements = peerInfo.SupportsDeliveryAcknowledgements;
         record.SupportsEvidenceUpdates = peerInfo.SupportsEvidenceUpdates;
         record.SupportsBanAttestations = peerInfo.SupportsBanAttestations;

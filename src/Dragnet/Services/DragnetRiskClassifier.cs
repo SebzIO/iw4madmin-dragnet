@@ -123,6 +123,40 @@ public static class DragnetRiskClassifier
         return Create(DragnetRiskScore.Medium, "General moderation reason");
     }
 
+    public static DragnetBanCategory ClassifyCategory(string? reason)
+    {
+        var normalized = (reason ?? "").Trim().ToLowerInvariant();
+        if (ContainsAny(normalized, NeedsActionTerms))
+        {
+            return DragnetBanCategory.Cheating;
+        }
+
+        if (normalized.Contains("evad", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("bypass", StringComparison.OrdinalIgnoreCase))
+        {
+            return DragnetBanCategory.BanEvasion;
+        }
+
+        if (normalized.Contains("exploit", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("crash", StringComparison.OrdinalIgnoreCase))
+        {
+            return DragnetBanCategory.ExploitAbuse;
+        }
+
+        if (ContainsAny(normalized, HighTerms))
+        {
+            return DragnetBanCategory.Security;
+        }
+
+        if (ContainsAny(normalized, MediumTerms) ||
+            ContainsAny(normalized, LowTerms))
+        {
+            return DragnetBanCategory.Toxicity;
+        }
+
+        return DragnetBanCategory.Other;
+    }
+
     public static bool ShouldMentionAdmins(DragnetNotification notification) =>
         notification.Type is DragnetNotificationType.NewBan &&
         Assess(notification.Reason).Score is DragnetRiskScore.High or DragnetRiskScore.NeedsAction;

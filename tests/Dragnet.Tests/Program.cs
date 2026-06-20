@@ -37,6 +37,8 @@ var tests = new (string Name, Func<Task> Test)[]
     ("import service skips disabled and already imported events", TestImportServiceSkipsAsync),
     ("import service queues unknown players", TestImportServiceQueuesUnknownPlayersAsync),
     ("heartbeat response sends approved events once", TestHeartbeatResponseBatchAsync),
+    ("intelligence-only heartbeat stores watchlist without auto-import", TestIntelligenceOnlyHeartbeatCreatesWatchlistAsync),
+    ("watchlist lift events clear active flags", TestWatchlistLiftClearsActiveFlagAsync),
     ("delivery acknowledgements replay gaps and support resync", TestDeliveryAcknowledgementReplayAsync),
     ("signed evidence updates propagate only from the ban origin", TestEvidenceUpdatesAsync),
     ("signed ban attestations propagate and update coverage", TestBanAttestationsAsync),
@@ -1406,6 +1408,19 @@ static Task TestLegacyPeerSignatureCompatibility()
     Assert.True(
         wireDocument.RootElement.GetProperty("supportsAttestationRefreshRequests").GetBoolean(),
         "attestation refresh support must be advertised outside the legacy signature");
+    var eventEnvelope = CreateEnvelope("legacy-event", DragnetEventType.BanCreated) with
+    {
+        PublicCategory = DragnetBanCategory.Cheating,
+        PublicReason = "Sanitized public reason"
+    };
+    var legacyEventPayload = JsonSerializer.Serialize(eventEnvelope with
+    {
+        PublicCategory = null,
+        PublicReason = null,
+        Signature = ""
+    }, DragnetJson.Options);
+    Assert.Equal(legacyEventPayload, eventEnvelope.GetSigningPayload(),
+        "public intelligence metadata must not change the legacy event signing payload");
     return Task.CompletedTask;
 }
 
@@ -1605,6 +1620,148 @@ static async Task TestHeartbeatResponseBatchAsync()
 
     var secondResponse = await transport.HandleHeartbeatAsync(CreateHeartbeatRequest("remote"), CancellationToken.None);
     Assert.Equal(0, secondResponse.Events.Count, "heartbeat should not resend events already sent to peer");
+}
+
+static async Task TestIntelligenceOnlyHeartbeatCreatesWatchlistAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        ParticipationMode = DragnetParticipationMode.IntelligenceOnly,
+        PublicEndpoint = "https://local.example/dragnet"
+    };
+    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
+    await eventStore.LoadAsync(CancellationToken.None);
+    var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
+    await peerStore.LoadAsync(configuration, CancellationToken.None);
+    var identityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "identity"));
+    var identity = identityService.LoadOrCreate("Local");
+    var remoteIdentityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "remote"));
+    var remoteIdentity = remoteIdentityService.LoadOrCreate("Remote");
+    var trustService = new DragnetTrustService(configuration, new RecordingConfigurationHandler<DragnetConfiguration>());
+    await trustService.TrustAsync(remoteIdentity.OriginId, remoteIdentity.OriginName, true, true, CancellationToken.None);
+    var importService = new DragnetImportService(
+        configuration,
+        eventStore,
+        managerFactory: () => null!,
+        logger: new TestLogger<DragnetImportService>());
+    var reviewService = new DragnetReviewService(eventStore, importService, trustService);
+    var transport = new DragnetTransportService(
+        configuration,
+        eventStore,
+        peerStore,
+        identity,
+        identityService,
+        reviewService,
+        trustService,
+        () => 1,
+        new TestLogger<DragnetTransportService>());
+    var ban = CreateSignedEnvelope(
+        remoteIdentityService,
+        remoteIdentity,
+        DragnetEventType.BanCreated) with
+    {
+        PublicCategory = DragnetBanCategory.Cheating,
+        PublicReason = "Cheating detected by the origin network."
+    };
+    ban = ban with
+    {
+        Signature = remoteIdentityService.Sign(remoteIdentity, (ban with { Signature = "" }).GetSigningPayload())
+    };
+    var sender = CreateSignedPeerInfo(
+        remoteIdentityService,
+        remoteIdentity,
+        "https://remote.example/dragnet",
+        directoryListed: true);
+
+    await transport.HandleHeartbeatAsync(new DragnetHeartbeatRequest
+    {
+        Sender = sender,
+        Events = [ban]
+    }, CancellationToken.None);
+
+    var stored = await eventStore.GetAsync(ban.EventId, CancellationToken.None);
+    Assert.NotNull(stored, "intelligence-only mode should still store incoming Dragnet events");
+    Assert.Equal(DragnetReviewState.WatchlistedBan, stored!.ReviewState,
+        "intelligence-only mode should store incoming bans as watchlist flags");
+    Assert.Null(stored.ImportedAtUtc, "watchlist flags must not be imported into IW4MAdmin");
+    Assert.Null(stored.ImportError, "watchlist flags should not queue import attempts");
+    Assert.Equal(DragnetBanCategory.Cheating, stored.Event.PublicCategory,
+        "public category should survive transport storage");
+}
+
+static async Task TestWatchlistLiftClearsActiveFlagAsync()
+{
+    await using var testDir = new TestDirectory();
+    var configuration = new DragnetConfiguration
+    {
+        ParticipationMode = DragnetParticipationMode.IntelligenceOnly,
+        PublicEndpoint = "https://local.example/dragnet"
+    };
+    var eventStore = new DragnetEventStore(System.IO.Path.Combine(testDir.Path, "events"));
+    await eventStore.LoadAsync(CancellationToken.None);
+    var peerStore = new DragnetPeerStore(System.IO.Path.Combine(testDir.Path, "peers"));
+    await peerStore.LoadAsync(configuration, CancellationToken.None);
+    var identityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "identity"));
+    var identity = identityService.LoadOrCreate("Local");
+    var remoteIdentityService = new DragnetIdentityService(System.IO.Path.Combine(testDir.Path, "remote"));
+    var remoteIdentity = remoteIdentityService.LoadOrCreate("Remote");
+    var trustService = new DragnetTrustService(configuration, new RecordingConfigurationHandler<DragnetConfiguration>());
+    var importService = new DragnetImportService(
+        configuration,
+        eventStore,
+        managerFactory: () => null!,
+        logger: new TestLogger<DragnetImportService>());
+    var reviewService = new DragnetReviewService(eventStore, importService, trustService);
+    var transport = new DragnetTransportService(
+        configuration,
+        eventStore,
+        peerStore,
+        identity,
+        identityService,
+        reviewService,
+        trustService,
+        () => 1,
+        new TestLogger<DragnetTransportService>());
+    var ban = CreateSignedEnvelope(remoteIdentityService, remoteIdentity, DragnetEventType.BanCreated) with
+    {
+        PlayerNetworkId = "7656119",
+        PlayerGame = "IW4"
+    };
+    ban = ban with
+    {
+        Signature = remoteIdentityService.Sign(remoteIdentity, (ban with { Signature = "" }).GetSigningPayload())
+    };
+    await eventStore.UpsertAsync(new DragnetStoredEvent
+    {
+        Event = ban,
+        ReviewState = DragnetReviewState.WatchlistedBan
+    }, CancellationToken.None);
+    var lift = CreateSignedEnvelope(remoteIdentityService, remoteIdentity, DragnetEventType.BanLifted) with
+    {
+        PlayerNetworkId = ban.PlayerNetworkId,
+        PlayerGame = ban.PlayerGame
+    };
+    lift = lift with
+    {
+        Signature = remoteIdentityService.Sign(remoteIdentity, (lift with { Signature = "" }).GetSigningPayload())
+    };
+    var sender = CreateSignedPeerInfo(
+        remoteIdentityService,
+        remoteIdentity,
+        "https://remote.example/dragnet",
+        directoryListed: true);
+
+    await transport.HandleHeartbeatAsync(new DragnetHeartbeatRequest
+    {
+        Sender = sender,
+        Events = [lift]
+    }, CancellationToken.None);
+
+    var stored = await eventStore.GetAsync(ban.EventId, CancellationToken.None);
+    Assert.NotNull(stored, "original watchlist event should remain stored");
+    Assert.Equal(DragnetReviewState.WatchlistLifted, stored!.ReviewState,
+        "matching lift should clear active watchlist status");
 }
 
 static async Task TestDeliveryAcknowledgementReplayAsync()
@@ -3131,6 +3288,23 @@ static DragnetEventEnvelope CreateEnvelope(
         Reason = "Reason",
         CreatedAtUtc = now,
         Signature = "signature"
+    };
+}
+
+static DragnetEventEnvelope CreateSignedEnvelope(
+    DragnetIdentityService identityService,
+    DragnetIdentityDocument identity,
+    DragnetEventType eventType)
+{
+    var unsigned = CreateEnvelope(identity.OriginId, eventType) with
+    {
+        OriginName = identity.OriginName,
+        OriginPublicKeyPem = identity.PublicKeyPem,
+        Signature = ""
+    };
+    return unsigned with
+    {
+        Signature = identityService.Sign(identity, unsigned.GetSigningPayload())
     };
 }
 
