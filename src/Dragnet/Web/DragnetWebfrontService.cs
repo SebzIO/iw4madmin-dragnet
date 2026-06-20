@@ -948,6 +948,13 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         meta.TryGetValue("DirectoryRegion", out var directoryRegion);
         meta.TryGetValue("DirectoryWebsite", out var directoryWebsite);
         meta.TryGetValue("RequireHttps", out var requireHttpsValue);
+        meta.TryGetValue("ParticipationMode", out var participationModeValue);
+        meta.TryGetValue("ImportApprovedEvents", out var importApprovedEventsValue);
+        meta.TryGetValue("DefaultPublicCategory", out var defaultPublicCategoryValue);
+        meta.TryGetValue("DefaultPublicReason", out var defaultPublicReason);
+        meta.TryGetValue("WatchlistJoinAlertsEnabled", out var watchlistJoinAlertsValue);
+        meta.TryGetValue("WatchlistAlertPermission", out var watchlistAlertPermissionValue);
+        meta.TryGetValue("WatchlistJoinAlertCooldownMinutes", out var watchlistCooldownMinutesValue);
         meta.TryGetValue("NotificationsEnabled", out var notificationsEnabledValue);
         meta.TryGetValue("StalePendingReviewHours", out var staleReviewHoursValue);
         meta.TryGetValue("PeerQuarantineMinutes", out var peerQuarantineMinutesValue);
@@ -958,6 +965,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         meta.TryGetValue("NotificationWebhookUrl", out var notificationWebhookUrl);
         directoryRegion = directoryRegion?.Trim();
         directoryWebsite = directoryWebsite?.Trim().TrimEnd('/');
+        defaultPublicReason = defaultPublicReason?.Trim();
         notificationWebhookUrl = notificationWebhookUrl?.Trim();
 
         if (string.IsNullOrWhiteSpace(originName))
@@ -982,6 +990,53 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         }
 
         var directoryListingEnabled = IsEnabledValue(directoryListingValue);
+        if (string.IsNullOrWhiteSpace(participationModeValue))
+        {
+            participationModeValue = _configuration.ParticipationMode.ToString();
+        }
+
+        if (!Enum.TryParse<DragnetParticipationMode>(participationModeValue, true, out var participationMode))
+        {
+            return "Participation mode must be ReviewAndImport, IntelligenceOnly, or OutboundOnly.";
+        }
+
+        if (string.IsNullOrWhiteSpace(defaultPublicCategoryValue))
+        {
+            defaultPublicCategoryValue = _configuration.DefaultPublicCategory.ToString();
+        }
+
+        if (!Enum.TryParse<DragnetBanCategory>(defaultPublicCategoryValue, true, out var defaultPublicCategory))
+        {
+            return "Default public category must be Cheating, BanEvasion, ExploitAbuse, Toxicity, Security, or Other.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(defaultPublicReason) &&
+            defaultPublicReason.Length > 240)
+        {
+            return "Default public reason must be 240 characters or fewer.";
+        }
+
+        if (string.IsNullOrWhiteSpace(watchlistAlertPermissionValue))
+        {
+            watchlistAlertPermissionValue = _configuration.WatchlistAlertPermission.ToString();
+        }
+
+        if (!Enum.TryParse<EFClient.Permission>(watchlistAlertPermissionValue, true, out var watchlistAlertPermission))
+        {
+            return "Watchlist alert permission must be a valid IW4MAdmin permission level.";
+        }
+
+        if (string.IsNullOrWhiteSpace(watchlistCooldownMinutesValue))
+        {
+            watchlistCooldownMinutesValue = Math.Max(1, (int)_configuration.WatchlistJoinAlertCooldown.TotalMinutes).ToString();
+        }
+
+        if (!int.TryParse(watchlistCooldownMinutesValue, out var watchlistCooldownMinutes) ||
+            watchlistCooldownMinutes is < 1 or > 1440)
+        {
+            return "Watchlist alert cooldown must be between 1 and 1440 minutes.";
+        }
+
         if (directoryRegion?.Length > 80)
         {
             return "Directory region must be 80 characters or fewer.";
@@ -1057,6 +1112,19 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
         _configuration.OriginName = originName;
         _configuration.PublicEndpoint = publicEndpoint;
         _configuration.RequireHttps = requireHttps;
+        _configuration.ParticipationMode = participationMode;
+        _configuration.ImportApprovedEvents = importApprovedEventsValue is null
+            ? _configuration.ImportApprovedEvents
+            : IsEnabledValue(importApprovedEventsValue);
+        _configuration.DefaultPublicCategory = defaultPublicCategory;
+        _configuration.DefaultPublicReason = string.IsNullOrWhiteSpace(defaultPublicReason)
+            ? null
+            : defaultPublicReason;
+        _configuration.WatchlistJoinAlertsEnabled = watchlistJoinAlertsValue is null
+            ? _configuration.WatchlistJoinAlertsEnabled
+            : IsEnabledValue(watchlistJoinAlertsValue);
+        _configuration.WatchlistAlertPermission = watchlistAlertPermission;
+        _configuration.WatchlistJoinAlertCooldown = TimeSpan.FromMinutes(watchlistCooldownMinutes);
         _configuration.DirectoryListingEnabled = directoryListingEnabled;
         _configuration.DirectoryRegion = string.IsNullOrWhiteSpace(directoryRegion) ? null : directoryRegion;
         _configuration.DirectoryWebsite = string.IsNullOrWhiteSpace(directoryWebsite) ? null : directoryWebsite;
@@ -1080,7 +1148,7 @@ body.dragnet-public{margin:0;background:#100b15;color:#f6f2fb;font:14px system-u
             _identity.OriginId,
             originName,
             null,
-            $"Endpoint {publicEndpoint}; directory {(directoryListingEnabled ? "enabled" : "disabled")}; " +
+            $"Endpoint {publicEndpoint}; mode {participationMode}; directory {(directoryListingEnabled ? "enabled" : "disabled")}; " +
             $"auto-update {(_configuration.AutoUpdateEnabled ? "enabled" : "disabled")}.",
             token);
         return "Dragnet configuration saved. Restart IW4MAdmin to apply the network identity and endpoint everywhere.";
@@ -2991,6 +3059,55 @@ setTimeout(dragnetActiveEventTab,0);
                 ["Label"] = "Require HTTPS for Dragnet transport (yes/no)",
                 ["Value"] = _configuration.RequireHttps ? "yes" : "no",
                 ["Placeholder"] = "yes"
+            },
+            new()
+            {
+                ["Name"] = "ParticipationMode",
+                ["Label"] = "Participation mode (ReviewAndImport, IntelligenceOnly, OutboundOnly)",
+                ["Value"] = _configuration.ParticipationMode.ToString(),
+                ["Placeholder"] = "ReviewAndImport"
+            },
+            new()
+            {
+                ["Name"] = "ImportApprovedEvents",
+                ["Label"] = "Import approved remote events into IW4MAdmin (yes/no)",
+                ["Value"] = _configuration.ImportApprovedEvents ? "yes" : "no",
+                ["Placeholder"] = "yes"
+            },
+            new()
+            {
+                ["Name"] = "DefaultPublicCategory",
+                ["Label"] = "Default public category (Cheating, BanEvasion, ExploitAbuse, Toxicity, Security, Other)",
+                ["Value"] = _configuration.DefaultPublicCategory.ToString(),
+                ["Placeholder"] = "Other"
+            },
+            new()
+            {
+                ["Name"] = "DefaultPublicReason",
+                ["Label"] = "Default public reason (optional, 240 chars max)",
+                ["Value"] = _configuration.DefaultPublicReason ?? "",
+                ["Placeholder"] = "Moderation action shared by the origin network."
+            },
+            new()
+            {
+                ["Name"] = "WatchlistJoinAlertsEnabled",
+                ["Label"] = "Enable intelligence-mode join alerts (yes/no)",
+                ["Value"] = _configuration.WatchlistJoinAlertsEnabled ? "yes" : "no",
+                ["Placeholder"] = "yes"
+            },
+            new()
+            {
+                ["Name"] = "WatchlistAlertPermission",
+                ["Label"] = "Minimum permission for watchlist alerts",
+                ["Value"] = _configuration.WatchlistAlertPermission.ToString(),
+                ["Placeholder"] = "Administrator"
+            },
+            new()
+            {
+                ["Name"] = "WatchlistJoinAlertCooldownMinutes",
+                ["Label"] = "Watchlist alert cooldown (minutes)",
+                ["Value"] = Math.Max(1, (int)_configuration.WatchlistJoinAlertCooldown.TotalMinutes).ToString(),
+                ["Placeholder"] = "10"
             },
             new()
             {

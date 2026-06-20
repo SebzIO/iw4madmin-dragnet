@@ -2592,6 +2592,11 @@ static async Task TestWebfrontDashboardRendersAsync()
     Assert.Contains("Signed proof", html, "dashboard should expose identity proof diagnostics");
     Assert.Contains("Deployment guide", html, "dashboard should include endpoint-specific deployment guidance");
     Assert.Contains("/dragnet/setup-guide", html, "dashboard should link to the shareable setup guide");
+    Assert.Contains("ParticipationMode", html, "configure modal should expose participation mode");
+    Assert.Contains("IntelligenceOnly", html, "configure modal should document intelligence-only mode");
+    Assert.Contains("ImportApprovedEvents", html, "configure modal should expose approved-event import policy");
+    Assert.Contains("DefaultPublicCategory", html, "configure modal should expose sanitized public category");
+    Assert.Contains("WatchlistJoinAlertsEnabled", html, "configure modal should expose watchlist join alerts");
     Assert.Contains("Community directory", html, "dashboard should include the opt-in directory");
     Assert.Contains("Acknowledged deliveries", html, "dashboard should summarize acknowledged event delivery");
     Assert.Contains("Pending deliveries", html, "dashboard should summarize incomplete event delivery");
