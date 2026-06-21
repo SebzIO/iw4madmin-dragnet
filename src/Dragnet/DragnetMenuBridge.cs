@@ -37,8 +37,23 @@ public static class DragnetMenuBridge
 
         if (action is "resync" or "clearerror" or "trust" or "untrust")
         {
-            var peer = (await _peerStore.ListAsync(CancellationToken.None))
-                .FirstOrDefault(item => item.OriginId.Equals(id, StringComparison.OrdinalIgnoreCase));
+            var peers = await _peerStore.ListAsync(CancellationToken.None);
+            var peer = peers.FirstOrDefault(item =>
+                item.OriginId.Equals(id, StringComparison.OrdinalIgnoreCase));
+            if (peer is null && id.Length >= 16)
+            {
+                var partialMatches = peers.Where(item =>
+                        item.OriginId.StartsWith(id, StringComparison.OrdinalIgnoreCase) ||
+                        id.StartsWith(item.OriginId, StringComparison.OrdinalIgnoreCase) ||
+                        item.OriginId.EndsWith(id, StringComparison.OrdinalIgnoreCase) ||
+                        id.EndsWith(item.OriginId, StringComparison.OrdinalIgnoreCase))
+                    .Take(2)
+                    .ToList();
+                if (partialMatches.Count == 1)
+                {
+                    peer = partialMatches[0];
+                }
+            }
             if (peer is null)
             {
                 return "Dragnet peer was not found.";
